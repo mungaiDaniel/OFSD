@@ -1,11 +1,13 @@
 from app.Batch.model import Batch
-from app.Investments.model import Investment
+from app.Investments.model import Investment, EpochLedger
 from app.Performance.model import Performance
 from app.Performance.pro_rata_distribution import ProRataDistribution
+from app.Batch.core_fund import CoreFund
 from app.database.database import db
 from flask import jsonify, make_response
 from datetime import datetime, timedelta
 from marshmallow import ValidationError
+from sqlalchemy import select
 
 
 class BatchController:
@@ -68,7 +70,7 @@ class BatchController:
                 certificate_number=certificate_number,
                 date_deployed=date_deployed,
                 duration_days=data.get('duration_days', 30),
-                is_active=True
+                is_active=False  # New batches start as inactive
             )
 
             batch.save(session)
@@ -134,26 +136,33 @@ class BatchController:
                     "investor_name": inv.investor_name,
                     "internal_client_code": inv.internal_client_code,
                     "amount_deposited": float(inv.amount_deposited),
-                    "fund_name": inv.fund_name,
+                    # Prefer the FK relationship fund name, fall back to the legacy fund_name field
+                    "fund_id": inv.fund_id,
+                    "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                     "date_deposited": inv.date_deposited.isoformat() if inv.date_deposited else None,
                 }
                 for inv in investments
             ]
 
-            # Calculate current_stage (1-4)
-            current_stage = 1  # Stage 1: Deposited (always true if batch exists)
+            # Calculate current_stage (1-4) based on specific conditions
+            # Stage 1: Deposited - Marked complete ONLY if investors_count > 0
+            current_stage = 1 if len(investments) > 0 else 0
             
+            # Stage 2: Transferred - Marked complete ONLY when is_transferred is true
             if batch.is_transferred:
-                current_stage = max(current_stage, 2)  # Stage 2: Transferred
+                current_stage = max(current_stage, 2)
             
-            if batch.date_deployed is not None:
-                current_stage = max(current_stage, 3)  # Stage 3: Deployed
+            # Stage 3: Deployed - Marked complete ONLY if date_deployed is set AND deployment_confirmed is true
+            if batch.date_deployed is not None and batch.deployment_confirmed:
+                current_stage = max(current_stage, 3)
             
+            # Stage 4: Active - Marked complete ONLY when is_active is true
             if batch.is_active:
-                current_stage = max(current_stage, 4)  # Stage 4: Active
+                current_stage = max(current_stage, 4)
 
-            # Determine status
-            status = 'Pending' if batch.date_deployed is None else 'Active'
+            # Determine status - Based on is_active field
+            # Red "Deactivated" if is_active is false, Green "Active" if true
+            status = 'Active' if batch.is_active else 'Deactivated'
 
             return make_response(jsonify({
                 "status": 200,
@@ -170,6 +179,7 @@ class BatchController:
                     "investors_count": len(investments),
                     "is_active": batch.is_active,
                     "is_transferred": batch.is_transferred,
+                    "deployment_confirmed": batch.deployment_confirmed,
                     "current_stage": current_stage,
                     "status": status,
                     "investments": investments_data,
@@ -199,10 +209,36 @@ class BatchController:
             
             batch_list = []
             for batch in batches:
-                # Calculate total_principal from linked investments
-                total_principal_sum = session.query(db.func.sum(Investment.amount_deposited)).filter(
+                # Base principal (deposits)
+                total_deposits_sum = session.query(db.func.sum(Investment.amount_deposited)).filter(
                     Investment.batch_id == batch.id
                 ).scalar() or 0.00
+
+                # If epoch ledger exists, total_principal/total_capital should reflect latest ledger balances
+                codes_subq = session.query(Investment.internal_client_code).filter(
+                    Investment.batch_id == batch.id
+                ).distinct().subquery()
+
+                latest_per_key = session.query(
+                    EpochLedger.internal_client_code.label("code"),
+                    db.func.lower(EpochLedger.fund_name).label("fund"),
+                    db.func.max(EpochLedger.epoch_end).label("max_end"),
+                ).filter(
+                    EpochLedger.internal_client_code.in_(select(codes_subq))
+                ).group_by(
+                    EpochLedger.internal_client_code,
+                    db.func.lower(EpochLedger.fund_name),
+                ).subquery()
+
+                ledger_total = session.query(db.func.sum(EpochLedger.end_balance)).join(
+                    latest_per_key,
+                    (EpochLedger.internal_client_code == latest_per_key.c.code)
+                    & (db.func.lower(EpochLedger.fund_name) == latest_per_key.c.fund)
+                    & (EpochLedger.epoch_end == latest_per_key.c.max_end),
+                    isouter=True,
+                ).scalar()
+
+                total_value = float(ledger_total) if ledger_total is not None else float(total_deposits_sum)
                 
                 # Count unique investors (by internal_client_code)
                 investors_count = session.query(Investment).filter(
@@ -212,11 +248,37 @@ class BatchController:
                 # Determine status: 'Pending' if date_deployed is None, 'Active' otherwise
                 status = 'Pending' if batch.date_deployed is None else 'Active'
                 
+                # Calculate fund-level breakdown for accurate filtering
+                fund_rows = session.query(
+                    CoreFund.fund_name.label("fund_name"),
+                    db.func.coalesce(db.func.sum(Investment.amount_deposited), 0).label("total_principal"),
+                    db.func.count(Investment.id).label("investors_count"),
+                ).join(
+                    CoreFund,
+                    Investment.fund_id == CoreFund.id,
+                ).filter(
+                    Investment.batch_id == batch.id,
+                ).group_by(
+                    CoreFund.fund_name,
+                ).all()
+
+                fund_breakdown = [
+                    {
+                        "fund_name": fr.fund_name,
+                        "total_principal": float(fr.total_principal),
+                        "investors_count": int(fr.investors_count),
+                    }
+                    for fr in fund_rows
+                ]
+
                 batch_list.append({
                     "id": batch.id,
                     "batch_name": batch.batch_name,
                     "certificate_number": batch.certificate_number,
-                    "total_principal": float(total_principal_sum),
+                    # Dashboard should display latest ledger-based value when available
+                    "total_principal": float(total_value),
+                    "total_capital": float(total_value),
+                    "funds": fund_breakdown,
                     "date_deployed": batch.date_deployed.isoformat() if batch.date_deployed else None,
                     "duration_days": batch.duration_days,
                     "expected_close_date": batch.expected_close_date.isoformat() if batch.date_deployed else None,
@@ -313,8 +375,8 @@ class BatchController:
     @classmethod
     def patch_batch(cls, batch_id, data, session):
         """
-        Patch (partially update) a batch - for two-stage creation.
-        Allows updating: batch_name, certificate_number, date_deployed, is_active
+        Patch (partially update) a batch - for two-stage creation and status updates.
+        Allows updating: batch_name, certificate_number, date_deployed, is_active, is_transferred
         
         Args:
             batch_id: ID of the batch
@@ -345,11 +407,15 @@ class BatchController:
                     batch.date_deployed = None
             if 'is_active' in data:
                 batch.is_active = data['is_active']
+            if 'is_transferred' in data:
+                batch.is_transferred = data['is_transferred']
+            if 'deployment_confirmed' in data:
+                batch.deployment_confirmed = data['deployment_confirmed']
 
             session.commit()
 
-            # Determine status
-            status = 'Pending' if batch.date_deployed is None else 'Active'
+            # Determine status - Based on is_active field
+            status = 'Active' if batch.is_active else 'Deactivated'
 
             return make_response(jsonify({
                 "status": 200,
@@ -360,6 +426,8 @@ class BatchController:
                     "certificate_number": batch.certificate_number,
                     "date_deployed": batch.date_deployed.isoformat() if batch.date_deployed else None,
                     "is_active": batch.is_active,
+                    "is_transferred": batch.is_transferred,
+                    "deployment_confirmed": batch.deployment_confirmed,
                     "status": status
                 }
             }), 200)
@@ -689,18 +757,34 @@ class BatchController:
                     "message": "Batch not found"
                 }), 404)
 
+            # Get investment count for Stage 1 calculation
+            investments = session.query(Investment).filter(
+                Investment.batch_id == batch_id
+            ).all()
+            investors_count = len(investments)
+
             # Toggle is_active
             batch.is_active = not batch.is_active
             session.commit()
 
-            # Calculate current_stage
-            current_stage = 1
+            # Calculate current_stage using 4-stage logic
+            # Stage 1: Deposited - Marked complete ONLY if investors_count > 0
+            current_stage = 1 if investors_count > 0 else 0
+            
+            # Stage 2: Transferred - Marked complete ONLY when is_transferred is true
             if batch.is_transferred:
                 current_stage = max(current_stage, 2)
-            if batch.date_deployed is not None:
+            
+            # Stage 3: Deployed - Marked complete ONLY if date_deployed is set AND deployment_confirmed is true
+            if batch.date_deployed is not None and batch.deployment_confirmed:
                 current_stage = max(current_stage, 3)
+            
+            # Stage 4: Active - Marked complete ONLY when is_active is true
             if batch.is_active:
                 current_stage = max(current_stage, 4)
+
+            # Determine status based on is_active
+            status = 'Active' if batch.is_active else 'Deactivated'
 
             return make_response(jsonify({
                 "status": 200,
@@ -708,7 +792,8 @@ class BatchController:
                 "data": {
                     "id": batch.id,
                     "is_active": batch.is_active,
-                    "current_stage": current_stage
+                    "current_stage": current_stage,
+                    "status": status
                 }
             }), 200)
 
@@ -740,18 +825,34 @@ class BatchController:
                     "message": "Batch not found"
                 }), 404)
 
+            # Get investment count for Stage 1 calculation
+            investments = session.query(Investment).filter(
+                Investment.batch_id == batch_id
+            ).all()
+            investors_count = len(investments)
+
             # Toggle is_transferred
             batch.is_transferred = not batch.is_transferred
             session.commit()
 
-            # Calculate current_stage
-            current_stage = 1
+            # Calculate current_stage using 4-stage logic
+            # Stage 1: Deposited - Marked complete ONLY if investors_count > 0
+            current_stage = 1 if investors_count > 0 else 0
+            
+            # Stage 2: Transferred - Marked complete ONLY when is_transferred is true
             if batch.is_transferred:
                 current_stage = max(current_stage, 2)
-            if batch.date_deployed is not None:
+            
+            # Stage 3: Deployed - Marked complete ONLY if date_deployed is set AND deployment_confirmed is true
+            if batch.date_deployed is not None and batch.deployment_confirmed:
                 current_stage = max(current_stage, 3)
+            
+            # Stage 4: Active - Marked complete ONLY when is_active is true
             if batch.is_active:
                 current_stage = max(current_stage, 4)
+
+            # Determine status based on is_active
+            status = 'Active' if batch.is_active else 'Deactivated'
 
             return make_response(jsonify({
                 "status": 200,
@@ -759,7 +860,8 @@ class BatchController:
                 "data": {
                     "id": batch.id,
                     "is_transferred": batch.is_transferred,
-                    "current_stage": current_stage
+                    "current_stage": current_stage,
+                    "status": status
                 }
             }), 200)
 

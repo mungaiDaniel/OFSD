@@ -24,6 +24,9 @@ from app.logic.pro_rata_service import MultiFundProRataService
 from datetime import datetime
 import os
 from werkzeug.utils import secure_filename
+from app.Batch.fund import Fund
+from sqlalchemy import func
+from app.Batch.core_fund import CoreFund
 
 # Create blueprint
 fund_v1 = Blueprint("fund_v1", __name__, url_prefix='/api/v1')
@@ -41,6 +44,116 @@ def allowed_file(filename):
 
 
 # ==================== FUND MANAGEMENT ====================
+
+@fund_v1.route('/funds', methods=['GET'])
+@jwt_required()
+def list_all_funds():
+    """Core Fund Management (global).
+
+    Returns all CoreFund records.
+
+    These funds are created dynamically when a batch Excel upload includes a new fund_name.
+    """
+    try:
+        funds = db.session.query(CoreFund).order_by(CoreFund.fund_name.asc()).all()
+        data = [{"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active} for f in funds]
+        return make_response(jsonify({"status": 200, "message": "Core funds retrieved", "data": data}), 200)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/funds', methods=['POST'])
+@jwt_required()
+def create_core_fund():
+    """Create a new CoreFund record.
+
+    This endpoint is primarily for UI management and for cases where a fund
+    needs to be added manually (e.g. before any batch has been uploaded).
+    """
+    try:
+        data = request.get_json() or {}
+        # Accept both shapes:
+        # - { "fund_name": "Axiom" }  (legacy)
+        # - { "name": "Axiom", "status": "Active" } (UI)
+        name = (data.get("name") or data.get("fund_name") or "").strip()
+        if not name:
+            return make_response(jsonify({"status": 400, "message": "fund_name is required"}), 400)
+
+        normalized_name = name.title()
+
+        existing = db.session.query(CoreFund).filter(func.lower(CoreFund.fund_name) == normalized_name.lower()).first()
+        if existing:
+            return make_response(jsonify({"status": 409, "message": "Fund already exists"}), 409)
+
+        status = (data.get("status") or "Active").strip().lower()
+        is_active = status in ("active", "true", "1", "yes")
+
+        f = CoreFund(fund_name=normalized_name, is_active=is_active)
+        db.session.add(f)
+        db.session.commit()
+        return make_response(
+            jsonify(
+                {
+                    "status": 201,
+                    "message": "Fund created",
+                    "data": {"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active},
+                }
+            ),
+            201,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/funds/<int:fund_id>', methods=['PATCH'])
+@jwt_required()
+def update_core_fund(fund_id: int):
+    """Update a core fund (name and/or active state)."""
+    try:
+        data = request.get_json() or {}
+        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
+        if not f:
+            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+
+        if "fund_name" in data and data["fund_name"] is not None:
+            name = str(data["fund_name"]).strip()
+            normalized = name.title()
+            # Prevent duplicate fund names (case-insensitive)
+            existing = db.session.query(CoreFund).filter(
+                func.lower(CoreFund.fund_name) == normalized.lower(),
+                CoreFund.id != fund_id
+            ).first()
+            if existing:
+                return make_response(jsonify({"status": 409, "message": "Fund with that name already exists"}), 409)
+            f.fund_name = normalized
+
+        if "is_active" in data:
+            f.is_active = bool(data["is_active"])
+
+        db.session.commit()
+        return make_response(jsonify({"status": 200, "message": "Fund updated", "data": {"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active}}), 200)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/funds/<int:fund_id>', methods=['DELETE'])
+@jwt_required()
+def delete_core_fund(fund_id: int):
+    """
+    Soft-delete by setting is_active=false (keeps history stable).
+    """
+    try:
+        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
+        if not f:
+            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        f.is_active = False
+        db.session.commit()
+        return make_response(jsonify({"status": 200, "message": "Fund deactivated"}), 200)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 @fund_v1.route('/batches/<int:batch_id>/funds', methods=['GET'])
 @jwt_required()
@@ -149,9 +262,7 @@ def upload_investments_excel(batch_id):
     - fund (String: 'Axiom', 'Atium', etc.)
     - date_transferred (DateTime, optional)
     
-    If 'fund' column omitted:
-    - Investors 1-7 → 'Axiom'
-    - Investors 8-12 → 'Atium'
+If 'fund' column is omitted, all investors will be assigned to a single "Default" fund.
     
     Request: multipart/form-data with file
     

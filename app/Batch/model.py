@@ -13,9 +13,10 @@ class Batch(Base, db.Model):
     total_principal = Column(Numeric(20, 2), default=0.00)
     date_deployed = Column(DateTime, nullable=True)
     duration_days = Column(Integer, default=30)
-    date_closed = Column(DateTime)
-    is_active = Column(Boolean, default=True)
+    date_closed = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=False)  # Changed from True to False for new batches
     is_transferred = Column(Boolean, default=False)
+    deployment_confirmed = Column(Boolean, default=False)  # Tracks Stage 3 confirmation
 
     # Relationships
     performance = db.relationship('Performance', foreign_keys='Performance.batch_id', uselist=False, back_populates='batch', overlaps="performance_records")
@@ -23,7 +24,9 @@ class Batch(Base, db.Model):
 
     @property
     def expected_close_date(self):
-        """Calculate expected close date based on deployment date + duration"""
+        """Calculate expected close date based on deployment date + duration. Returns None if date_deployed is None."""
+        if self.date_deployed is None:
+            return None
         return self.date_deployed + timedelta(days=self.duration_days)
 
     def __repr__(self):
