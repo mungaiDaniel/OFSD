@@ -1,7 +1,7 @@
-from sqlalchemy import Column, Integer, String, DateTime, Numeric, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Numeric, ForeignKey, UniqueConstraint, Index
 from app.database.database import db
 from base_model import Base
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Investment(Base, db.Model):
@@ -13,7 +13,7 @@ class Investment(Base, db.Model):
     investor_phone = Column(String(20))
     internal_client_code = Column(String(50), nullable=False)  # Unique ID from Excel (now allows duplicates across batches)
     amount_deposited = Column(Numeric(20, 2), nullable=False)
-    date_deposited = Column(DateTime, nullable=False, default=datetime.utcnow)
+    date_deposited = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     date_transferred = Column(DateTime, nullable=True)  # When actually transferred/deployed
     # DEPRECATED: keep for backward compatibility while migrating.
     # Source of truth is fund_id -> core_funds.
@@ -21,10 +21,13 @@ class Investment(Base, db.Model):
     batch_id = Column(Integer, ForeignKey('batches.id'), nullable=False)
     fund_id = Column(Integer, ForeignKey('core_funds.id'), nullable=True)
 
-    # Composite unique constraint: internal_client_code + batch_id must be unique
-    __table_args__ = (
-        UniqueConstraint('internal_client_code', 'batch_id', name='_customer_batch_uc'),
-    )
+    # New fields for enhanced investor tracking
+    wealth_manager = Column(String(100), nullable=True)
+    IFA = Column(String(100), nullable=True)  # Independent Financial Advisor
+    contract_note = Column(String(255), nullable=True)  # URL or reference to contract
+    valuation = Column(Numeric(20, 2), nullable=True)  # Current valuation amount
+
+    # Removed Composite unique constraint: internal_client_code + batch_id must be unique
 
     # Relationships
     batch = db.relationship('Batch', back_populates='investments')
@@ -32,6 +35,93 @@ class Investment(Base, db.Model):
 
     def __repr__(self):
         return f'<Investment {self.investor_name} ({self.internal_client_code}) - Fund: {self.fund_name} - {self.amount_deposited}>'
+
+
+class EmailLog(Base, db.Model):
+    __tablename__ = 'email_logs'
+
+    id = Column(Integer, primary_key=True)
+    investor_id = Column(Integer, ForeignKey('investments.id'), nullable=True, index=True)
+    batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True, index=True)
+    status = Column(String(20), nullable=False)  # Sent/Failed/Summary
+    email_type = Column(String(50), nullable=True, index=True)  # DEPOSIT_CONFIRMATION/OFFSHORE_TRANSFER/INVESTMENT_ACTIVE
+    recipient_count = Column(Integer, nullable=True, default=0)
+    success_count = Column(Integer, nullable=True, default=0)
+    failure_count = Column(Integer, nullable=True, default=0)
+    error_message = Column(String(512), nullable=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    retry_count = Column(Integer, nullable=False, default=0)
+    trigger_source = Column(String(120), nullable=True, index=True)
+
+    investor = db.relationship('Investment', backref='email_logs')
+    batch = db.relationship('Batch', backref='email_logs')
+
+    def __repr__(self):
+        return f"<EmailLog {self.status} investor={self.investor_id} batch={self.batch_id} at {self.timestamp}>"  
+
+
+class PendingEmail(Base, db.Model):
+    __tablename__ = 'pending_emails'
+
+    id = Column(Integer, primary_key=True)
+    batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True, index=True)
+    investor_id = Column(Integer, ForeignKey('investments.id'), nullable=True, index=True)
+    email_type = Column(String(50), nullable=False, index=True)  # DEPOSIT_CONFIRMATION/OFFSHORE_TRANSFER/INVESTMENT_ACTIVE/WITHDRAWAL_RECEIVED/etc.
+    status = Column(String(20), nullable=False, default='Pending_Confirmation')  # Pending_Confirmation/Confirmed/Cancelled
+    subject = Column(String(255), nullable=False)
+    body = Column(Text, nullable=False)
+    recipient_email = Column(String(100), nullable=False)
+    recipient_name = Column(String(100), nullable=True)
+    amount = Column(Numeric(20, 2), nullable=True)  # For deposit/withdrawal amounts
+    fund_name = Column(String(100), nullable=True)
+    batch_name = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    trigger_source = Column(String(120), nullable=True, index=True)
+
+    # Relationships
+    batch = db.relationship('Batch', backref='pending_emails')
+    investor = db.relationship('Investment', backref='pending_emails')
+
+    def __repr__(self):
+        return f"<PendingEmail {self.email_type} to {self.recipient_email} status={self.status}>"  
+
+
+WITHDRAWAL_STATUS_PENDING = "Pending"
+WITHDRAWAL_STATUS_APPROVED = "Approved"
+WITHDRAWAL_STATUS_REJECTED = "Rejected"
+WITHDRAWAL_STATUS_PROCESSED = "Processed"
+WITHDRAWAL_STATUS_COMPLETED = "Completed"
+# Executed: withdrawal has been permanently embedded in a committed EpochLedger row.
+# It will NOT be subtracted again by future valuation runs.
+WITHDRAWAL_STATUS_EXECUTED = "Executed"
+
+WITHDRAWAL_STATUSES = (
+    WITHDRAWAL_STATUS_PENDING,
+    WITHDRAWAL_STATUS_APPROVED,
+    WITHDRAWAL_STATUS_REJECTED,
+    WITHDRAWAL_STATUS_PROCESSED,
+    WITHDRAWAL_STATUS_COMPLETED,
+    WITHDRAWAL_STATUS_EXECUTED,
+)
+
+# FINAL_WITHDRAWAL_STATUSES is used by balance / display queries to sum all outflows
+# that have left the investor's account (regardless of whether they've already been
+# captured in an epoch ledger).  Executed MUST be included so historical displays
+# are not broken after a valuation confirm.
+FINAL_WITHDRAWAL_STATUSES = (
+    WITHDRAWAL_STATUS_APPROVED,
+    WITHDRAWAL_STATUS_PROCESSED,
+    WITHDRAWAL_STATUS_COMPLETED,
+    WITHDRAWAL_STATUS_EXECUTED,
+)
+
+
+def normalize_withdrawal_status(status):
+    if not status:
+        return WITHDRAWAL_STATUS_PENDING
+    normalized = str(status).strip().capitalize()
+    return normalized if normalized in WITHDRAWAL_STATUSES else WITHDRAWAL_STATUS_PENDING
 
 
 class Withdrawal(Base, db.Model):
@@ -43,11 +133,11 @@ class Withdrawal(Base, db.Model):
 
     id = Column(Integer, primary_key=True)
     internal_client_code = Column(String(50), nullable=False, index=True)
-    fund_id = Column(Integer, ForeignKey('core_funds.id'), nullable=False, index=True)
+    fund_id = Column(Integer, ForeignKey('core_funds.id'), nullable=True, index=True)
     # DEPRECATED: for display/backfill only
     fund_name = Column(String(100), nullable=True, index=True)
     amount = Column(Numeric(20, 2), nullable=False)
-    date_withdrawn = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    date_withdrawn = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     status = Column(String(20), nullable=False, default='Pending')  # Pending|Approved|Rejected
     approved_at = Column(DateTime, nullable=True)
     note = Column(String(255), nullable=True)
@@ -96,7 +186,7 @@ class EpochLedger(Base, db.Model):
     previous_hash = Column(String(64), nullable=False)
     current_hash = Column(String(64), nullable=False, unique=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
 
     __table_args__ = (
         UniqueConstraint(

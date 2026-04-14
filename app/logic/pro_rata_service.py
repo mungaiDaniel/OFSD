@@ -12,7 +12,7 @@ across multiple funds within a single batch using the "Active Money Rule":
 """
 
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.Batch.model import Batch
 from app.Investments.model import Investment
 from app.Performance.model import Performance
@@ -45,7 +45,7 @@ class MultiFundProRataService:
             Integer representing days active
         """
         if current_date is None:
-            current_date = datetime.utcnow()
+            current_date = datetime.now(timezone.utc)
         
         # Deployment date is fixed starting point
         start_date = max(deposit_date, batch.date_deployed)
@@ -125,14 +125,14 @@ class MultiFundProRataService:
         """
         try:
             if current_date is None:
-                current_date = datetime.utcnow()
+                current_date = datetime.now(timezone.utc)
 
             # Get batch and performance
-            batch = Batch.query.get(batch_id)
+            batch = db.session.get(Batch, batch_id)
             if not batch:
                 return False, f"Batch {batch_id} not found", []
 
-            performance = Performance.query.get(performance_id)
+            performance = db.session.get(Performance, performance_id)
             if not performance:
                 return False, f"Performance {performance_id} not found", []
 
@@ -142,6 +142,12 @@ class MultiFundProRataService:
                 fund_name=fund_name
             ).all()
             
+            if not investments:
+                # Fallback: match all investments in the batch (fund_name not tagged)
+                investments = Investment.query.filter_by(
+                    batch_id=batch_id
+                ).all()
+
             if not investments:
                 return False, f"No investments found for fund {fund_name} in batch {batch_id}", []
 
@@ -226,10 +232,10 @@ class MultiFundProRataService:
         """
         try:
             if current_date is None:
-                current_date = datetime.utcnow()
+                current_date = datetime.now(timezone.utc)
 
             # Get batch
-            batch = Batch.query.get(batch_id)
+            batch = db.session.get(Batch, batch_id)
             if not batch:
                 return False, f"Batch {batch_id} not found", {}
 
@@ -323,9 +329,10 @@ class MultiFundProRataService:
         """
         try:
             if current_date is None:
-                current_date = datetime.utcnow()
+                current_date = datetime.now(timezone.utc)
 
-            batch = Batch.query.get(batch_id)
+            from app.database.database import db
+            batch = db.session.get(Batch, batch_id)
             if not batch:
                 return False, f"Batch {batch_id} not found", {}
 

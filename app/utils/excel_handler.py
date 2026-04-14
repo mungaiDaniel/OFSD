@@ -8,7 +8,11 @@ Excel format is expected to have columns:
 - internal_client_code (Unique ID from Excel - can appear in multiple batches)
 - amount(usd) (Numeric with 2 decimals)
 - fund (Fund name - 'Axiom', 'Atium', etc)
-- date_transferred (datetime)
+- date_deposited (datetime)
+- wealth_manager (String, optional)
+- IFA (String, optional)
+- contract_note (String/URL, optional)
+- valuation (Float/Decimal, optional)
 
 UPSERT Logic:
 - An investor (internal_client_code) can exist in multiple different batches
@@ -34,20 +38,56 @@ logger = logging.getLogger(__name__)
 class ExcelUploadHandler:
     """Handle Excel file uploads for bulk investment import"""
 
-    # Expected Excel columns
+    # Canonical required Excel columns
     REQUIRED_COLUMNS = {
         'investor_name': str,
         'investor_email': str,
         'internal_client_code': str,
         'amount(usd)': Decimal,
         'fund': str,
-        'date_transferred': datetime
+        'date_deposited': datetime
     }
 
-    # Fund grouping rules
-    # NOTE: Fund names are extracted from the uploaded Excel and are treated as global CoreFunds.
-    # This avoids hardcoding 'Axiom' / 'Atium' and allows dynamic fund names.
-    # Any missing fund names are assigned to a default bucket.
+    # Optional columns
+    OPTIONAL_COLUMNS = {
+        'wealth_manager': str,
+        'IFA': str,
+        'contract_note': str,
+        'valuation': Decimal
+    }
+
+    # Header variants that should map to canonical column names
+    HEADER_ALIASES = {
+        'investor name': 'investor_name',
+        'name': 'investor_name',
+        'email': 'investor_email',
+        'investor email': 'investor_email',
+        'internal client code': 'internal_client_code',
+        'client code': 'internal_client_code',
+        'code': 'internal_client_code',
+        'amount deposited': 'amount(usd)',
+        'amount usd': 'amount(usd)',
+        'amount': 'amount(usd)',
+        'amount(usd)': 'amount(usd)',
+        'fund': 'fund',
+        'fund name': 'fund',
+        'date deposited': 'date_deposited',
+        'deposit date': 'date_deposited',
+        'date': 'date_deposited',
+        'wealth manager': 'wealth_manager',
+        'ifa': 'IFA',
+        'contract note': 'contract_note',
+        'valuation': 'valuation'
+    }
+
+    @classmethod
+    def _normalize_header(cls, header_value: str) -> str:
+        """Normalize header names to canonical keys."""
+        if not header_value:
+            return ''
+        header = str(header_value).strip().lower().replace('_', ' ').replace('-', ' ')
+        header = ' '.join(header.split())
+        return cls.HEADER_ALIASES.get(header, header)
 
     @classmethod
     def parse_excel_file(cls, file_path):
@@ -65,23 +105,25 @@ class ExcelUploadHandler:
             worksheet = workbook.active
 
             # Get headers (first row)
-            headers = []
-            for cell in worksheet[1]:
-                headers.append(cell.value)
-
-            if not headers:
+            raw_headers = [cell.value for cell in worksheet[1]]
+            if not raw_headers:
                 return False, [], "Excel file is empty"
+
+            headers = [cls._normalize_header(h) for h in raw_headers]
 
             # Parse data rows
             data = []
             for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, values_only=False), start=2):
                 row_data = {}
                 for col_idx, cell in enumerate(row):
-                    header = headers[col_idx] if col_idx < len(headers) else None
-                    if header:
-                        row_data[header] = cell.value
+                    if col_idx < len(headers):
+                        header = headers[col_idx]
+                        if header:
+                            row_data[header] = cell.value
 
                 if cls._validate_row(row_data):
+                    # Convert data types for normalized fields
+                    row_data = cls._coerce_row_types(row_data)
                     data.append(row_data)
                 else:
                     logger.warning(f"Skipping invalid row {row_idx}: {row_data}")
@@ -96,7 +138,39 @@ class ExcelUploadHandler:
     def _validate_row(cls, row_data):
         """Validate a single row of data"""
         required_fields = ['investor_name', 'investor_email', 'internal_client_code', 'amount(usd)', 'fund']
-        return all(field in row_data and row_data[field] is not None for field in required_fields)
+
+        # All required fields must be present and non-empty (except date_deposited is optional)
+        for field in required_fields:
+            if field not in row_data or row_data[field] in [None, '']:
+                return False
+
+        # Accept either a datetime or string for date_deposited; if missing it can be set later
+        if 'date_deposited' in row_data and row_data['date_deposited'] in [None, '']:
+            row_data.pop('date_deposited', None)
+
+        return True
+
+    @classmethod
+    def _coerce_row_types(cls, row_data):
+        """Coerce parsed row values into expected types."""
+        if 'amount(usd)' in row_data:
+            try:
+                row_data['amount(usd)'] = Decimal(str(row_data['amount(usd)']).strip())
+            except Exception:
+                row_data['amount(usd)'] = Decimal('0.00')
+
+        if 'date_deposited' in row_data and row_data['date_deposited'] is not None:
+            val = row_data['date_deposited']
+            if isinstance(val, str):
+                try:
+                    row_data['date_deposited'] = datetime.fromisoformat(val)
+                except Exception:
+                    try:
+                        row_data['date_deposited'] = datetime.strptime(val, '%Y-%m-%d')
+                    except Exception:
+                        row_data['date_deposited'] = None
+
+        return row_data
 
     @classmethod
     def _normalize_fund_name(cls, value: str) -> str:
@@ -202,9 +276,14 @@ class ExcelUploadHandler:
                             existing_investment.investor_name = inv_data.get('investor_name')
                             existing_investment.investor_email = inv_data.get('investor_email')
                             existing_investment.investor_phone = inv_data.get('investor_phone')
-                            existing_investment.date_transferred = inv_data.get('date_transferred')
+                            existing_investment.date_deposited = inv_data.get('date_deposited')
                             existing_investment.fund_name = fund_name
                             existing_investment.fund_id = core_fund_id
+                            # Update new optional fields
+                            existing_investment.wealth_manager = inv_data.get('wealth_manager')
+                            existing_investment.IFA = inv_data.get('IFA')
+                            existing_investment.contract_note = inv_data.get('contract_note')
+                            existing_investment.valuation = inv_data.get('valuation')
 
                             updated_count += 1
                             logger.info(f"Updated investment: {internal_client_code} in batch {batch_id}")
@@ -218,9 +297,13 @@ class ExcelUploadHandler:
                                 investor_phone=inv_data.get('investor_phone'),
                                 internal_client_code=internal_client_code,
                                 amount_deposited=amount,
-                                date_deposited=inv_data.get('date_transferred', date_deployed),
-                                date_transferred=inv_data.get('date_transferred'),
-                                fund_name=fund_name
+                                date_deposited=inv_data.get('date_deposited', date_deployed),
+                                fund_name=fund_name,
+                                # New optional fields
+                                wealth_manager=inv_data.get('wealth_manager'),
+                                IFA=inv_data.get('IFA'),
+                                contract_note=inv_data.get('contract_note'),
+                                valuation=inv_data.get('valuation')
                             )
                             db.session.add(investment)
                             created_count += 1

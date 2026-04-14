@@ -3,11 +3,11 @@ from flask_jwt_extended import jwt_required
 from app.database.database import db
 from app.Performance.controllers import PerformanceController
 
-performance_v1 = Blueprint("performance_v1", __name__, url_prefix='/api/v1')
+performance_v1 = Blueprint("performance_v1", __name__, url_prefix='/')
 
 # ==================== PERFORMANCE ENDPOINTS ====================
 
-@performance_v1.route('/batches/<int:batch_id>/performance', methods=['POST'])
+@performance_v1.route('/api/v1/batches/<int:batch_id>/performance', methods=['POST'])
 @jwt_required()
 def create_performance(batch_id):
     """
@@ -38,7 +38,7 @@ def create_performance(batch_id):
         }), 500)
 
 
-@performance_v1.route('/batches/<int:batch_id>/performance', methods=['GET'])
+@performance_v1.route('/api/v1/batches/<int:batch_id>/performance', methods=['GET'])
 @jwt_required()
 def get_performance(batch_id):
     """
@@ -68,7 +68,7 @@ def get_performance(batch_id):
         }), 500)
 
 
-@performance_v1.route('/batches/<int:batch_id>/calculate-pro-rata', methods=['POST'])
+@performance_v1.route('/api/v1/batches/<int:batch_id>/calculate-pro-rata', methods=['POST'])
 @jwt_required()
 def calculate_pro_rata(batch_id):
     """
@@ -88,18 +88,18 @@ def calculate_pro_rata(batch_id):
     try:
         # Get fund_name from query params or request body
         fund_name = request.args.get('fund_name')
+        data = request.get_json(silent=True) or {}
         if not fund_name:
-            data = request.get_json() or {}
             fund_name = data.get('fund_name')
-        
+
         if not fund_name:
             return make_response(jsonify({
                 "status": 400,
                 "message": "fund_name parameter is required (query param or request body)"
             }), 400)
-        
+
         session = db.session
-        return PerformanceController.calculate_pro_rata(batch_id, fund_name, session)
+        return PerformanceController.calculate_pro_rata(batch_id, fund_name, session, extra_data=data)
     except Exception as e:
         return make_response(jsonify({
             "status": 500,
@@ -107,7 +107,7 @@ def calculate_pro_rata(batch_id):
         }), 500)
 
 
-@performance_v1.route('/batches/<int:batch_id>/distributions', methods=['GET'])
+@performance_v1.route('/api/v1/batches/<int:batch_id>/distributions', methods=['GET'])
 @jwt_required()
 def get_distributions(batch_id):
     """
@@ -139,7 +139,7 @@ def get_distributions(batch_id):
         }), 500)
 
 
-@performance_v1.route('/batches/<int:batch_id>/funds/<fund_name>/distributions', methods=['GET'])
+@performance_v1.route('/api/v1/batches/<int:batch_id>/funds/<fund_name>/distributions', methods=['GET'])
 @jwt_required()
 def get_distributions_by_fund(batch_id, fund_name):
     """

@@ -36,23 +36,14 @@ class BaseModel(object):
         return items
 
     def get_one(self, id, session):
-
-
         try:
-            items = session.query(self).get(id)
-
+            items = session.get(self, id)
             if items:
-
                 return items
-        
-            return items
-
+            return None
         except Exception as why:
-
             logging.info("User doesn't exist" + str(why))
-
-            return m_return(http_code=resp.USER_DOES_NOT_EXIST['http_code'], message=resp.USER_DOES_NOT_EXIST['message'],
-                            code=resp.USER_DOES_NOT_EXIST['code'])
+            return None
 
         
 

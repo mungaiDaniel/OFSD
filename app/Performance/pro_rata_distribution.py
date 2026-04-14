@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, Numeric, ForeignKey, DateTime, String
 from app.database.database import db
 from base_model import Base
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ProRataDistribution(Base, db.Model):
@@ -9,13 +9,13 @@ class ProRataDistribution(Base, db.Model):
 
     id = Column(Integer, primary_key=True)
     batch_id = Column(Integer, ForeignKey('batches.id'), nullable=False)
-    fund_id = Column(Integer, ForeignKey('funds.id'), nullable=True)
+    fund_id = Column(Integer, ForeignKey('core_funds.id'), nullable=True)
     fund_name = Column(String(100), nullable=False)
     investment_id = Column(Integer, ForeignKey('investments.id'), nullable=False)
     performance_id = Column(Integer, ForeignKey('performance.id'), nullable=False)
     
     # Calculation date (for weekly recalculations)
-    calculation_date = Column(DateTime, nullable=False, default=datetime.utcnow)
+    calculation_date = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     
     # Days active (recalculated for live weekly updates)
     days_active = Column(Integer)
@@ -33,7 +33,7 @@ class ProRataDistribution(Base, db.Model):
 
     # Relationships
     batch = db.relationship('Batch', backref='distributions')
-    fund = db.relationship('Fund', backref='pro_rata_distributions')
+    fund = db.relationship('CoreFund', backref='pro_rata_distributions')
     investment = db.relationship('Investment', backref='pro_rata_distributions')
     performance = db.relationship('Performance', backref='distributions')
 

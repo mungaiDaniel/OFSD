@@ -11,7 +11,7 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import io
 
@@ -37,10 +37,10 @@ class PDFStatementGenerator:
         self.title_style = ParagraphStyle(
             'CustomTitle',
             parent=self.styles['Heading1'],
-            fontSize=16,
-            textColor=colors.HexColor('#1a1a1a'),
+            fontSize=18,
+            textColor=colors.HexColor('#00005b'),
             spaceAfter=12,
-            alignment=TA_CENTER,
+            alignment=TA_LEFT,
             fontName='Helvetica-Bold'
         )
 
@@ -48,8 +48,8 @@ class PDFStatementGenerator:
             'CustomHeading',
             parent=self.styles['Heading2'],
             fontSize=12,
-            textColor=colors.HexColor('#333333'),
-            spaceAfter=6,
+            textColor=colors.HexColor('#00005b'),
+            spaceAfter=8,
             fontName='Helvetica-Bold'
         )
 
@@ -57,7 +57,8 @@ class PDFStatementGenerator:
             'CustomNormal',
             parent=self.styles['Normal'],
             fontSize=10,
-            textColor=colors.HexColor('#333333')
+            textColor=colors.HexColor('#333333'),
+            leading=14
         )
 
     def generate(self):
@@ -110,18 +111,18 @@ class PDFStatementGenerator:
             ['Deployment Date', batch.get('date_deployed', 'N/A')],
             ['Expected Close Date', batch.get('expected_close_date', 'N/A')],
             ['Total Principal', f"${self.batch_data.get('total_principal', 0):,.2f}"],
-            ['Statement Date', datetime.utcnow().strftime('%Y-%m-%d')]
+            ['Statement Date', datetime.now(timezone.utc).strftime('%Y-%m-%d')]
         ]
 
         table = Table(summary_data, colWidths=[2.5 * inch, 4 * inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8f4f8')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f0f5')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#00005b')),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
         ]))
 
         content.append(table)
@@ -183,16 +184,15 @@ class PDFStatementGenerator:
 
         table = Table(table_data, colWidths=[1.2 * inch, 2 * inch, 1.2 * inch, 1.3 * inch, 0.8 * inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#00005b')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('ALIGN', (1, 0), (1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9fb')])
         ]))
 
         content.append(table)
@@ -234,18 +234,17 @@ class PDFStatementGenerator:
 
         table = Table(table_data, colWidths=[1 * inch, 1.5 * inch, 0.9 * inch, 1.3 * inch, 0.9 * inch, 1.2 * inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#00005b')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
             ('ALIGN', (1, 0), (1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#D9E1F2')),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#e6e6f0')),
             ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ('BACKGROUND', (0, 1), (-1, -2), colors.white),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f0f0f0')])
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f9f9fb')])
         ]))
 
         content.append(table)
@@ -264,11 +263,11 @@ def generate_investor_statement_pdf(batch_id, output_path=None):
         bytes or str: PDF bytes or confirmation message
     """
     from app.Batch.model import Batch
-    from app.Investments.model import Investment
-    from app.Performance.pro_rata_distribution import ProRataDistribution
+    from app.Investments.model import Investment, EpochLedger
 
     try:
-        batch = Batch.query.get(batch_id)
+        from app.database.database import db
+        batch = db.session.get(Batch, batch_id)
         if not batch:
             return False, "Batch not found"
 
@@ -296,18 +295,21 @@ def generate_investor_statement_pdf(batch_id, output_path=None):
             ],
             'distributions': [
                 {
-                    'investment_id': dist.investment_id,
-                    'investor_name': dist.investor_name,
-                    'internal_client_code': dist.internal_client_code,
-                    'fund_name': dist.fund_name,
-                    'days_active': dist.days_active,
-                    'weighted_capital': dist.weighted_capital,
-                    'profit_share_percentage': dist.profit_share_percentage,
-                    'profit_allocated': dist.profit_allocated
+                    'investor_name': getattr(inv, 'investor_name', 'Client'),
+                    'internal_client_code': ledger.internal_client_code,
+                    'fund_name': ledger.fund_name,
+                    'weighted_capital': ledger.start_balance,  # Simplified for batch report
+                    'profit_share_percentage': (float(ledger.profit) / float(batch_data['total_profit']) * 100) if batch_data.get('total_profit') else 0,
+                    'profit_allocated': ledger.profit
                 }
-                for dist in batch.distributions
+                for ledger, inv in db.session.query(EpochLedger, Investment).join(
+                    Investment, Investment.internal_client_code == EpochLedger.internal_client_code
+                ).filter(
+                    Investment.batch_id == batch_id
+                ).all()
             ]
         }
+        batch_data['total_profit'] = sum(float(d['profit_allocated']) for d in batch_data['distributions'])
 
         # Generate PDF
         generator = PDFStatementGenerator(batch_data, output_path)

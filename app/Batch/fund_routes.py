@@ -21,15 +21,17 @@ from app.Batch.fund_controllers import (
     PDFReportController
 )
 from app.logic.pro_rata_service import MultiFundProRataService
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from werkzeug.utils import secure_filename
 from app.Batch.fund import Fund
-from sqlalchemy import func
+from sqlalchemy import func, or_, distinct
 from app.Batch.core_fund import CoreFund
+from app.Investments.model import Investment
+from app.Batch.model import Batch
 
 # Create blueprint
-fund_v1 = Blueprint("fund_v1", __name__, url_prefix='/api/v1')
+fund_v1 = Blueprint("fund_v1", __name__, url_prefix='/')
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -45,24 +47,110 @@ def allowed_file(filename):
 
 # ==================== FUND MANAGEMENT ====================
 
-@fund_v1.route('/funds', methods=['GET'])
+@fund_v1.route('/api/v1/funds', methods=['GET'])
 @jwt_required()
 def list_all_funds():
     """Core Fund Management (global).
-
-    Returns all CoreFund records.
-
-    These funds are created dynamically when a batch Excel upload includes a new fund_name.
+    Returns all CoreFund records with LIVE AUM and investor counts.
     """
     try:
-        funds = db.session.query(CoreFund).order_by(CoreFund.fund_name.asc()).all()
-        data = [{"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active} for f in funds]
+        funds = db.session.query(CoreFund).filter(CoreFund.is_active == True).order_by(CoreFund.fund_name.asc()).all()
+        data = []
+        for f in funds:
+            investments = db.session.query(Investment).filter(
+                or_(
+                    Investment.fund_id == f.id,
+                    (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+                )
+            ).all()
+            total_aum = sum(float(i.amount_deposited or 0) for i in investments)
+            # Count unique investors by distinct internal_client_code
+            investor_count = db.session.query(
+                func.count(distinct(Investment.internal_client_code))
+            ).filter(
+                or_(
+                    Investment.fund_id == f.id,
+                    (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+                )
+            ).scalar() or 0
+            data.append({
+                "id": f.id,
+                "fund_name": f.fund_name,
+                "is_active": f.is_active,
+                "total_aum": total_aum,
+                "investor_count": investor_count
+            })
         return make_response(jsonify({"status": 200, "message": "Core funds retrieved", "data": data}), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/funds', methods=['POST'])
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['GET'])
+@jwt_required()
+def get_single_fund(fund_id: int):
+    """Get single fund with live performance/AUM tracking and respective batches."""
+    try:
+        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
+        if not f:
+            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+
+        investments = db.session.query(Investment).filter(
+            or_(
+                Investment.fund_id == f.id,
+                (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+            )
+        ).all()
+        total_aum = sum(float(i.amount_deposited or 0) for i in investments)
+        # Count unique investors by distinct internal_client_code
+        investor_count = db.session.query(
+            func.count(distinct(Investment.internal_client_code))
+        ).filter(
+            or_(
+                Investment.fund_id == f.id,
+                (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+            )
+        ).scalar() or 0
+
+        batch_ids = set(i.batch_id for i in investments if i.batch_id)
+        batches = db.session.query(Batch).filter(Batch.id.in_(list(batch_ids))).all() if batch_ids else []
+
+        batches_data = []
+        for b in batches:
+            b_invs = [i for i in investments if i.batch_id == b.id]
+            b_aum = sum(float(i.amount_deposited or 0) for i in b_invs)
+            # Count unique investors in batch by distinct internal_client_code
+            b_inv_count = db.session.query(
+                func.count(distinct(Investment.internal_client_code))
+            ).filter(
+                Investment.batch_id == b.id,
+                or_(
+                    Investment.fund_id == f.id,
+                    (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+                )
+            ).scalar() or 0
+            batches_data.append({
+                "batch_id": b.id,
+                "batch_name": b.batch_name,
+                "total_aum": b_aum,
+                "investor_count": b_inv_count,
+                "date_deployed": b.date_deployed.isoformat() if b.date_deployed else None,
+                "is_active": b.is_active
+            })
+
+        data = {
+            "id": f.id,
+            "fund_name": f.fund_name,
+            "is_active": f.is_active,
+            "total_aum": total_aum,
+            "investor_count": investor_count,
+            "batches": batches_data
+        }
+        return make_response(jsonify({"status": 200, "message": "Fund retrieved", "data": data}), 200)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/api/v1/funds', methods=['POST'])
 @jwt_required()
 def create_core_fund():
     """Create a new CoreFund record.
@@ -106,7 +194,7 @@ def create_core_fund():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/funds/<int:fund_id>', methods=['PATCH'])
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['PATCH'])
 @jwt_required()
 def update_core_fund(fund_id: int):
     """Update a core fund (name and/or active state)."""
@@ -138,24 +226,35 @@ def update_core_fund(fund_id: int):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/funds/<int:fund_id>', methods=['DELETE'])
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['DELETE'])
 @jwt_required()
 def delete_core_fund(fund_id: int):
     """
-    Soft-delete by setting is_active=false (keeps history stable).
+    Completely remove fund from database (including related investments & withdrawals), then hide it from UI.
     """
     try:
         f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
         if not f:
             return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
-        f.is_active = False
+
+        # Delete related dependent rows before deleting fund to avoid FK constraints
+        db.session.query(Investment).filter(Investment.fund_id == fund_id).delete(synchronize_session=False)
+        from app.Investments.model import Withdrawal
+        db.session.query(Withdrawal).filter(Withdrawal.fund_id == fund_id).delete(synchronize_session=False)
+
+        # Optional: remove epoch-ledger rows by fund_name (if full deletion desired)
+        from app.Investments.model import EpochLedger
+        db.session.query(EpochLedger).filter(EpochLedger.fund_name == f.fund_name).delete(synchronize_session=False)
+
+        db.session.delete(f)
         db.session.commit()
-        return make_response(jsonify({"status": 200, "message": "Fund deactivated"}), 200)
+
+        return make_response(jsonify({"status": 200, "message": "Fund deleted"}), 200)
     except Exception as e:
         db.session.rollback()
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
-@fund_v1.route('/batches/<int:batch_id>/funds', methods=['GET'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/funds', methods=['GET'])
 @jwt_required()
 def get_batch_funds(batch_id):
     """
@@ -184,7 +283,7 @@ def get_batch_funds(batch_id):
         }), 500)
 
 
-@fund_v1.route('/batches/<int:batch_id>/funds/<fund_name>', methods=['GET'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/funds/<fund_name>', methods=['GET'])
 @jwt_required()
 def get_fund_details(batch_id, fund_name):
     """
@@ -208,7 +307,7 @@ def get_fund_details(batch_id, fund_name):
 
 # ==================== FUND PERFORMANCE ====================
 
-@fund_v1.route('/batches/<int:batch_id>/funds/<fund_name>/performance', methods=['POST'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/funds/<fund_name>/performance', methods=['POST'])
 @jwt_required()
 def record_fund_performance(batch_id, fund_name):
     """
@@ -245,7 +344,7 @@ def record_fund_performance(batch_id, fund_name):
 
 # ==================== EXCEL UPLOAD ====================
 
-@fund_v1.route('/batches/<int:batch_id>/upload-excel', methods=['POST'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/upload-excel', methods=['POST'])
 @jwt_required()
 def upload_investments_excel(batch_id):
     """
@@ -333,7 +432,7 @@ If 'fund' column is omitted, all investors will be assigned to a single "Default
 
 # ==================== LIVE WEEKLY CALCULATIONS ====================
 
-@fund_v1.route('/batches/<int:batch_id>/funds/<fund_name>/weekly-update', methods=['GET'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/funds/<fund_name>/weekly-update', methods=['GET'])
 @jwt_required()
 def get_fund_weekly_update(batch_id, fund_name):
     """
@@ -370,7 +469,7 @@ def get_fund_weekly_update(batch_id, fund_name):
 
 # ==================== MULTI-FUND PRO-RATA CALCULATION ====================
 
-@fund_v1.route('/batches/<int:batch_id>/calculate-all-funds', methods=['POST'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/calculate-all-funds', methods=['POST'])
 @jwt_required()
 def calculate_all_funds_pro_rata(batch_id):
     """
@@ -446,7 +545,7 @@ def calculate_all_funds_pro_rata(batch_id):
 
 # ==================== REPORTING ====================
 
-@fund_v1.route('/batches/<int:batch_id>/report/pdf', methods=['GET'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/report/pdf', methods=['GET'])
 @jwt_required()
 def generate_batch_report_pdf(batch_id):
     """
@@ -467,7 +566,7 @@ def generate_batch_report_pdf(batch_id):
         download = request.args.get('download', 'false').lower() == 'true'
         
         if download:
-            output_path = f'reports/batch_{batch_id}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.pdf'
+            output_path = f'reports/batch_{batch_id}_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.pdf'
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
         else:
             output_path = None
@@ -481,7 +580,7 @@ def generate_batch_report_pdf(batch_id):
         }), 500)
 
 
-@fund_v1.route('/batches/<int:batch_id>/summary', methods=['GET'])
+@fund_v1.route('/api/v1/batches/<int:batch_id>/summary', methods=['GET'])
 @jwt_required()
 def get_comprehensive_batch_summary(batch_id):
     """
@@ -500,7 +599,7 @@ def get_comprehensive_batch_summary(batch_id):
         from app.Investments.model import Investment
         from app.Performance.pro_rata_distribution import ProRataDistribution
 
-        batch = Batch.query.get(batch_id)
+        batch = db.session.get(Batch, batch_id)
         if not batch:
             return make_response(jsonify({
                 "status": 404,
@@ -526,11 +625,18 @@ def get_comprehensive_batch_summary(batch_id):
 
             fund_capital = sum(float(inv.amount_deposited) for inv in fund_investments)
             total_distributed = sum(float(d.profit_allocated) for d in fund_distributions) if fund_distributions else 0
+            # Count unique investors by distinct internal_client_code
+            unique_fund_investors = db.session.query(
+                func.count(distinct(Investment.internal_client_code))
+            ).filter(
+                Investment.fund_id == fund.id,
+                Investment.batch_id == batch.id
+            ).scalar() or 0
 
             funds_data.append({
                 "fund_name": fund.fund_name,
                 "total_capital": fund_capital,
-                "investor_count": len(fund_investments),
+                "investor_count": unique_fund_investors,
                 "performance_records": len(fund.performance_records),
                 "total_distributed": total_distributed,
                 "expected_close_date": fund.expected_close_date.isoformat()
