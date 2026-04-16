@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, Numeric, Foreign
 from app.database.database import db
 from base_model import Base
 from datetime import datetime, timezone
+from decimal import Decimal
 
 
 class Investment(Base, db.Model):
@@ -13,6 +14,8 @@ class Investment(Base, db.Model):
     investor_phone = Column(String(20))
     internal_client_code = Column(String(50), nullable=False)  # Unique ID from Excel (now allows duplicates across batches)
     amount_deposited = Column(Numeric(20, 2), nullable=False)
+    deployment_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Pro-rata transaction cost deducted at deployment
+    transfer_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Pro-rata transfer cost deducted at transfer
     date_deposited = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     date_transferred = Column(DateTime, nullable=True)  # When actually transferred/deployed
     # DEPRECATED: keep for backward compatibility while migrating.
@@ -32,6 +35,11 @@ class Investment(Base, db.Model):
     # Relationships
     batch = db.relationship('Batch', back_populates='investments')
     fund = db.relationship('CoreFund', backref='investments')
+
+    @property
+    def net_principal(self):
+        """Calculate the current net principal after all deductions."""
+        return self.amount_deposited - self.transfer_fee_deducted - self.deployment_fee_deducted
 
     def __repr__(self):
         return f'<Investment {self.investor_name} ({self.internal_client_code}) - Fund: {self.fund_name} - {self.amount_deposited}>'

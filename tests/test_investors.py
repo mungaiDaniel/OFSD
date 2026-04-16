@@ -100,7 +100,8 @@ class TestInvestorRegistry:
         data = response.get_json()['data']
         investor = next((item for item in data if item['internal_client_code'] == 'ATIUM-008'), None)
         assert investor is not None
-        assert abs(investor['total_principal'] - 110592.81) < 0.01
+        # Directory sums batch-scoped balances (no cross-batch epoch bleed): 50k + 50k net principal
+        assert abs(investor['total_principal'] - 100000.0) < 0.01
 
     def test_get_investor_by_client_code(self, client, auth_token, sample_investments, app):
         """Test retrieving specific investor by client code"""

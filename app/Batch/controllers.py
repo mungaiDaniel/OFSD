@@ -1,6 +1,6 @@
 from app.Batch.model import Batch
 from app.Investments.model import Investment, EpochLedger, Withdrawal, PendingEmail, EmailLog, FINAL_WITHDRAWAL_STATUSES
-from app.Valuation.model import Statement, ValuationRun
+from app.Valuation.model import Statement, ValuationRun, BatchValuation, InvestmentBatchValuation
 from app.Performance.model import Performance
 from app.Performance.pro_rata_distribution import ProRataDistribution
 from app.logic.valuation_service import _q2
@@ -12,30 +12,38 @@ from flask import jsonify, make_response
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from marshmallow import ValidationError
-from sqlalchemy import select, distinct, func
+from sqlalchemy import select, distinct, func, and_, or_
+from sqlalchemy.orm import aliased, joinedload
 from app.Batch.status_update_controller import StatusUpdateController
 import logging
 
 logger = logging.getLogger(__name__)
-
-# ── Atomic Batch Architecture Constants ────────────────────────────────────────
-
-# Maps batch_id → the maximum epoch_end date that belongs to THIS batch.
-# _calculate_batch_investment_values() uses this to scope EpochLedger reads so
-# that an investor who appears in Batch 1 AND Batch 2 returns their Batch-1
-# closing balance (Apr epoch) when computing Batch 1, not their latest balance.
-BATCH_EPOCH_CUTOFFS: dict = {
-    1: datetime(2026,  4, 30, tzinfo=timezone.utc),  # Apr 2026 epoch end
-    2: datetime(2026,  9, 30, tzinfo=timezone.utc),  # Sep 2026 epoch end
-    3: datetime(2026, 10, 31, tzinfo=timezone.utc),  # Oct 2026 epoch end
-}
-
 
 
 class BatchController:
     """Controller for Batch operations"""
     
     model = Batch
+
+    @classmethod
+    def _parse_date_only(cls, raw_value):
+        """
+        Parse incoming date/date-time strings as calendar dates (timezone-agnostic).
+        Prevents Jan 1 becoming Dec 31 due to timezone offsets.
+        """
+        if raw_value is None:
+            return None
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        # Accept full ISO payloads by taking the calendar date part only.
+        date_part = text[:10]
+        try:
+            parsed_date = datetime.strptime(date_part, "%Y-%m-%d")
+            return parsed_date
+        except ValueError:
+            # Fallback: let Python parse if it's already a plain datetime string.
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
 
     @classmethod
     def create_batch(cls, data, session):
@@ -91,7 +99,7 @@ class BatchController:
             date_deployed = None
             if date_deployed_str:
                 try:
-                    date_deployed = datetime.fromisoformat(date_deployed_str)
+                    date_deployed = cls._parse_date_only(date_deployed_str)
                 except ValueError:
                     return make_response(jsonify({
                         "status": 400,
@@ -185,6 +193,13 @@ class BatchController:
                     "investor_name": inv.investor_name,
                     "internal_client_code": inv.internal_client_code,
                     "amount_deposited": float(inv.amount_deposited),
+                    "original_principal": float(inv.amount_deposited),
+                    "deployment_fee_deducted": float(inv.deployment_fee_deducted or 0),
+                    "transaction_fee_usd": float(inv.transfer_fee_deducted or 0),
+                    "entry_fee_usd": float(inv.deployment_fee_deducted or 0),
+                    "deployment_fee": float(inv.transfer_fee_deducted or 0),
+                    "main_balance": float(inv.net_principal),
+                    "status": "Active" if batch.is_transferred else "Pending",
                     # Prefer the FK relationship fund name, fall back to the legacy fund_name field
                     "fund_id": inv.fund_id,
                     "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
@@ -213,6 +228,13 @@ class BatchController:
                     "investor_name": inv.investor_name,
                     "internal_client_code": inv.internal_client_code,
                     "amount_deposited": float(inv.amount_deposited),
+                    "original_principal": float(inv.amount_deposited),
+                    "deployment_fee_deducted": float(inv.deployment_fee_deducted or 0),
+                    "transaction_fee_usd": float(inv.transfer_fee_deducted or 0),
+                    "entry_fee_usd": float(inv.deployment_fee_deducted or 0),
+                    "deployment_fee": float(inv.transfer_fee_deducted or 0),
+                    "main_balance": float(inv.net_principal),
+                    "status": "Active" if batch.is_transferred else "Pending",
                     "fund_id": inv.fund_id,
                     "fund_name": fund_name,
                     "date_deposited": inv.date_deposited.isoformat() if inv.date_deposited else None,
@@ -289,6 +311,7 @@ class BatchController:
             
             # ── Resolve canonical deployment date ──
             effective_date = batch.date_deployed
+            active_days = cls._calculate_active_days(batch)
 
             return make_response(jsonify({
                 "status": 200,
@@ -302,8 +325,11 @@ class BatchController:
                     "total_capital": float(total_current_standing),
                     "date_deployed": effective_date.isoformat() if effective_date else None,
                     "duration_days": batch.duration_days,
+                    "active_days": active_days,
                     "expected_close_date": (effective_date + timedelta(days=batch.duration_days)).isoformat() if effective_date else None,
                     "date_closed": batch.date_closed.isoformat() if batch.date_closed else None,
+                    "transaction_cost": float(batch.transaction_cost or 0),
+                    "transfer_transaction_cost": float(batch.transfer_transaction_cost or 0),
                     "unique_investor_count": int(unique_investor_count),
                     "investment_rows_count": investment_rows_count,
                     "investors_count": int(unique_investor_count),
@@ -332,6 +358,19 @@ class BatchController:
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
+
+    @classmethod
+    def _calculate_active_days(cls, batch):
+        """Compute active days from persisted deployment/close dates."""
+        if not batch or batch.date_deployed is None:
+            return 0
+        start_dt = cls._to_utc(batch.date_deployed)
+        end_dt = cls._to_utc(batch.date_closed) if batch.date_closed else datetime.now(timezone.utc)
+        if start_dt is None or end_dt is None:
+            return 0
+        if end_dt.date() < start_dt.date():
+            return 0
+        return (end_dt.date() - start_dt.date()).days + 1
 
     @classmethod
     def _investment_active_start(cls, investment):
@@ -385,7 +424,7 @@ class BatchController:
             investment_states.append({
                 "id": related.id,
                 "investment": related,
-                "amount": Decimal(str(related.amount_deposited)),
+                "amount": Decimal(str(related.net_principal)),
                 "active_start": cls._investment_active_start(related),
                 "balance": Decimal("0"),
                 "profit": Decimal("0"),
@@ -490,10 +529,174 @@ class BatchController:
         return {state["id"]: state for state in investment_states}
 
     @classmethod
+    def _siblings_same_client_fund(cls, session, inv: Investment) -> list:
+        """All Investment rows for the same client code + fund (across batches)."""
+        fund_name = inv.fund.fund_name if inv.fund else inv.fund_name
+        q = (
+            session.query(Investment)
+            .options(joinedload(Investment.batch))
+            .filter(Investment.internal_client_code == inv.internal_client_code)
+        )
+        if inv.fund_id is not None:
+            q = q.filter(Investment.fund_id == inv.fund_id)
+        else:
+            q = q.filter(
+                func.lower(func.coalesce(Investment.fund_name, "")) == func.lower(fund_name or "")
+            )
+        return q.all()
+
+    @classmethod
+    def _epoch_ledger_attributed_balance(cls, inv, session):
+        """
+        EpochLedger is stored per (client, fund), not per batch. When the same client+fund
+        appears in multiple batches, only the earliest deployment should absorb ledger totals
+        for epochs that end *before* the next batch's deployment; later tranches are handled
+        by BatchValuation / net principal (return None here).
+        """
+        fund_name = inv.fund.fund_name if inv.fund else inv.fund_name
+        if not fund_name:
+            return None
+
+        sibs = cls._siblings_same_client_fund(session, inv)
+        if len(sibs) <= 1:
+            le = (
+                session.query(EpochLedger)
+                .filter(
+                    EpochLedger.internal_client_code == inv.internal_client_code,
+                    func.lower(EpochLedger.fund_name) == func.lower(fund_name),
+                )
+                .order_by(EpochLedger.epoch_end.desc())
+                .first()
+            )
+            if not le:
+                return None
+            return _q2(Decimal(str(le.end_balance or 0)))
+
+        sibs_sorted = sorted(
+            sibs,
+            key=lambda x: (
+                cls._to_utc(x.batch.date_deployed)
+                if x.batch and x.batch.date_deployed
+                else datetime(9999, 12, 31, tzinfo=timezone.utc),
+                x.id,
+            ),
+        )
+        idx = next((i for i, x in enumerate(sibs_sorted) if x.id == inv.id), 0)
+        if idx > 0:
+            return None
+
+        rows = (
+            session.query(EpochLedger)
+            .filter(
+                EpochLedger.internal_client_code == inv.internal_client_code,
+                func.lower(EpochLedger.fund_name) == func.lower(fund_name),
+            )
+            .order_by(EpochLedger.epoch_end.asc())
+            .all()
+        )
+        if not rows:
+            return None
+
+        if len(sibs_sorted) > 1:
+            nxt = sibs_sorted[1]
+            cut = nxt.batch.date_deployed if nxt.batch else None
+            if not cut:
+                return None
+            # Compare by calendar date so a January epoch whose epoch_end falls on the same
+            # calendar day as the next batch's deployment (timezone edge cases) is not dropped.
+            cut_date = cls._to_utc(cut).date()
+            eligible = [r for r in rows if cls._to_utc(r.epoch_end).date() < cut_date]
+            if eligible:
+                return _q2(Decimal(str(eligible[-1].end_balance or 0)))
+            return None
+
+        return None
+
+    @classmethod
+    def _withdrawals_for_investment_batch(cls, session, inv: Investment, batch_id: int) -> Decimal:
+        """Withdrawals attributed to this investment row within a batch (atomic isolation)."""
+        Inv = aliased(Investment)
+        fund_match = or_(
+            and_(Inv.fund_id.isnot(None), Inv.fund_id == Withdrawal.fund_id),
+            and_(Inv.fund_id.is_(None), Withdrawal.fund_id.is_(None)),
+        )
+        q = (
+            session.query(func.coalesce(func.sum(Withdrawal.amount), 0))
+            .select_from(Withdrawal)
+            .join(
+                Inv,
+                and_(
+                    Inv.internal_client_code == Withdrawal.internal_client_code,
+                    Inv.batch_id == batch_id,
+                    Inv.id == inv.id,
+                    fund_match,
+                ),
+            )
+            .filter(Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES))
+        )
+        return Decimal(str(q.scalar() or 0))
+
+    @classmethod
+    def _uncaptured_withdrawals_for_investment_batch(
+        cls,
+        session,
+        inv: Investment,
+        batch_id: int,
+        since_dt,
+    ) -> Decimal:
+        """Withdrawals after the last valuation snapshot date for this investment+batch."""
+        Inv = aliased(Investment)
+        fund_match = or_(
+            and_(Inv.fund_id.isnot(None), Inv.fund_id == Withdrawal.fund_id),
+            and_(Inv.fund_id.is_(None), Withdrawal.fund_id.is_(None)),
+        )
+        q = (
+            session.query(func.coalesce(func.sum(Withdrawal.amount), 0))
+            .select_from(Withdrawal)
+            .join(
+                Inv,
+                and_(
+                    Inv.internal_client_code == Withdrawal.internal_client_code,
+                    Inv.batch_id == batch_id,
+                    Inv.id == inv.id,
+                    fund_match,
+                ),
+            )
+            .filter(Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES))
+        )
+        if since_dt is not None:
+            q = q.filter(Withdrawal.date_withdrawn > since_dt)
+        return Decimal(str(q.scalar() or 0))
+
+    @classmethod
+    def _latest_committed_statement_for_investment_batch(cls, session, investor_id: int, batch_id: int):
+        """
+        Canonical SSOT lookup for investor balance:
+        latest committed statement by investor+batch.
+        """
+        return (
+            session.query(Statement, ValuationRun)
+            .join(ValuationRun, Statement.valuation_run_id == ValuationRun.id)
+            .filter(
+                Statement.investor_id == investor_id,
+                Statement.batch_id == batch_id,
+                func.lower(ValuationRun.status) == "committed",
+            )
+            .order_by(ValuationRun.epoch_end.desc(), Statement.created_at.desc())
+            .first()
+        )
+
+    @classmethod
     def _calculate_batch_investment_values(cls, inv, batch, session):
-        """Calculate per-investment current values using same-client/fund epoch proration."""
-        if batch.date_deployed is None:
-            opening_balance = float(inv.amount_deposited)
+        """
+        SSOT per-investment values scoped strictly to this batch.
+        Priority:
+        1) Latest committed Statement.closing_balance for (investor_id, batch_id)
+        2) Fallback to net principal for this investment row
+        In both cases, subtract uncaptured finalized withdrawals so post-withdrawal UI updates immediately.
+        """
+        opening_balance = float(inv.net_principal)
+        if batch is None:
             return {
                 "opening_balance": opening_balance,
                 "current_balance": opening_balance,
@@ -501,129 +704,34 @@ class BatchController:
                 "withdrawals": 0.0,
             }
 
-        fund_name = inv.fund.fund_name if inv.fund else inv.fund_name
-        epoch_balances = cls._simulate_client_fund_balances(inv, session)
-        if epoch_balances and inv.id in epoch_balances:
-            state = epoch_balances[inv.id]
-            return {
-                "opening_balance": float(inv.amount_deposited),
-                "current_balance": float(round(state["balance"], 2)),
-                "profit": float(round(state["profit"], 2)),
-                "withdrawals": float(round(state["withdrawals"], 2)),
-            }
+        wd = cls._withdrawals_for_investment_batch(session, inv, batch.id)
 
-        from app.Investments.model import EpochLedger, Withdrawal, FINAL_WITHDRAWAL_STATUSES
-
-        opening_balance = float(inv.amount_deposited)
-        opening_balance_decimal = Decimal(str(inv.amount_deposited or 0))
-        latest_epoch = session.query(EpochLedger).filter(
-            EpochLedger.internal_client_code == inv.internal_client_code,
-            func.lower(EpochLedger.fund_name) == func.lower(fund_name)
-        ).order_by(EpochLedger.epoch_end.desc()).first()
-
-        related_investments_query = session.query(Investment).join(Batch).filter(
-            Investment.internal_client_code == inv.internal_client_code,
-            db.or_(Investment.batch_id == batch.id, Batch.date_deployed != None)
+        latest_statement_row = cls._latest_committed_statement_for_investment_batch(
+            session, inv.id, batch.id
         )
-        if inv.fund_id is not None:
-            related_investments_query = related_investments_query.filter(Investment.fund_id == inv.fund_id)
-        else:
-            related_investments_query = related_investments_query.filter(func.lower(Investment.fund_name) == func.lower(fund_name))
-
-        related_investments = related_investments_query.all()
-
-        if not latest_epoch:
-            total_approved_wds = session.query(db.func.coalesce(db.func.sum(Withdrawal.amount), 0)).filter(
-                Withdrawal.internal_client_code == inv.internal_client_code,
-                Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
-                func.lower(Withdrawal.fund_name) == func.lower(fund_name)
-            ).scalar() or 0
+        if latest_statement_row:
+            st, valuation_run = latest_statement_row
+            base_cb = Decimal(str(st.closing_balance or 0))
+            uncaptured_wd = cls._uncaptured_withdrawals_for_investment_batch(
+                session, inv, batch.id, valuation_run.epoch_end
+            )
+            cb = max(Decimal("0"), _q2(base_cb - uncaptured_wd))
+            profit = _q2(base_cb - Decimal(str(opening_balance)))
             return {
                 "opening_balance": opening_balance,
-                "current_balance": float(opening_balance_decimal - Decimal(str(total_approved_wds))),
-                "profit": 0.0,
-                "withdrawals": float(total_approved_wds),
+                "current_balance": float(cb),
+                "profit": float(profit),
+                "withdrawals": float(wd),
             }
 
-        def to_utc(dt):
-            if dt is None:
-                return None
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-
-        latest_epoch_start_utc = to_utc(latest_epoch.epoch_start)
-        latest_epoch_end_utc = to_utc(latest_epoch.epoch_end)
-
-        inv_pre = Decimal("0")
-        inv_intra = Decimal("0")
-        inv_post = Decimal("0")
-        all_allocations = []
-        for related in related_investments:
-            related_dt = to_utc(related.date_transferred or related.date_deposited)
-            pre = Decimal("0")
-            intra = Decimal("0")
-            post = Decimal("0")
-            if related_dt is not None:
-                if latest_epoch_start_utc is not None and related_dt <= latest_epoch_start_utc:
-                    pre = Decimal(str(related.amount_deposited))
-                elif latest_epoch_end_utc is not None and related_dt <= latest_epoch_end_utc:
-                    intra = Decimal(str(related.amount_deposited))
-                else:
-                    post = Decimal(str(related.amount_deposited))
-            else:
-                pre = Decimal(str(related.amount_deposited))
-
-            all_allocations.append({
-                "investment_id": related.id,
-                "pre": pre,
-                "intra": intra,
-                "post": post,
-            })
-
-            if related.id == inv.id:
-                inv_pre = pre
-                inv_intra = intra
-                inv_post = post
-
-        total_pre = sum(item["pre"] for item in all_allocations)
-
-        total_approved_wds = session.query(db.func.coalesce(db.func.sum(Withdrawal.amount), 0)).filter(
-            Withdrawal.internal_client_code == inv.internal_client_code,
-            Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
-            func.lower(Withdrawal.fund_name) == func.lower(fund_name)
-        ).scalar() or Decimal("0")
-
-        total_captured_wds = session.query(db.func.coalesce(db.func.sum(EpochLedger.withdrawals), 0)).filter(
-            EpochLedger.internal_client_code == inv.internal_client_code,
-            func.lower(EpochLedger.fund_name) == func.lower(fund_name)
-        ).scalar() or Decimal("0")
-
-        uncaptured_wds = max(Decimal("0"), Decimal(str(total_approved_wds)) - Decimal(str(total_captured_wds)))
-
-        epoch_start_balance = Decimal(str(latest_epoch.start_balance or 0))
-        epoch_deposits = Decimal(str(latest_epoch.deposits or 0))
-        epoch_profit = Decimal(str(latest_epoch.profit or 0))
-        epoch_total_contribution = epoch_start_balance + epoch_deposits
-
-        if total_pre > 0 and inv_pre > 0:
-            batch_start_balance = epoch_start_balance * (inv_pre / total_pre)
-        else:
-            batch_start_balance = Decimal("0")
-
-        batch_profit_share = Decimal("0")
-        if epoch_total_contribution > 0:
-            batch_profit_share = ((batch_start_balance + inv_intra) / epoch_total_contribution) * epoch_profit
-
-        current_before_wd = batch_start_balance + inv_intra + inv_post + batch_profit_share
-
-        final_withdrawal_amount = float(round(Decimal(str(total_approved_wds)), 2))
-
+        # No committed statement yet: fallback is net deployed principal.
+        # Apply finalized withdrawals as transaction adjustment so UI reflects outflows immediately.
+        cb_f = max(Decimal("0"), _q2(Decimal(str(opening_balance)) - wd))
         return {
             "opening_balance": opening_balance,
-            "current_balance": float(round(current_before_wd, 2)),
-            "profit": float(round(batch_profit_share, 2)),
-            "withdrawals": final_withdrawal_amount,
+            "current_balance": float(cb_f),
+            "profit": float(_q2(cb_f - Decimal(str(opening_balance)))),
+            "withdrawals": float(wd),
         }
 
     @classmethod
@@ -659,8 +767,18 @@ class BatchController:
                     Investment.batch_id == batch.id
                 ).scalar() or 0.00
 
-                # Total current standing is the sum of the latest current balances per investment.
-                total_value = cls._calculate_batch_current_standing(batch, session)
+                # Prefer persisted batch valuation (latest period) for "current standing".
+                latest_bv = (
+                    session.query(BatchValuation)
+                    .filter(BatchValuation.batch_id == batch.id)
+                    .order_by(BatchValuation.period_end_date.desc())
+                    .first()
+                )
+                if latest_bv:
+                    total_value = float(latest_bv.balance_at_end_of_period or 0)
+                else:
+                    # Fallback: compute from per-investment balances (older installs / no backfill yet).
+                    total_value = cls._calculate_batch_current_standing(batch, session)
 
                 # Count unique investors (by distinct internal_client_code)
                 investors_count = session.query(
@@ -671,6 +789,7 @@ class BatchController:
                 
                 # ── Resolve canonical deployment date ──
                 effective_date = batch.date_deployed
+                active_days = cls._calculate_active_days(batch)
                 # Status: 'Pending' unless batch is explicitly activated
                 status = 'Active' if batch.is_active else 'Deactivated'
 
@@ -713,8 +832,11 @@ class BatchController:
                     "batch_type": batch_type,
                     "date_deployed": effective_date.isoformat() if effective_date else None,
                     "duration_days": batch.duration_days,
+                    "active_days": active_days,
                     "expected_close_date": (effective_date + timedelta(days=batch.duration_days)).isoformat() if effective_date else None,
                     "date_closed": batch.date_closed.isoformat() if batch.date_closed else None,
+                    "transaction_cost": float(batch.transaction_cost or 0),
+                    "transfer_transaction_cost": float(batch.transfer_transaction_cost or 0),
                     "investors_count": investors_count,
                     "is_active": batch.is_active,
                     "status": status,
@@ -763,11 +885,11 @@ class BatchController:
                 batch.certificate_number = data['certificate_number']
             if 'date_deployed' in data:
                 if data['date_deployed'] is not None:
-                    batch.date_deployed = datetime.fromisoformat(data['date_deployed'])
+                    batch.date_deployed = cls._parse_date_only(data['date_deployed'])
                 else:
                     batch.date_deployed = None
             if 'date_closed' in data:
-                batch.date_closed = datetime.fromisoformat(data['date_closed'])
+                batch.date_closed = cls._parse_date_only(data['date_closed'])
             if 'duration_days' in data:
                 batch.duration_days = data['duration_days']
             if 'is_active' in data:
@@ -838,6 +960,7 @@ class BatchController:
             old_is_transferred = batch.is_transferred
             old_deployment_confirmed = batch.deployment_confirmed
             old_is_active = batch.is_active
+            transfer_entry_fee_percent = Decimal("0")
 
             # Update allowed fields for PATCH with uniqueness checks
             if 'batch_name' in data:
@@ -874,9 +997,20 @@ class BatchController:
 
             if 'date_deployed' in data:
                 if data['date_deployed'] is not None:
-                    batch.date_deployed = datetime.fromisoformat(data['date_deployed'])
+                    batch.date_deployed = cls._parse_date_only(data['date_deployed'])
                 else:
                     batch.date_deployed = None
+            if 'transfer_transaction_cost' in data:
+                batch.transfer_transaction_cost = Decimal(str(data['transfer_transaction_cost']))
+            if 'entry_fee_percentage' in data:
+                transfer_entry_fee_percent = Decimal(str(data['entry_fee_percentage']))
+            elif 'transfer_entry_fee_percent' in data:
+                transfer_entry_fee_percent = Decimal(str(data['transfer_entry_fee_percent']))
+            if transfer_entry_fee_percent < 0:
+                return make_response(jsonify({
+                    "status": 400,
+                    "message": "Entry fee percentage cannot be negative"
+                }), 400)
             if 'is_active' in data:
                 batch.is_active = data['is_active']
             if 'is_transferred' in data:
@@ -890,6 +1024,14 @@ class BatchController:
             try:
                 # Stage 2: When is_transferred changes to True
                 if 'is_transferred' in data and data['is_transferred'] and not old_is_transferred:
+                    deduction_summary = StatusUpdateController._apply_transfer_cost_deduction(
+                        batch,
+                        session,
+                        transfer_cost_total=batch.transfer_transaction_cost,
+                        entry_fee_percent=transfer_entry_fee_percent,
+                    )
+                    batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
+                    session.commit()
                     EmailService.send_offshore_transfer_batch(batch, trigger_source="batch.patch.stage_2_transfer")
                     create_audit_log(
                         action='OFFSHORE_TRANSFER',

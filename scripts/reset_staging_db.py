@@ -3,8 +3,9 @@ import sys
 import importlib
 import traceback
 from getpass import getpass
-from sqlalchemy import create_engine, text
 from flask import Flask
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.security import generate_password_hash
 
 def _prompt(label: str, default: str = None) -> str:
@@ -23,50 +24,29 @@ def main() -> int:
     from app.database.database import db
     from app.Admin.model import User
 
-    print("=== Database Reset & Superadmin Setup ===")
+    print("=== Table Reset & Superadmin Setup ===")
     
-    # 1. Get Database URI
-    default_uri = os.environ.get("DATABASE_URI", "postgresql://postgres:username@localhost:5432/offshore")
+    # 1. Get Database URI (required input, no default)
     print("\nWARNING: This operation is DESTRUCTIVE.")
-    print("It will DROP and RECREATE the database itself.")
-    db_uri = _prompt("Target Database URI", default_uri)
+    print("It will DROP and RECREATE all tables in the target database.")
+    db_uri = _prompt("Target Database URI")
 
-    # Parse DB Name and Admin URI
+    # Parse DB Name for confirmation prompt
     try:
-        base_uri, db_name = db_uri.rsplit("/", 1)
-        if '?' in db_name: # Handle query params if any
-            db_name = db_name.split('?')[0]
-        admin_uri = f"{base_uri}/postgres"
+        _, db_name = db_uri.rsplit("/", 1)
+        if "?" in db_name:  # Handle query params if any
+            db_name = db_name.split("?")[0]
     except ValueError:
         print("ERROR: Invalid Database URI format.")
         return 1
 
-    typed = input(f'\nType "RESET {db_name.upper()}" to confirm deletion: ').strip()
-    if typed != f"RESET {db_name.upper()}":
+    typed = input(f'\nType "RESET TABLES {db_name.upper()}" to confirm: ').strip()
+    if typed != f"RESET TABLES {db_name.upper()}":
         print("Cancelled. No changes made.")
         return 1
 
-    # 2. Recreate Database
-    print(f"\nClosing connections and recreating database '{db_name}'...")
-    try:
-        admin_engine = create_engine(admin_uri, isolation_level='AUTOCOMMIT')
-        with admin_engine.connect() as conn:
-            # Terminate other connections to the target DB
-            conn.execute(text(f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{db_name}'
-                AND pid <> pg_backend_pid();
-            """))
-            conn.execute(text(f"DROP DATABASE IF EXISTS {db_name}"))
-            conn.execute(text(f"CREATE DATABASE {db_name}"))
-        print(f"Database '{db_name}' recreated successfully.")
-    except Exception as e:
-        print(f"ERROR recreating database: {e}")
-        return 1
-
-    # 3. Initialize Schema
-    print("\nInitializing database schema...")
+    # 2. Initialize app and schema metadata
+    print("\nInitializing app and schema metadata...")
     app = Flask(__name__)
     app.config.from_object(DevelopmentConfig)
     app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
@@ -89,10 +69,42 @@ def main() -> int:
         except Exception as e:
             print(f"Warning: Could not import {module_name}: {e}")
 
-    with app.app_context():
-        db.create_all()
-        db.session.commit()
-    print("Schema initialized.")
+    # 3. Hard reset tables at schema level (PostgreSQL)
+    print(f"\nDropping and recreating all tables in '{db_name}'...")
+    try:
+        with app.app_context():
+            # Best-effort: terminate other sessions in a separate AUTOCOMMIT connection.
+            # If this fails due to privileges, it must not affect the reset transaction.
+            try:
+                with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    conn.execute(
+                        text(
+                            """
+                            SELECT pg_terminate_backend(pid)
+                            FROM pg_stat_activity
+                            WHERE datname = current_database()
+                              AND pid <> pg_backend_pid();
+                            """
+                        )
+                    )
+            except SQLAlchemyError as terminate_err:
+                print(f"Warning: could not terminate other DB sessions: {terminate_err}")
+
+            # db.drop_all() only drops tables known to SQLAlchemy metadata.
+            # This schema reset removes ALL existing tables (including unknown/legacy ones).
+            with db.engine.begin() as conn:
+                # Avoid hanging forever if another session holds locks.
+                conn.execute(text("SET lock_timeout = '10s'"))
+                conn.execute(text("SET statement_timeout = '60s'"))
+
+                conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+                conn.execute(text("CREATE SCHEMA public"))
+            db.create_all()
+            db.session.commit()
+        print("Tables reset and schema initialized.")
+    except Exception as e:
+        print(f"ERROR resetting tables: {e}")
+        return 1
 
     # 4. Create Super Admin
     print("\n=== Create Super Admin User ===")
@@ -120,7 +132,7 @@ def main() -> int:
         db.session.commit()
         print(f"\nSuper Admin '{email}' created successfully.")
 
-    print("\nDONE: Database reset and setup complete.")
+    print("\nDONE: Table reset and setup complete.")
     return 0
 
 if __name__ == "__main__":

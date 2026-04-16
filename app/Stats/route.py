@@ -1,11 +1,15 @@
-from flask import Blueprint, jsonify
+from collections import defaultdict
+
+from flask import Blueprint, jsonify, make_response
 from flask_jwt_extended import jwt_required
-from sqlalchemy import func, text, and_
+from sqlalchemy import func, and_, or_
+from sqlalchemy.orm import aliased
 from decimal import Decimal
 from datetime import datetime
 
 from app.database.database import db
 from app.Batch.core_fund import CoreFund
+from app.Batch.model import Batch as BatchModel
 from app.Valuation.model import ValuationRun, Statement
 from app.Investments.model import EpochLedger, Withdrawal, Investment, FINAL_WITHDRAWAL_STATUSES
 
@@ -22,6 +26,59 @@ def float_2dp(val) -> float:
 @jwt_required()
 def get_overview_stats():
     try:
+        # SSOT AUM: aggregate per-investment balances resolved by
+        # BatchController._calculate_batch_investment_values (statement-first).
+        from app.Batch.controllers import BatchController
+        authoritative_total_aum = Decimal("0")
+        batch_contributions = {}
+
+        all_batches = db.session.query(BatchModel).all()
+        for batch_row in all_batches:
+            batch_id = batch_row.id
+            batch_balance = Decimal("0")
+            batch_profit = Decimal("0")
+            latest_period_end = None
+
+            invs = db.session.query(Investment).filter(Investment.batch_id == batch_id).all()
+            for inv in invs:
+                vals = BatchController._calculate_batch_investment_values(inv, batch_row, db.session)
+                batch_balance += Decimal(str(vals.get("current_balance", 0)))
+                batch_profit += Decimal(str(vals.get("profit", 0)))
+
+                latest_stmt = BatchController._latest_committed_statement_for_investment_batch(
+                    db.session, inv.id, batch_id
+                )
+                if latest_stmt:
+                    _, vr = latest_stmt
+                    if latest_period_end is None or vr.epoch_end > latest_period_end:
+                        latest_period_end = vr.epoch_end
+
+            batch_balance = Decimal(str(batch_balance.quantize(Decimal("0.01"))))
+            authoritative_total_aum += batch_balance
+            batch_contributions[batch_id] = {
+                "balance": float(batch_balance),
+                "profit": float(batch_profit.quantize(Decimal("0.01"))),
+                "period_end": latest_period_end.isoformat() if latest_period_end else None,
+            }
+
+        # Net principal per batch (fees excluded) and cumulative gain vs latest batch balance
+        net_by_batch = defaultdict(Decimal)
+        for row in db.session.query(
+            Investment.batch_id,
+            Investment.amount_deposited,
+            Investment.deployment_fee_deducted,
+            Investment.transfer_fee_deducted,
+        ).all():
+            net_by_batch[row.batch_id] += Decimal(str(row.amount_deposited or 0)) - Decimal(
+                str(row.deployment_fee_deducted or 0)
+            ) - Decimal(str(row.transfer_fee_deducted or 0))
+
+        batch_total_gain = Decimal("0")
+        for bid, info in batch_contributions.items():
+            bal = Decimal(str(info["balance"]))
+            net = net_by_batch.get(bid, Decimal("0"))
+            batch_total_gain += bal - net
+
         # ── 1. Find the LATEST committed epoch per investor/fund from the immutable epoch ledger ──
         # This ensures totals reflect the latest finalized closing balances only.
         latest_ledger_per_key_sq = (
@@ -56,38 +113,21 @@ def get_overview_stats():
             .all()
         )
 
-        # ── 2. Compute KPIs - NEW APPROACH ──
-        # Strategy: Get total AUM by summing batch-level principal contributions
-        # Then apply any profit/growth from committed epochs
-        
-        from app.Batch.model import Batch as BatchModel
-        
-        # ── CRITICAL: Find the LAST PROCESSED epoch (Sept 2026) ──
-        # Only include chart data up to the latest ValuationRun with status="Committed"
-        # This prevents unprocessed months (like October in "Principal Only" state) from showing
+        # ── 2. KPIs: total AUM is batch-authoritative (above). Epoch ledger used for charts only.
         max_chart_epoch = db.session.query(
             func.max(ValuationRun.epoch_end)
         ).filter(
             func.lower(ValuationRun.status) == "committed"
         ).scalar()
-        
-        total_aum = Decimal("0")
-        total_profit = Decimal("0")
-        total_invested = Decimal("0")
-        unique_investors = set()
+
         latest_epoch_end = None
 
-        # Get all unique investors from ledgers (up to max_chart_epoch only)
         for row in latest_rows:
-            # Skip rows beyond the max processed epoch (e.g., October data if only Sept committed)
             if max_chart_epoch and row.epoch_end > max_chart_epoch:
                 continue
-            total_profit += Decimal(str(row.profit or 0))
-            unique_investors.add(row.internal_client_code)
             if latest_epoch_end is None or row.epoch_end > latest_epoch_end:
                 latest_epoch_end = row.epoch_end
-        
-        # Get all investments organized by investor, fund, AND BATCH
+
         all_investments = db.session.query(
             Investment.id,
             Investment.batch_id,
@@ -100,141 +140,43 @@ def get_overview_stats():
             Investment.internal_client_code, Investment.fund_name
         ).all()
 
-        # Identify deployed batches: ones that have at least one investor+fund with a committed ledger
-        all_batches = db.session.query(BatchModel).all()
-        batch_ids_deployed = set()
-        
-        for row in latest_rows:
-            # Find which batches contain this investor
-            investor_batch_ids = set(
-                inv.batch_id for inv in all_investments if inv.internal_client_code == row.internal_client_code
+        # Fund allocation: split each batch's latest AUM by net-principal share within the batch
+        fund_totals = defaultdict(Decimal)
+        for batch_id, info in batch_contributions.items():
+            bal = Decimal(str(info["balance"]))
+            batch_net = net_by_batch.get(batch_id, Decimal("0"))
+            if batch_net <= 0:
+                continue
+            inv_rows = (
+                db.session.query(Investment, CoreFund.fund_name)
+                .outerjoin(CoreFund, Investment.fund_id == CoreFund.id)
+                .filter(Investment.batch_id == batch_id)
+                .all()
             )
-            batch_ids_deployed.update(investor_batch_ids)
+            for inv, core_name in inv_rows:
+                np = Decimal(str(inv.amount_deposited or 0)) - Decimal(str(inv.deployment_fee_deducted or 0)) - Decimal(
+                    str(inv.transfer_fee_deducted or 0)
+                )
+                share = np / batch_net
+                name = core_name or inv.fund_name or "Unknown"
+                fund_totals[name] += bal * share
 
-        # Build principal sums per investor+fund+batch
-        investor_fund_batch_principals = {}
-        
-        for inv in all_investments:
-            key = (inv.internal_client_code, inv.fund_lower)
-            batch_key = (key, inv.batch_id)
-            if batch_key not in investor_fund_batch_principals:
-                investor_fund_batch_principals[batch_key] = Decimal("0")
-            investor_fund_batch_principals[batch_key] += Decimal(str(inv.amount_deposited or 0))
-            unique_investors.add(inv.internal_client_code)
-
-        # Build withdrawal maps
-        total_deposits = db.session.query(
-            func.coalesce(func.sum(Investment.amount_deposited), 0)
-        ).scalar() or 0
-
-        approved_withdrawal_rows = db.session.query(
-            Withdrawal.internal_client_code,
-            func.lower(func.coalesce(Withdrawal.fund_name, CoreFund.fund_name, "unknown")).label("fund_lower"),
-            func.coalesce(func.sum(Withdrawal.amount), 0).label("total_amount")
-        ).outerjoin(CoreFund, Withdrawal.fund_id == CoreFund.id).filter(
-            Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES)
-        ).group_by(
-            Withdrawal.internal_client_code,
-            func.lower(func.coalesce(Withdrawal.fund_name, CoreFund.fund_name, "unknown"))
-        ).all()
-
-        approved_wd_map = {
-            (row.internal_client_code, row.fund_lower): Decimal(str(row.total_amount or 0))
-            for row in approved_withdrawal_rows
-        }
-
-        # Now build AUM:
-        # For each investor+fund with a ledger: use ledger as the current value
-        # For each investor+fund WITHOUT a ledger: use fresh principal
-        # Then repeat for EACH batch that investor appears in
-        
-        fund_alloc_totals = {}
-        fund_label_by_lower = {}
-        
-        # Build fund name map first
-        for inv in all_investments:
-            fund_lower = inv.fund_lower
-            if fund_lower not in fund_label_by_lower:
-                fund_label_by_lower[fund_lower] = inv.fund_name
-
-        # Process by investor+fund combo, considering all batch instances
-        processed_keys = set()
-        
-        # Build ledger map
-        latest_rows_by_key = {(r.internal_client_code, r.fund_name.lower()): r for r in latest_rows}
-        
-        for (inv_code, fund_lower) in sorted(set((i.internal_client_code, i.fund_lower) for i in all_investments)):
-            key = (inv_code, fund_lower)
-            
-            if key in latest_rows_by_key:
-                # Has ledger: the ledger balance reflects growth from ALL batches for this investor/fund
-                ledger = latest_rows_by_key[key]
-                current_value = Decimal(str(ledger.end_balance or 0))
-                
-                # Deduct uncaptured withdrawals
-                total_approved_wd = approved_wd_map.get(key, Decimal("0"))
-                total_captured_wd = db.session.query(
-                    func.coalesce(func.sum(EpochLedger.withdrawals), 0)
-                ).filter(
-                    EpochLedger.internal_client_code == inv_code,
-                    func.lower(EpochLedger.fund_name) == fund_lower
-                ).scalar() or 0
-                uncaptured_wd = max(Decimal("0"), Decimal(str(total_approved_wd)) - Decimal(str(total_captured_wd)))
-                current_value -= uncaptured_wd
-                
-                # FIX: Add completely fresh un-epoch'ed deposits!
-                fresh_deposits = Decimal("0")
-                for i in all_investments:
-                    if i.internal_client_code == inv_code and i.fund_lower == fund_lower:
-                        if i.amount_deposited and i.date_deposited:
-                            dep_naive = i.date_deposited.replace(tzinfo=None) if i.date_deposited.tzinfo else i.date_deposited
-                            ledger_naive = ledger.epoch_end.replace(tzinfo=None) if ledger.epoch_end.tzinfo else ledger.epoch_end
-                            if dep_naive > ledger_naive:
-                                fresh_deposits += Decimal(str(i.amount_deposited))
-                
-                current_value += fresh_deposits
-            else:
-                # No ledger: sum all fresh principals across all batches
-                current_value = Decimal("0")
-                for batch_id in set(b.id for b in all_batches):
-                    batch_key = (key, batch_id)
-                    if batch_key in investor_fund_batch_principals:
-                        current_value += investor_fund_batch_principals[batch_key]
-                current_value -= approved_wd_map.get(key, Decimal("0"))
-            
-            total_aum += current_value
-            
-            # Track for allocation
-            if fund_lower not in fund_alloc_totals:
-                fund_alloc_totals[fund_lower] = Decimal("0")
-            fund_alloc_totals[fund_lower] += current_value
-
-        # For performance calculation, use total of fresh principals from all batches
-        total_investments_value = sum(investor_fund_batch_principals.values())
-        total_withdrawals_all = db.session.query(
-            func.coalesce(func.sum(Withdrawal.amount), 0)
-        ).filter(Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES)).scalar() or 0
-        total_invested = total_investments_value - Decimal(str(total_withdrawals_all))
-        total_withdrawals = Decimal(str(total_withdrawals_all))
-
-        performance_pct = 0.0
-        if total_invested > 0:
-            performance_pct = float(((total_aum - total_invested) / total_invested) * 100)
-
-        # Build allocation data
         alloc_data_list = [
-            {"name": fund_label_by_lower.get(fund_lower, fund_lower.title()), "value": float_2dp(value)}
-            for fund_lower, value in fund_alloc_totals.items()
+            {"name": name, "value": float_2dp(val)} for name, val in sorted(fund_totals.items(), key=lambda x: x[0])
         ]
 
-        # ── 3. Active fund count from committed ValuationRuns ──
-        active_funds = (
-            db.session.query(func.count(func.distinct(ValuationRun.core_fund_id)))
-            .filter(ValuationRun.status == "Committed")
-            .scalar() or 0
+        total_invested_net = sum(net_by_batch.values())
+        performance_pct = 0.0
+        if total_invested_net > 0:
+            performance_pct = float(
+                ((authoritative_total_aum - total_invested_net) / total_invested_net) * 100
+            )
+
+        total_investors = (
+            db.session.query(func.count(func.distinct(Investment.internal_client_code))).scalar() or 0
         )
 
-        # ── 4. Flow series — deposits & withdrawals by transaction day ──
+        # ── 3. Flow series — deposits & withdrawals by transaction day ──
         deposit_rows = db.session.query(
             func.extract("year", Investment.date_deposited).label("yr"),
             func.extract("month", Investment.date_deposited).label("mo"),
@@ -358,21 +300,28 @@ def get_overview_stats():
                 }
             ]
 
+            active_ct = sum(1 for b in all_batches if getattr(b, "is_active", False))
             return jsonify({
                 "status": 200,
                 "data": {
-                    "total_aum": float_2dp(Decimal(str(total_deps)) - Decimal(str(total_wds))),
-                    "total_profit": 0.0,
+                    "total_aum": float_2dp(authoritative_total_aum),
+                    "total_profit": float_2dp(batch_total_gain),
+                    "total_invested": float_2dp(total_invested_net),
                     "total_investors": int(total_invs),
-                    "performance_pct": 0.0,
-                    "active_batches": 0,
+                    "performance_pct": float_2dp(
+                        ((authoritative_total_aum - total_invested_net) / total_invested_net * 100)
+                        if total_invested_net > 0
+                        else Decimal("0")
+                    ),
+                    "active_batches": active_ct,
                     "latest_epoch_end": None,
                     "max_chart_epoch": None,
                     "previous_epoch_end": None,
                     "flow_series": flow_series,
                     "flow_by_batch": flow_by_batch,
-                    "alloc_data": [],
+                    "alloc_data": alloc_data_list,
                     "aum_data": {"labels": ["—"], "funds": []},
+                    "batch_contributions": batch_contributions,
                 },
             }), 200
 
@@ -434,26 +383,42 @@ def get_overview_stats():
             "funds": aum_funds_list if aum_funds_list else [{"name": "No data", "data": [0], "growth": [0]}]
         }
 
-        return jsonify({
-            "status": 200,
-            "data": {
-                "total_aum": float_2dp(total_aum),
-                "total_withdrawals": float_2dp(total_withdrawals),
-                "total_profit": float_2dp(total_profit),
-                "total_investors": len(unique_investors),
-                "performance_pct": float_2dp(performance_pct),
-                "active_batches": int(active_funds),
-                "latest_epoch_end": latest_epoch_end.isoformat() if latest_epoch_end else None,
-                "max_chart_epoch": max_chart_epoch.isoformat() if max_chart_epoch else None,
-                "previous_epoch_end": None,
-                "flow_series": flow_series,
-                "flow_by_batch": flow_by_batch,
-                "alloc_data": alloc_data_list,
-                "aum_data": aum_data_obj,
-            },
-        }), 200
+        active_batches_count = sum(1 for b in all_batches if getattr(b, "is_active", False))
+        prev_epoch = (
+            db.session.query(ValuationRun.epoch_end)
+            .filter(func.lower(ValuationRun.status) == "committed")
+            .order_by(ValuationRun.epoch_end.desc())
+            .offset(1)
+            .limit(1)
+            .scalar()
+        )
+
+        return make_response(
+            jsonify(
+                {
+                    "status": 200,
+                    "message": "Overview stats retrieved successfully",
+                    "data": {
+                        "total_aum": float_2dp(authoritative_total_aum),
+                        "total_profit": float_2dp(batch_total_gain),
+                        "total_invested": float_2dp(total_invested_net),
+                        "total_investors": int(total_investors),
+                        "performance_pct": float_2dp(performance_pct),
+                        "active_batches": active_batches_count,
+                        "latest_epoch_end": latest_epoch_end.isoformat() if latest_epoch_end else None,
+                        "max_chart_epoch": max_chart_epoch.isoformat() if max_chart_epoch else None,
+                        "previous_epoch_end": prev_epoch.isoformat() if prev_epoch else None,
+                        "flow_series": flow_series,
+                        "flow_by_batch": flow_by_batch,
+                        "alloc_data": alloc_data_list,
+                        "aum_data": aum_data_obj,
+                        "batch_contributions": batch_contributions,
+                    },
+                }
+            ),
+            200,
+        )
 
     except Exception as exc:
-        pass
         return jsonify({"status": 500, "message": f"Could not fetch overview stats: {str(exc)}"}), 500
 

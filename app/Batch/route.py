@@ -217,124 +217,66 @@ def get_batch_history(batch_id):
     This prevents unprocessed months (like October in 'Principal Only' state) from showing in charts.
     """
     try:
-        from app.Investments.model import Investment, EpochLedger
-        from app.Valuation.model import ValuationRun
+        # IMPORTANT: This endpoint must be batch-atomic.
+        # EpochLedger is keyed by (internal_client_code, fund_name) and will bleed across batches
+        # when the same client code appears in multiple batches. Use BatchValuation instead.
+        from app.Valuation.model import BatchValuation, ValuationRun
         from app.Batch.model import Batch
-        from sqlalchemy import func, and_
+        from sqlalchemy import func
         from decimal import Decimal
-        
-        print(f"[get_batch_history] Called for batch_id={batch_id}")
-        
-        # ── CRITICAL: Find the LAST PROCESSED epoch (Sept 2026) ──
-        max_chart_epoch = db.session.query(
-            func.max(ValuationRun.epoch_end)
-        ).filter(
-            func.lower(ValuationRun.status) == "committed"
-        ).scalar()
-        print(f"[get_batch_history] max_chart_epoch: {max_chart_epoch}")
-        
+
+        max_chart_epoch = (
+            db.session.query(func.max(ValuationRun.epoch_end))
+            .filter(func.lower(ValuationRun.status) == "committed")
+            .scalar()
+        )
+
         batch = db.session.query(Batch).filter(Batch.id == batch_id).first()
         if not batch:
-            print(f"[get_batch_history] Batch {batch_id} not found")
             return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
 
-        # Get all investments for this batch
-        investments = db.session.query(Investment).filter(Investment.batch_id == batch_id).all()
-        print(f"[get_batch_history] Found {len(investments)} investments")
-        if not investments:
-            print(f"[get_batch_history] No investments found")
-            return make_response(jsonify({"status": 200, "message": "No investments in batch", "data": []}), 200)
-
-        investor_codes = [inv.internal_client_code for inv in investments]
-        print(f"[get_batch_history] Investor codes: {investor_codes}")
-        
-        # Get all distinct epochs that have data for this batch
-        epoch_query = (
-            db.session.query(
-                EpochLedger.epoch_start,
-                EpochLedger.epoch_end,
-            )
-            .filter(EpochLedger.internal_client_code.in_(investor_codes))
-        )
-        
-        # Restrict to max_chart_epoch (exclude unprocessed months)
+        q = db.session.query(BatchValuation).filter(BatchValuation.batch_id == batch_id)
         if max_chart_epoch:
-            epoch_query = epoch_query.filter(EpochLedger.epoch_end <= max_chart_epoch)
-        
-        epochs = (
-            epoch_query
-            .distinct()
-            .order_by(EpochLedger.epoch_start.asc(), EpochLedger.epoch_end.asc())
-            .all()
-        )
-        print(f"[get_batch_history] Found {len(epochs)} distinct epochs")
+            q = q.filter(BatchValuation.period_end_date <= max_chart_epoch)
+        valuations = q.order_by(BatchValuation.period_end_date.asc()).all()
+
+        if not valuations:
+            return make_response(
+                jsonify({"status": 200, "message": "No valuations for batch", "data": []}), 200
+            )
 
         history = []
-        for epoch_start, epoch_end in epochs:
-            # Aggregate all ledger entries for this batch at this epoch
-            ledger_rows = (
-                db.session.query(EpochLedger)
-                .filter(
-                    and_(
-                        EpochLedger.internal_client_code.in_(investor_codes),
-                        EpochLedger.epoch_start == epoch_start,
-                        EpochLedger.epoch_end == epoch_end,
-                    )
-                )
-                .all()
+        prev_end = None
+        for v in valuations:
+            epoch_end = v.period_end_date
+            epoch_start = prev_end
+            start_balance = (
+                Decimal(str(prev_end.balance_at_end_of_period))
+                if prev_end is not None
+                else Decimal(str(v.total_principal or 0))
             )
+            end_balance = Decimal(str(v.balance_at_end_of_period or 0))
 
-            if ledger_rows:
-                total_start = sum(Decimal(str(e.start_balance or 0)) for e in ledger_rows)
-                total_deposits = sum(Decimal(str(e.deposits or 0)) for e in ledger_rows)
-                total_withdrawals = sum(Decimal(str(e.withdrawals or 0)) for e in ledger_rows)
-                total_profit = sum(Decimal(str(e.profit or 0)) for e in ledger_rows)
-                total_end = sum(Decimal(str(e.end_balance or 0)) for e in ledger_rows)
-
-                # Get performance rate from ValuationRun if available
-                vr_rows = (
-                    db.session.query(ValuationRun)
-                    .filter(
-                        and_(
-                            ValuationRun.epoch_start == epoch_start,
-                            ValuationRun.epoch_end == epoch_end,
-                        )
-                    )
-                    .order_by(ValuationRun.id.desc())
-                    .limit(1)
-                    .all()
-                )
-                
-                performance_pct = 0.0
-                if vr_rows and vr_rows[0].performance_rate:
-                    performance_pct = float(vr_rows[0].performance_rate) * 100
-
-                # Format chart label as month + day to avoid ambiguity (e.g. Apr 26)
-                month_name = epoch_end.strftime('%b %d') if epoch_end else "N/A"
-
-                history.append({
+            history.append(
+                {
                     "epoch_start": epoch_start.isoformat() if epoch_start else None,
                     "epoch_end": epoch_end.isoformat() if epoch_end else None,
-                    "month_name": month_name,
-                    "performance_pct": round(float(performance_pct), 2),
-                    "start_balance": round(float(total_start), 2),
-                    "deposits": round(float(total_deposits), 2),
-                    "withdrawals": round(float(total_withdrawals), 2),
-                    "profit": round(float(total_profit), 2),
-                    "end_balance": round(float(total_end), 2),
-                })
+                    "month_name": epoch_end.strftime("%b %d") if epoch_end else "N/A",
+                    "performance_pct": round(float(Decimal(str(v.performance_rate or 0)) * 100), 2),
+                    "start_balance": round(float(start_balance), 2),
+                    "deposits": 0.0,
+                    "withdrawals": round(float(Decimal(str(v.total_withdrawals or 0))), 2),
+                    "profit": round(float(Decimal(str(v.total_profit or 0))), 2),
+                    "end_balance": round(float(end_balance), 2),
+                }
+            )
+            prev_end = v
 
-        print(f"[get_batch_history] Returning {len(history)} history entries")
-        return make_response(jsonify({
-            "status": 200,
-            "message": "Batch history retrieved",
-            "data": history
-        }), 200)
+        return make_response(
+            jsonify({"status": 200, "message": "Batch history retrieved", "data": history}), 200
+        )
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[get_batch_history] Error: {str(e)}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 

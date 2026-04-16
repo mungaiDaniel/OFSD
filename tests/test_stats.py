@@ -6,7 +6,7 @@ from app.database.database import db
 from app.Batch.fund_routes import CoreFund
 from app.Batch.model import Batch
 from app.Investments.model import Investment, EpochLedger, Withdrawal
-from app.Valuation.model import ValuationRun
+from app.Valuation.model import BatchValuation, ValuationRun
 
 
 def get_auth_headers(token):
@@ -21,7 +21,7 @@ def test_overview_stats_uses_latest_committed_ledger_balances(client, auth_token
         db.session.add_all([axiom, atium])
         db.session.commit()
 
-        batch = Batch(batch_name="Overview Total Fix", certificate_number="FIX-OV1")
+        batch = Batch(batch_name="Overview Total Fix", certificate_number="FIX-OV1", is_active=True)
         db.session.add(batch)
         db.session.commit()
 
@@ -96,6 +96,20 @@ def test_overview_stats_uses_latest_committed_ledger_balances(client, auth_token
         db.session.add_all([ledger_a, ledger_b])
         db.session.commit()
 
+        # Overview KPI total_aum is batch-authoritative: use latest batch valuation row
+        db.session.add(
+            BatchValuation(
+                batch_id=batch.id,
+                period_end_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
+                balance_at_end_of_period=Decimal("268687.30"),
+                performance_rate=Decimal("0.05"),
+                total_principal=Decimal("250000.00"),
+                total_profit=Decimal("18687.30"),
+                total_withdrawals=Decimal("0.00"),
+            )
+        )
+        db.session.commit()
+
     response = client.get(
         '/api/v1/stats/overview',
         headers=get_auth_headers(auth_token),
@@ -110,7 +124,7 @@ def test_overview_stats_uses_latest_committed_ledger_balances(client, auth_token
     assert data["total_profit"] == 18687.3
     assert data["performance_pct"] == 7.47
     assert data["total_investors"] == 2
-    assert data["active_batches"] == 2
+    assert data["active_batches"] == 1
 
 
 @pytest.mark.unit
@@ -197,8 +211,22 @@ def test_overview_stats_reflects_post_epoch_approved_withdrawals(client, auth_to
             date_withdrawn=datetime(2026, 7, 1, tzinfo=timezone.utc),
             status="Approved",
             approved_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            batch_id=batch.id,
         )
         db.session.add(withdrawal)
+        db.session.commit()
+
+        db.session.add(
+            BatchValuation(
+                batch_id=batch.id,
+                period_end_date=datetime(2026, 7, 31, tzinfo=timezone.utc),
+                balance_at_end_of_period=Decimal("220622.00"),
+                performance_rate=Decimal("0"),
+                total_principal=Decimal("200000.00"),
+                total_profit=Decimal("20622.00"),
+                total_withdrawals=Decimal("54000.00"),
+            )
+        )
         db.session.commit()
 
     response = client.get(

@@ -23,6 +23,8 @@ class Batch(Base, db.Model):
     is_transferred = Column(Boolean, default=False)
     deployment_confirmed = Column(Boolean, default=False)  # Tracks Stage 3 confirmation
     stage = Column(Integer, default=1)  # Current stage: 1=Deposited, 2=Transferred, 3=Deployed, 4=Active
+    transaction_cost = Column(Numeric(20, 2), default=0.00, nullable=False)  # Total deployment fee in USD
+    transfer_transaction_cost = Column(Numeric(20, 2), default=0.00, nullable=False)  # Total transfer fee in USD
 
     # Relationships
     performance = db.relationship('Performance', foreign_keys='Performance.batch_id', uselist=False, back_populates='batch', overlaps="performance_records")

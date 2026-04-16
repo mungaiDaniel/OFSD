@@ -618,6 +618,49 @@ def confirm_epoch():
                         print(f"✅ Withdrawal of ${float(withdrawals_amount):,.2f} processed for {code} in {core.fund_name}")
                 
                 db.session.commit()
+                # ── STEP 3A2: Persist batch-scoped valuations for all affected batches ──
+                # The fund epoch commit is global per-fund; we additionally generate atomic
+                # batch valuations (BatchValuation + InvestmentBatchValuation) so UI can
+                # always show latest per-batch AUM (e.g. B001 $114,490; B002 $107,000).
+                try:
+                    from app.logic.batch_valuation_service import BatchValuationService
+
+                    affected_batch_ids = (
+                        db.session.query(Investment.batch_id)
+                        .filter(Investment.fund_id == core_fund_id, Investment.batch_id.isnot(None))
+                        .distinct()
+                        .all()
+                    )
+                    affected_batch_ids = [int(r[0]) for r in affected_batch_ids if r and r[0] is not None]
+
+                    # Backfill: build batch valuations for ALL committed epochs in order
+                    # so compounding is correct even if earlier commits happened before we persisted BatchValuation.
+                    committed_runs = (
+                        db.session.query(ValuationRun)
+                        .filter(
+                            ValuationRun.core_fund_id == core_fund_id,
+                            func.lower(ValuationRun.status) == "committed",
+                        )
+                        .order_by(ValuationRun.epoch_end.asc())
+                        .all()
+                    )
+                    for vr in committed_runs:
+                        vr_end = vr.epoch_end
+                        if vr_end and getattr(vr_end, "tzinfo", None) is None:
+                            vr_end = vr_end.replace(tzinfo=timezone.utc)
+                        for bid in affected_batch_ids:
+                            try:
+                                BatchValuationService.run_batch_valuation(
+                                    batch_id=bid,
+                                    performance_rate=vr.performance_rate,
+                                    valuation_date=vr_end,
+                                )
+                            except Exception as one_batch_err:
+                                print(
+                                    f"Warning: Failed to generate batch valuation for batch {bid} @ {vr_end}: {str(one_batch_err)}"
+                                )
+                except Exception as batch_snap_err:
+                    print(f"Warning: Failed to generate batch valuations post-commit: {str(batch_snap_err)}")
 
                 # ── STEP 3B: Sync Investment.valuation → committed end_balance ──────────
                 # After a confirmed epoch the Investment.valuation column must reflect the
@@ -827,6 +870,187 @@ def get_batch_valuation_summary(batch_id: int):
             ),
             200,
         )
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@valuation_v1.route("/api/v1/valuation/batch", methods=["POST"])
+@jwt_required()
+def run_batch_valuation():
+    """
+    Run atomic batch-level valuation.
+    
+    Body:
+    {
+      "batch_id": 1,
+      "performance_rate": 0.05,
+      "valuation_date": "2026-04-30"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+
+        batch_id = data.get("batch_id")
+        if batch_id is None:
+            return make_response(jsonify({"status": 400, "message": "batch_id is required"}), 400)
+        try:
+            batch_id = int(batch_id)
+        except Exception:
+            return make_response(jsonify({"status": 400, "message": "batch_id must be an integer"}), 400)
+
+        performance_rate = data.get("performance_rate")
+        if performance_rate is None:
+            return make_response(jsonify({"status": 400, "message": "performance_rate is required"}), 400)
+        performance_rate = float(performance_rate)
+
+        valuation_date_raw = data.get("valuation_date")
+        if valuation_date_raw is None:
+            return make_response(jsonify({"status": 400, "message": "valuation_date is required"}), 400)
+        valuation_date = _parse_iso_dt(valuation_date_raw, "valuation_date")
+
+        from app.logic.batch_valuation_service import BatchValuationService
+        result = BatchValuationService.run_batch_valuation(
+            batch_id=batch_id,
+            performance_rate=performance_rate,
+            valuation_date=valuation_date
+        )
+
+        return make_response(
+            jsonify(
+                {
+                    "status": 201,
+                    "message": "Batch valuation completed successfully",
+                    "data": result,
+                }
+            ),
+            201,
+        )
+
+    except ValueError as ve:
+        db.session.rollback()
+        return make_response(jsonify({"status": 400, "message": str(ve)}), 400)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@valuation_v1.route("/api/v1/valuation/batch/<int:batch_id>", methods=["GET"])
+@jwt_required()
+def get_batch_valuation_history(batch_id: int):
+    """
+    Get valuation history for a specific batch.
+    """
+    try:
+        from app.Valuation.model import BatchValuation
+        
+        valuations = db.session.query(BatchValuation).filter(
+            BatchValuation.batch_id == batch_id
+        ).order_by(BatchValuation.period_end_date.asc()).all()
+        
+        data = [
+            {
+                "id": v.id,
+                "period_end_date": v.period_end_date.isoformat(),
+                "balance_at_end_of_period": float(v.balance_at_end_of_period),
+                "performance_rate": float(v.performance_rate),
+                "total_principal": float(v.total_principal),
+                "total_profit": float(v.total_profit),
+                "total_withdrawals": float(v.total_withdrawals),
+                "created_at": v.created_at.isoformat(),
+            }
+            for v in valuations
+        ]
+        
+        return make_response(
+            jsonify(
+                {
+                    "status": 200,
+                    "message": f"Retrieved {len(data)} valuation records for batch {batch_id}",
+                    "data": data,
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@valuation_v1.route("/api/v1/valuation/backfill-batch-valuations", methods=["POST"])
+@jwt_required()
+def backfill_batch_valuations():
+    """
+    Backfill BatchValuation / InvestmentBatchValuation for an already-committed fund.
+
+    Body:
+    {
+      "fund_id": 1
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        fund_id = data.get("fund_id")
+        if fund_id is None:
+            return make_response(jsonify({"status": 400, "message": "fund_id is required"}), 400)
+        fund_id = int(fund_id)
+
+        core = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
+        if not core:
+            return make_response(jsonify({"status": 404, "message": "Core fund not found"}), 404)
+
+        from app.logic.batch_valuation_service import BatchValuationService
+
+        affected_batch_ids = (
+            db.session.query(Investment.batch_id)
+            .filter(Investment.fund_id == fund_id, Investment.batch_id.isnot(None))
+            .distinct()
+            .all()
+        )
+        affected_batch_ids = [int(r[0]) for r in affected_batch_ids if r and r[0] is not None]
+
+        committed_runs = (
+            db.session.query(ValuationRun)
+            .filter(
+                ValuationRun.core_fund_id == fund_id,
+                func.lower(ValuationRun.status) == "committed",
+            )
+            .order_by(ValuationRun.epoch_end.asc())
+            .all()
+        )
+        if not committed_runs:
+            return make_response(jsonify({"status": 404, "message": "No committed valuation runs found for this fund"}), 404)
+
+        results = []
+        for vr in committed_runs:
+            vr_end = vr.epoch_end
+            if vr_end and getattr(vr_end, "tzinfo", None) is None:
+                vr_end = vr_end.replace(tzinfo=timezone.utc)
+            for bid in affected_batch_ids:
+                try:
+                    r = BatchValuationService.run_batch_valuation(
+                        batch_id=bid,
+                        performance_rate=vr.performance_rate,
+                        valuation_date=vr_end,
+                    )
+                    results.append(r)
+                except Exception as one_batch_err:
+                    results.append({
+                        "batch_id": bid,
+                        "valuation_date": vr_end.isoformat() if vr_end else None,
+                        "error": str(one_batch_err),
+                    })
+
+        return make_response(jsonify({
+            "status": 200,
+            "message": "Backfill completed",
+            "data": {
+                "fund_id": fund_id,
+                "fund_name": core.fund_name,
+                "batches": affected_batch_ids,
+                "runs": len(committed_runs),
+                "results": results,
+            }
+        }), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 

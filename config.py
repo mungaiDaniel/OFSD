@@ -9,14 +9,14 @@ class TestingConfig():
         SQLALCHEMY_DATABASE_URI = "postgresql://postgres:username@localhost/test-offshore"
         
         # Email configuration
-        MAIL_SERVER = 'smtp.gmail.com'
-        MAIL_PORT = 587
-        MAIL_USE_TLS = True
-        MAIL_USE_SSL = False
-        MAIL_USERNAME = 'danitomonga@gmail.com'
-        # Use the 16-character App Password here, NOT your login password
-        MAIL_PASSWORD = 'auhs lbzw xmko fduh' 
-        MAIL_DEFAULT_SENDER = 'danitomonga@gmail.com'
+        MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.office365.com'
+        MAIL_PORT = int(os.environ.get('MAIL_PORT', 587))
+        MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
+        MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
+        MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
+        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@aib-axysafrica.com'
         
         # Email manual approval flag
         MANUAL_EMAIL_APPROVAL = True
@@ -29,21 +29,15 @@ class DevelopmentConfig():
         DEBUG = True
         DEVELOPMENT = True      
         
-        # Email configuration
-        # MAIL_SERVER = 'smtp.office365.com' 
-        # MAIL_PORT = 587
-        # MAIL_USE_TLS = True
-        # MAIL_USE_SSL = False
-        # MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'info@aib-axysafrica.com'
-        # MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or 'P!537016130845at'
-        # MAIL_DEFAULT_SENDER = 'info@aib-axysafrica.com'
-        MAIL_SERVER = 'smtp.gmail.com'
-        MAIL_PORT = 587
-        MAIL_USE_TLS = True
-        MAIL_USERNAME = 'danitomonga@gmail.com'
-        # Use the 16-character App Password here, NOT your login password
-        MAIL_PASSWORD = 'auhs lbzw xmko fduh' 
-        MAIL_DEFAULT_SENDER = 'danitomonga@gmail.com'
+        # Email configuration (Office 365)
+        MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.office365.com'
+        MAIL_PORT = int(os.environ.get('MAIL_PORT', 587))
+        MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
+        MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
+        MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or 'Compaqxp1!'
+        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@aib-axysafrica.com'
         
         # Email manual approval flag
         MANUAL_EMAIL_APPROVAL = True
@@ -61,7 +55,8 @@ class ProductionConfig():
         MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
         MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
         MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
-        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'info@aib-axysafrica.com'
+        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@aib-axysafrica.com'
 
         # Email manual approval flag
         MANUAL_EMAIL_APPROVAL = os.environ.get('MANUAL_EMAIL_APPROVAL', 'True').lower() == 'true'

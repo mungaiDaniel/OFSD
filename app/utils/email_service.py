@@ -15,7 +15,7 @@ mail = Mail()
 class EmailService:
     """Unified Service for status-driven investor notifications (Stages 1-3)."""
 
-    BCC_EMAIL = "aflinbenzo@gmail.com"
+    BCC_EMAIL = "invest@aib-axysafrica.com"
 
     @staticmethod
     def init_app(app):
@@ -49,15 +49,20 @@ class EmailService:
             return None
 
     @classmethod
+    def _bcc_email(cls) -> str:
+        return current_app.config.get("MAIL_BCC", cls.BCC_EMAIL)
+
+    @classmethod
     def _send_email_immediately(cls, subject, body, recipient_email, recipient_name=None):
         """Send email immediately without approval."""
         try:
+            bcc_email = cls._bcc_email()
             msg = Message(
                 subject=subject,
                 recipients=[recipient_email],
-                bcc=[cls.BCC_EMAIL],
+                bcc=[bcc_email],
                 body=body,
-                sender=current_app.config.get('MAIL_DEFAULT_SENDER', cls.BCC_EMAIL)
+                sender=current_app.config.get('MAIL_DEFAULT_SENDER', bcc_email)
             )
             mail.send(msg)
             logger.info(f"Email sent immediately to {recipient_email}")
@@ -127,7 +132,7 @@ Your funds are now being held securely while we finalize the batch for offshore 
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                         # Find investor_id if possible
                         investor_id = None
@@ -180,7 +185,7 @@ Your funds are now being held securely while we finalize the batch for offshore 
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                             if cls._send_email_immediately(subject, body, email, name):
                                 sent += 1
@@ -272,14 +277,14 @@ info@aib-axysafrica.com
                     continue
 
                 subject = f"Deposit Received - {batch_name}"
-                body = f"""Dear {name},\n\nWe have successfully received your investment deposit. \n\nBatch: {batch_name}\nCapital Amount: USD {float(amount):,.2f}\nStatus: Deposited (Stage 1/3)\n\nYour funds are now being held securely while we finalize the batch for offshore transfer. You will be notified once the transfer is initiated.\n\nBest regards,\nAIB-AXYS Africa Investment Team\ninfo@aib-axysafrica.com\n"""
+                body = f"""Dear {name},\n\nWe have successfully received your investment deposit. \n\nBatch: {batch_name}\nCapital Amount: USD {float(amount):,.2f}\nStatus: Deposited (Stage 1/3)\n\nYour funds are now being held securely while we finalize the batch for offshore transfer. You will be notified once the transfer is initiated.\n\nBest regards,\nAIB-AXYS Africa Investment Team\n\n"""
 
                 msg = Message(
                     subject=subject,
                     recipients=[email],
-                    bcc=[cls.BCC_EMAIL],
+                    bcc=[cls._bcc_email()],
                     body=body,
-                    sender=current_app.config.get('MAIL_DEFAULT_SENDER', cls.BCC_EMAIL)
+                    sender=current_app.config.get('MAIL_DEFAULT_SENDER', cls._bcc_email())
                 )
                 mail.send(msg)
                 sent += 1
@@ -345,26 +350,39 @@ info@aib-axysafrica.com
         """
         app = current_app._get_current_object()
 
-        # Extract all data from ORM objects BEFORE the thread starts
+        # Extract core batch data BEFORE the thread starts
         batch_name = getattr(batch, 'batch_name', 'Unknown Batch')
         batch_id = getattr(batch, 'id', None)
-        email_items = [
-            {
-                'investor_id': getattr(inv, 'id', None),
-                'investor_name': getattr(inv, 'investor_name', None),
-                'investor_email': getattr(inv, 'investor_email', None),
-            }
-            for inv in getattr(batch, 'investments', [])
-        ]
-
-        unique_recipients = {
-            item.get('investor_id') or item.get('investor_email')
-            for item in email_items
-            if item.get('investor_email')
-        }
 
         def process_emails():
             with app.app_context():
+                from app.Investments.model import Investment
+
+                investments = db.session.query(Investment).filter(
+                    Investment.batch_id == batch_id
+                ).all()
+
+                email_items = [
+                    {
+                        'investor_id': getattr(inv, 'id', None),
+                        'investor_name': getattr(inv, 'investor_name', None),
+                        'investor_email': getattr(inv, 'investor_email', None),
+                        'amount_deposited': float(getattr(inv, 'amount_deposited', 0)),
+                        'transfer_fee_deducted': float(getattr(inv, 'transfer_fee_deducted', 0)),
+                        'deployment_fee_deducted': float(getattr(inv, 'deployment_fee_deducted', 0)),
+                        'net_principal': float(getattr(inv, 'net_principal', 0)),
+                    }
+                    for inv in investments
+                ]
+                batch_total_principal = sum(item.get('amount_deposited', 0) for item in email_items)
+                batch_total_net = sum(item.get('net_principal', 0) for item in email_items)
+
+                unique_recipients = {
+                    item.get('investor_id') or item.get('investor_email')
+                    for item in email_items
+                    if item.get('investor_email')
+                }
+
                 manual_approval = app.config.get('MANUAL_EMAIL_APPROVAL', False)
                 logger.info(f"Processing Stage 2 emails for batch '{batch_name}' (manual_approval={manual_approval})")
                 
@@ -379,19 +397,31 @@ info@aib-axysafrica.com
                         if not email:
                             logger.warning(f"Skipping investor '{name}' — no email address")
                             continue
+                        principal = float(item.get('amount_deposited', 0) or 0)
+                        transaction_fee = float(item.get('transfer_fee_deducted', 0) or 0)
+                        entry_fee = float(item.get('deployment_fee_deducted', 0) or 0)
+                        net = float(item.get('net_principal', 0) or 0)
+                        weight_pct = ((principal / batch_total_principal) * 100) if batch_total_principal > 0 else 0.0
                             
-                        subject = f"Offshore Fund Transfer Initiated - {batch_name}"
+                        subject = f"Funds Successfully Transferred to Fund - {batch_name}"
                         body = f"""Dear {name},
 
-We are pleased to inform you that your funds in batch \"{batch_name}\" have been successfully transferred to our offshore investment partner.
+We are pleased to inform you that your funds in batch "{batch_name}" have been successfully transferred to our offshore investment partner.
 
 Status: Transferred (Stage 2/3)
 
 The funds are now awaiting final deployment into the active portfolio. We will notify you once the deployment is confirmed and your returns begin to accrue.
 
+Initial Deposit: ${principal:,.2f}
+Batch Total Deployed: ${batch_total_net:,.2f}
+Your Contribution Weight: {weight_pct:.4f}%
+Allocated Transaction Fee: -${transaction_fee:,.2f}
+Allocated Entry Fee: -${entry_fee:,.2f}
+New Active Balance: ${net:,.2f}
+
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                         cls._create_pending_email(
                             batch_id=batch_id,
@@ -416,19 +446,31 @@ info@aib-axysafrica.com
                             cls._log_email_event(investor_email=email, investor_id=investor_id, batch_id=batch_id, status='Failed', email_type='OFFSHORE_TRANSFER', error_message='Missing email')
                             failed += 1
                             continue
+                        principal = float(item.get('amount_deposited', 0) or 0)
+                        transaction_fee = float(item.get('transfer_fee_deducted', 0) or 0)
+                        entry_fee = float(item.get('deployment_fee_deducted', 0) or 0)
+                        net = float(item.get('net_principal', 0) or 0)
+                        weight_pct = ((principal / batch_total_principal) * 100) if batch_total_principal > 0 else 0.0
                         try:
-                            subject = f"Offshore Fund Transfer Initiated - {batch_name}"
+                            subject = f"Funds Successfully Transferred to Fund - {batch_name}"
                             body = f"""Dear {name},
 
-We are pleased to inform you that your funds in batch \"{batch_name}\" have been successfully transferred to our offshore investment partner.
+We are pleased to inform you that your funds in batch "{batch_name}" have been successfully transferred to our offshore investment partner.
 
 Status: Transferred (Stage 2/3)
 
 The funds are now awaiting final deployment into the active portfolio. We will notify you once the deployment is confirmed and your returns begin to accrue.
 
+Initial Deposit: ${principal:,.2f}
+Batch Total Deployed: ${batch_total_net:,.2f}
+Your Contribution Weight: {weight_pct:.4f}%
+Allocated Transaction Fee: -${transaction_fee:,.2f}
+Allocated Entry Fee: -${entry_fee:,.2f}
+New Active Balance: ${net:,.2f}
+
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                             if cls._send_email_immediately(subject, body, email, name):
                                 sent += 1
@@ -458,6 +500,7 @@ info@aib-axysafrica.com
         """
         Stage 3: Investment Active (Deployed).
         Triggered when 'Confirm Deployment' is checked or Date Deployed is saved.
+        Includes transaction cost breakdown in the email.
         """
         app = current_app._get_current_object()
 
@@ -469,11 +512,15 @@ info@aib-axysafrica.com
             if getattr(batch, 'date_deployed', None)
             else datetime.now().strftime('%Y-%m-%d')
         )
+        transaction_cost = float(getattr(batch, 'transaction_cost', 0) or 0)
+        
         email_items = [
             {
                 'investor_id': getattr(inv, 'id', None),
                 'investor_name': getattr(inv, 'investor_name', None),
                 'investor_email': getattr(inv, 'investor_email', None),
+                'amount_deposited': float(getattr(inv, 'amount_deposited', 0) or 0),
+                'deployment_fee_deducted': float(getattr(inv, 'deployment_fee_deducted', 0) or 0),
             }
             for inv in getattr(batch, 'investments', [])
         ]
@@ -496,26 +543,45 @@ info@aib-axysafrica.com
                         email = item.get('investor_email')
                         name = item.get('investor_name', 'Investor')
                         investor_id = item.get('investor_id')
+                        original_amount = item.get('amount_deposited', 0)
+                        fee_deducted = item.get('deployment_fee_deducted', 0)
+                        net_amount = original_amount - fee_deducted
                         
                         if not email:
                             logger.warning(f"Skipping investor '{name}' — no email address")
                             continue
-                            
-                        subject = f"Investment Active - {batch_name}"
+                        
+                        # Build subject and body with transaction cost details
+                        subject = f"Funds Successfully Deployed: {batch_name}"
+                        
+                        fee_line = ""
+                        if fee_deducted > 0:
+                            fee_line = f"""
+Transaction Fee Contribution: -${fee_deducted:,.2f}
+Net Deployed Amount: ${net_amount:,.2f}"""
+                        
                         body = f"""Dear {name},
 
-Congratulations! Your investment in batch "{batch_name}" is now fully deployed and ACTIVE.
+Congratulations! Your investment in {batch_name} has been successfully deployed and is now ACTIVE.
+
+═══════════════════════════════════════════
+DEPLOYMENT SUMMARY
+═══════════════════════════════════════════
+
+Original Deposit Amount: ${original_amount:,.2f}{fee_line}
 
 Deployment Date: {deploy_date}
 Status: Active (Stage 3/3)
 
 Your capital is now earning returns based on the fund's performance. You can track your real-time performance and view upcoming reports through the investor portal.
 
+═══════════════════════════════════════════
+
 Thank you for investing with AIB-AXYS Africa.
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                         cls._create_pending_email(
                             batch_id=batch_id,
@@ -536,26 +602,45 @@ info@aib-axysafrica.com
                         email = item.get('investor_email')
                         name = item.get('investor_name', 'Investor')
                         investor_id = item.get('investor_id')
+                        original_amount = item.get('amount_deposited', 0)
+                        fee_deducted = item.get('deployment_fee_deducted', 0)
+                        net_amount = original_amount - fee_deducted
+                        
                         if not email:
                             cls._log_email_event(investor_email=email, investor_id=investor_id, batch_id=batch_id, status='Failed', error_message='Missing email')
                             failed += 1
                             continue
                         try:
-                            subject = f"Investment Active - {batch_name}"
+                            subject = f"Funds Successfully Deployed: {batch_name}"
+                            
+                            fee_line = ""
+                            if fee_deducted > 0:
+                                fee_line = f"""
+Transaction Fee Contribution: -${fee_deducted:,.2f}
+Net Deployed Amount: ${net_amount:,.2f}"""
+                            
                             body = f"""Dear {name},
 
-Congratulations! Your investment in batch "{batch_name}" is now fully deployed and ACTIVE.
+Congratulations! Your investment in {batch_name} has been successfully deployed and is now ACTIVE.
+
+═══════════════════════════════════════════
+DEPLOYMENT SUMMARY
+═══════════════════════════════════════════
+
+Original Deposit Amount: ${original_amount:,.2f}{fee_line}
 
 Deployment Date: {deploy_date}
 Status: Active (Stage 3/3)
 
 Your capital is now earning returns based on the fund's performance. You can track your real-time performance and view upcoming reports through the investor portal.
 
+═══════════════════════════════════════════
+
 Thank you for investing with AIB-AXYS Africa.
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                             if cls._send_email_immediately(subject, body, email, name):
                                 sent += 1
@@ -607,7 +692,7 @@ Our team is currently reviewing your request. You will receive a follow-up notif
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                     if manual_approval:
                         # Find investor_id if possible
@@ -669,7 +754,7 @@ The funds will be processed according to the standard distribution timeline. Tha
 
 Best regards,
 AIB-AXYS Africa Investment Team
-info@aib-axysafrica.com
+
 """
                     if manual_approval:
                         # Find investor_id if possible

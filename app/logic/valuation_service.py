@@ -2,6 +2,7 @@
 Epoch Ledger Portfolio Valuation Service
 
 Implements:
+- Dual-layer valuation: Fund-level (full period) and Investor-level (pro-rata)
 - Pro-rata profit allocation by weighted active capital in a period
 - Compounding across epochs (end_balance becomes next epoch start_balance)
 - Cryptographic hash chaining per (internal_client_code, fund_name)
@@ -11,10 +12,13 @@ Assumptions (documented to keep behavior deterministic):
 - performance_rate is a decimal fraction for the full period (e.g. 0.05 for 5%)
 - An investor is considered "active" starting at investment.date_transferred if present,
   else investment.date_deposited.
-- Weighted capital uses amount_deposited × days_active within [start_date, end_date).
+- For deployment-based pro-rata: Active days measured from batch.date_deployed
+- Weighted capital uses net_principal × days_active within [start_date, end_date).
 - Total profit for the fund over the period is:
     average_active_capital × performance_rate
   where average_active_capital = total_weighted_capital / period_days.
+- Investor-level earnings are capped to their pro-rata active days (investor_level_gain)
+- Fund retains unallocated surplus when investor deployed mid-period (fund_surplus)
 """
 
 from __future__ import annotations
@@ -28,6 +32,9 @@ from dateutil.relativedelta import relativedelta
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
+
+from app.Batch.model import Batch
 from contextlib import nullcontext
 
 from app.database.database import db
@@ -78,6 +85,104 @@ def _to_decimal(value) -> Decimal:
 
 def _q2(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _validate_dual_layer_reconciliation(
+    statements_list: list,
+    head_office_total: Decimal,
+    tolerance: Decimal = Decimal("0.01"),
+) -> dict:
+    """
+    Validate that dual-layer valuation achieves reconciliation.
+    
+    A valuation run is balanced when:
+    Sum(Investor_Level_Gains) + Sum(Fund_Surplus) ≈ Head_Office_Total_Gain
+    
+    This replaces the old strict reconciliation that didn't account for
+    pro-rata earnings based on deployment dates.
+    
+    Args:
+        statements_list: List of Statement objects for this valuation run
+        head_office_total: Total gain expected at fund level (from bank valuation)
+        tolerance: Acceptable difference in cents (default $0.01)
+    
+    Returns:
+        dict with reconciliation details
+    """
+    total_investor_gains = Decimal("0")
+    total_fund_surplus = Decimal("0")
+    
+    for stmt in statements_list:
+        investor_gain = Decimal(str(getattr(stmt, 'investor_level_gain', 0) or 0))
+        fund_surplus = Decimal(str(getattr(stmt, 'fund_surplus', 0) or 0))
+        
+        total_investor_gains += investor_gain
+        total_fund_surplus += fund_surplus
+    
+    reconciled_total = _q2(total_investor_gains + total_fund_surplus)
+    head_office_total = Decimal(str(head_office_total))
+    difference = abs(reconciled_total - head_office_total)
+    is_balanced = difference <= tolerance
+    
+    if head_office_total != Decimal("0"):
+        difference_pct = float((difference / head_office_total) * Decimal("100"))
+    else:
+        difference_pct = 0.0 if difference == Decimal("0") else 100.0
+    
+    return {
+        "is_balanced": is_balanced,
+        "total_investor_gains": float(total_investor_gains),
+        "total_fund_surplus": float(total_fund_surplus),
+        "reconciled_total": float(reconciled_total),
+        "expected_total": float(head_office_total),
+        "difference": float(difference),
+        "difference_pct": difference_pct,
+    }
+
+
+def _calculate_dual_layer_gains(
+    *,
+    principal: Decimal,
+    performance_rate: Decimal,
+    days_active_in_period: int,
+    period_total_days: int,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """
+    Calculate dual-layer valuation gains: fund-level and investor-level.
+    
+    Returns: (fund_level_gain, investor_level_gain, fund_surplus)
+    
+    Fund-level gain: Principal × Performance_Rate (full period)
+    Investor-level gain: Principal × Performance_Rate × (Days_Active / Period_Days)
+    Fund surplus: Fund_Level - Investor_Level
+    
+    Example:
+    - Principal: $10,000
+    - Performance: 5% (0.05)
+    - Days Active: 17 / 31
+    - Fund Gain: $10,000 × 0.05 = $500
+    - Investor Gain: $10,000 × 0.05 × (17/31) = $274.19
+    - Surplus: $500 - $274.19 = $225.81
+    """
+    principal = _to_decimal(principal)
+    performance_rate = _to_decimal(performance_rate)
+    
+    # Fund-level gain (as if investor was active for full period)
+    fund_level_gain = _q2(principal * performance_rate)
+    
+    # Pro-rata ratio based on active days
+    if period_total_days <= 0:
+        proration_ratio = Decimal("0")
+    else:
+        proration_ratio = Decimal(days_active_in_period) / Decimal(period_total_days)
+    
+    # Investor-level gain (pro-rated by active days)
+    investor_level_gain = _q2(principal * performance_rate * proration_ratio)
+    
+    # Fund surplus (unallocated gain retained by fund)
+    fund_surplus = _q2(fund_level_gain - investor_level_gain)
+    
+    return fund_level_gain, investor_level_gain, fund_surplus
 
 
 def _ensure_datetime_utc_dt(dt: datetime) -> datetime:
@@ -332,21 +437,33 @@ class PortfolioValuationService:
         # Ensure we have a normalized fund name for legacy fallbacks
         fund_name = (fund_name or '').strip()
 
-        investments_query = session.query(Investment).filter(
-            or_(
-                Investment.fund_id == fund_id,
-                (Investment.fund_id == None) & (func.lower(Investment.fund_name) == fund_name.lower()),
+        investments_query = (
+            session.query(Investment)
+            .options(joinedload(Investment.batch))
+            .filter(
+                or_(
+                    Investment.fund_id == fund_id,
+                    (Investment.fund_id == None) & (func.lower(Investment.fund_name) == fund_name.lower()),
+                )
             )
-        ).filter(
-            # ── BATCH DATE-GATE (critical fix) ──────────────────────────────────
-            # For fresh start: include all deposits on or before end_date
-            # For compound (prev epoch exists): ONLY include NEW deposits >= start_date
-            # This prevents double-counting old investments already in previous epoch's ending balance
-            # ────────────────────────────────────────────────────────────────────
-            Investment.date_deposited <= end_date
+            .filter(
+                Investment.date_deposited <= end_date
+            )
         )
 
         investments = investments_query.all()
+
+        # Time-lock: only investments whose batch is deployed on or before period end
+        # (e.g. February-deployed batch excluded from January epoch valuation)
+        def _batch_deployed_on_or_before_period_end(inv: Investment) -> bool:
+            b = inv.batch
+            if b is None and inv.batch_id:
+                b = session.query(Batch).filter(Batch.id == inv.batch_id).first()
+            if b is None or not b.date_deployed:
+                return True
+            return cls._ensure_datetime_utc(b.date_deployed) <= end_date
+
+        investments = [inv for inv in investments if _batch_deployed_on_or_before_period_end(inv)]
 
         # Total days in valuation month for daily accrual denominator (28/29/30/31).
         valuation_month_days = _get_valuation_month_days(start_date)
@@ -377,10 +494,13 @@ class PortfolioValuationService:
         for inv in investments:
             active_start = cls._active_start(inv)
 
-            # If the investment has no date set (uploaded without deploy date or historical import),
-            # treat it as active from the start of the valuation period instead of skipping it.
             if active_start is None:
-                active_start = start_date
+                if getattr(inv, "batch", None) and inv.batch and inv.batch.date_deployed:
+                    active_start = cls._ensure_datetime_utc(inv.batch.date_deployed)
+                elif inv.date_deposited:
+                    active_start = cls._ensure_datetime_utc(inv.date_deposited)
+                else:
+                    active_start = start_date
 
             code = inv.internal_client_code
             
@@ -396,7 +516,10 @@ class PortfolioValuationService:
                 continue
 
             code = inv.internal_client_code
-            amount = _to_decimal(inv.amount_deposited)
+            # Source of truth: persistently stored net principal after all deductions
+            # (transfer + deployment fees). This keeps valuation inputs aligned with
+            # Batch transfer stage and investor-facing balances.
+            net_amount = _to_decimal(inv.net_principal)
 
             # Deposits are treated as:
             # - principal_before_start if active_start < start_date
@@ -411,14 +534,14 @@ class PortfolioValuationService:
                 }
 
             if active_start < start_date:
-                per_code[code]["principal_before_start"] += amount
+                per_code[code]["principal_before_start"] += net_amount
             elif active_start == start_date and is_fresh_start:
                 # Fresh start: treat same-day records as opening principal.
-                per_code[code]["principal_before_start"] += amount
+                per_code[code]["principal_before_start"] += net_amount
             else:
                 # For all other cases (new deposits in existing fund or fresh start mid-month),
                 # treat as deposits during period.
-                per_code[code]["deposits_during_period"] += amount
+                per_code[code]["deposits_during_period"] += net_amount
 
             # Triple-gate daily accrual (fund active + batch deployed + deposit confirmed).
             batch_deployed_at = None
@@ -435,7 +558,12 @@ class PortfolioValuationService:
             )
             if row_days_active > 0:
                 row_ratio = Decimal(row_days_active) / Decimal(valuation_month_days)
-                per_code[code]["weighted_amount_pre_withdrawals"] += amount * row_ratio
+                per_code[code]["weighted_amount_pre_withdrawals"] += net_amount * row_ratio
+            
+            # Track days active for dual-layer calculation
+            if code not in per_code:
+                per_code[code]["days_active"] = 0
+            per_code[code]["days_active"] = max(per_code[code].get("days_active", 0), row_days_active)
 
         # ─── Withdrawal query (THE CRITICAL FIX) ────────────────────────────────
         # Only fetch withdrawals that are:
@@ -714,25 +842,22 @@ class PortfolioValuationService:
         total_active_capital_for_profit = total_opening_active_capital_compounded
         total_weighted_capital_for_allocation = sum(opening_weights_compounded.values(), Decimal("0"))
         
-        # ===== CRITICAL FIX: Use total active capital, not weighted capital, for profit base =====
-        # The performance rate should be applied to ALL active capital in the period
-        # Weighted capital (based on days_active) should only be used for pro-rata ALLOCATION of profit
-        # But the total profit pool should be based on total active capital
         if total_weighted_capital_for_allocation <= 0:
             # All investors have zero weight (unlikely but handle it)
             total_weighted_capital_for_allocation = total_opening_active_capital_compounded or Decimal("1")
         
-        # ===== FIX: Correct Profit Calculation with Compound Interest =====
-        # Formula: profit = principal * ((1 + rate)^periods - 1)
+        # Profit must respect active-day proration.
+        # Weighted capital already embeds active-day ratio (e.g. 17/31), so use it
+        # as the profit base for the period.
+        # Formula: profit = weighted_active_capital * ((1 + rate)^periods - 1)
         # For a single-period valuation, this reduces to profit = principal * rate.
         # The service receives `performance_rate` as a decimal fraction
         # (e.g. 0.0348 for 3.48%).
-        # Use total_opening_active_capital_compounded as the profit base
         rate_fraction = perf_rate
         
         # Compound interest formula: (1 + rate)^periods
         compound_factor = (Decimal("1") + rate_fraction) ** months_detected
-        total_profit = _q2(total_opening_active_capital_compounded * (compound_factor - Decimal("1")))
+        total_profit = _q2(total_weighted_capital_for_allocation * (compound_factor - Decimal("1")))
         # ====================================================================
 
 
@@ -953,25 +1078,21 @@ class PortfolioValuationService:
         total_active_capital_for_profit = total_opening_active_capital_compounded
         total_weighted_capital_for_allocation = sum(opening_weights_compounded.values(), Decimal("0"))
         
-        # ===== CRITICAL FIX: Use total active capital, not weighted capital, for profit base =====
-        # The performance rate should be applied to ALL active capital in the period
-        # Weighted capital (based on days_active) should only be used for pro-rata ALLOCATION of profit
-        # But the total profit pool should be based on total active capital
-        # Use total_opening_active_capital_compounded as the profit base
         if total_weighted_capital_for_allocation <= 0:
             # All investors have zero weight (unlikely but handle it)
             total_weighted_capital_for_allocation = total_opening_active_capital_compounded or Decimal("1")
         
-        # ===== FIX: Correct Profit Calculation with Compound Interest =====
-        # Formula: profit = principal * ((1 + rate)^periods - 1)
+        # Profit must respect active-day proration.
+        # Weighted capital already embeds active-day ratio (e.g. 17/31), so use it
+        # as the profit base for the period.
+        # Formula: profit = weighted_active_capital * ((1 + rate)^periods - 1)
         # The service receives `performance_rate` as a decimal fraction
         # (e.g. 0.0348 for 3.48%).
-        # Use total_opening_active_capital_compounded as the base, not total_weighted_capital_for_allocation
         rate_fraction = perf_rate
         
         # Compound interest formula for multiple periods
         compound_factor = (Decimal("1") + rate_fraction) ** months_detected
-        total_profit = _q2(total_opening_active_capital_compounded * (compound_factor - Decimal("1")))
+        total_profit = _q2(total_weighted_capital_for_allocation * (compound_factor - Decimal("1")))
         # ====================================================================
         
         avg_active_capital = total_active_capital_for_profit
@@ -1214,21 +1335,17 @@ class PortfolioValuationService:
         if total_weighted_capital_for_allocation <= 0:
             total_weighted_capital_for_allocation = total_opening_active_capital_compounded or Decimal("1")
         
-        # ===== CRITICAL FIX: Use total active capital, not weighted capital, for profit base =====
-        # The performance rate should be applied to ALL active capital in the period
-        # Weighted capital (based on days_active) should only be used for pro-rata ALLOCATION of profit
-        # But the total profit pool should be based on total active capital
-        
-        # ===== FIX: Correct Profit Calculation with Compound Interest =====
-        # Formula: profit = principal * ((1 + rate)^periods - 1)
+        # Profit must respect active-day proration.
+        # Weighted capital already embeds active-day ratio (e.g. 17/31), so use it
+        # as the profit base for the period.
+        # Formula: profit = weighted_active_capital * ((1 + rate)^periods - 1)
         # The service receives `performance_rate` as a decimal fraction
         # (e.g. 0.0348 for 3.48%).
-        # Use total_opening_active_capital_compounded as the profit base
         rate_fraction = perf_rate
         
         # Compound interest formula for multiple periods
         compound_factor = (Decimal("1") + rate_fraction) ** months_detected
-        total_profit = _q2(total_opening_active_capital_compounded * (compound_factor - Decimal("1")))
+        total_profit = _q2(total_weighted_capital_for_allocation * (compound_factor - Decimal("1")))
         # ====================================================================
         
         avg_active_capital = total_active_capital_for_profit
@@ -1268,7 +1385,7 @@ class PortfolioValuationService:
                 continue
             code = inv.internal_client_code
             code_batch_amounts.setdefault(code, {})
-            code_batch_amounts[code][inv.batch_id] = code_batch_amounts[code].get(inv.batch_id, Decimal("0")) + _to_decimal(inv.amount_deposited)
+            code_batch_amounts[code][inv.batch_id] = code_batch_amounts[code].get(inv.batch_id, Decimal("0")) + _to_decimal(inv.net_principal)
 
         # Aggregate by batch using the investor's weighted capital split by batch share.
         by_batch = {}

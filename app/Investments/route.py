@@ -14,7 +14,7 @@ from app.Investments.model import (
 )
 from app.Batch.core_fund import CoreFund
 from app.Batch.model import Batch
-from app.Valuation.model import ValuationRun
+from app.Valuation.model import ValuationRun, BatchValuation
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 from sqlalchemy import func
@@ -37,6 +37,15 @@ def normalize_datetime_to_utc(dt):
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _safe_decimal(value, default=Decimal('0.00')):
+    try:
+        if value is None:
+            return default
+        return Decimal(str(value))
+    except Exception:
+        return default
 
 
 investment_v1 = Blueprint("investment_v1", __name__, url_prefix='/')
@@ -127,7 +136,8 @@ def get_investor_directory():
                     "internal_client_code": code,
                     "investor_email": inv.investor_email,
                     "investor_phone": inv.investor_phone,
-                    "total_principal": 0.0, # Will represent Current Standing
+                    "total_principal": 0.0,  # Backward-compat alias for current standing
+                    "current_balance": 0.0,
                     "investments": 0,
                     "unique_batches": 0,
                     "last_email_status": None,
@@ -184,13 +194,14 @@ def get_investor_directory():
                 inv_values = BatchController._calculate_batch_investment_values(inv, batch, db.session)
                 investor_balances[code] += Decimal(str(inv_values["current_balance"]))
             except Exception as e:
-                # Fallback: use deposited amount
-                investor_balances[code] += Decimal(str(inv.amount_deposited))
+                # Fallback to persisted net principal (already fee-adjusted in DB).
+                investor_balances[code] += Decimal(str(inv.net_principal or 0))
 
         # Update each investor with their calculated balance
         for code, balance in investor_balances.items():
             if code in investor_map:
                 investor_map[code]["total_principal"] = float(round(balance, 2))
+                investor_map[code]["current_balance"] = float(round(balance, 2))
 
         investors = list(investor_map.values())
 
@@ -453,7 +464,8 @@ def get_investor_portfolio_aggregated(client_code):
         
         # Group investments by batch and fund
         holdings_map = {}
-        total_principal = Decimal("0.00")
+        total_original_principal = Decimal("0.00")
+        total_main_balance = Decimal("0.00")
         
         for inv in investments:
             batch_id = inv.batch_id
@@ -471,12 +483,19 @@ def get_investor_portfolio_aggregated(client_code):
                     "fund_id": fund_id,
                     "fund_name": fund_name,
                     "investments": [],
-                    "total_principal": Decimal("0.00")
+                    "total_original_principal": Decimal("0.00"),
+                    "total_main_balance": Decimal("0.00"),
+                    "total_transaction_fee_usd": Decimal("0.00"),
+                    "total_entry_fee_usd": Decimal("0.00"),
                 }
             
             holdings_map[key]["investments"].append(inv)
-            holdings_map[key]["total_principal"] += inv.amount_deposited
-            total_principal += inv.amount_deposited
+            holdings_map[key]["total_original_principal"] += Decimal(str(inv.amount_deposited or 0))
+            holdings_map[key]["total_main_balance"] += Decimal(str(inv.net_principal or 0))
+            holdings_map[key]["total_transaction_fee_usd"] += Decimal(str(inv.transfer_fee_deducted or 0))
+            holdings_map[key]["total_entry_fee_usd"] += Decimal(str(inv.deployment_fee_deducted or 0))
+            total_original_principal += Decimal(str(inv.amount_deposited or 0))
+            total_main_balance += Decimal(str(inv.net_principal or 0))
         
         # Build holdings response with aggregated data using atomic batch simulation
         holdings = []
@@ -484,7 +503,10 @@ def get_investor_portfolio_aggregated(client_code):
         
         for (batch_id, fund_name, fund_id), holding in holdings_map.items():
             batch_id_val = batch_id
-            total_principal_val = holding["total_principal"]
+            total_principal_val = holding["total_main_balance"]
+            total_original_principal_val = holding["total_original_principal"]
+            total_transaction_fee_val = holding["total_transaction_fee_usd"]
+            total_entry_fee_val = holding["total_entry_fee_usd"]
             investments_count = len(holding["investments"])
             batch = db.session.query(Batch).filter(Batch.id == batch_id).first() if batch_id else None
             batch_name = batch.batch_name if batch else holding["batch_name"]
@@ -497,55 +519,78 @@ def get_investor_portfolio_aggregated(client_code):
             
             try:
                 for inv in holding["investments"]:
-                    # Use the batch controller's simulation method for accurate per-investment balances
                     inv_values = BatchController._calculate_batch_investment_values(inv, batch, db.session)
                     batch_end_balance += Decimal(str(inv_values["current_balance"]))
                     batch_total_profit += Decimal(str(inv_values["profit"]))
                     batch_total_withdrawals += Decimal(str(inv_values["withdrawals"]))
-                
-                # Get latest epoch for reference metadata
+
+                bv_period = (
+                    db.session.query(BatchValuation)
+                    .filter(BatchValuation.batch_id == batch_id_val)
+                    .order_by(BatchValuation.period_end_date.desc())
+                    .first()
+                )
+
                 latest_epoch = db.session.query(EpochLedger).filter(
                     EpochLedger.internal_client_code == client_code,
                     func.lower(EpochLedger.fund_name) == func.lower(fund_name),
                 ).order_by(EpochLedger.epoch_end.desc()).first()
-                
-                if latest_epoch:
-                    # ✅ FIX: Use start_balance directly from ledger (NOT calculated)
-                    # Also fetch performance_rate from ValuationRun for accuracy
+
+                def _epoch_covers_batch(b, epoch_end):
+                    if not b or not getattr(b, "date_deployed", None) or not epoch_end:
+                        return True
+                    bd = b.date_deployed
+                    if bd.tzinfo is None:
+                        bd = bd.replace(tzinfo=timezone.utc)
+                    ee = epoch_end
+                    if getattr(ee, "tzinfo", None) is None:
+                        ee = ee.replace(tzinfo=timezone.utc)
+                    return bd.date() <= ee.date()
+
+                if bv_period:
+                    valuation_data = {
+                        "epoch_start": bv_period.period_end_date.isoformat(),
+                        "epoch_end": bv_period.period_end_date.isoformat(),
+                        "start_balance": float(total_principal_val),
+                        "deposits": float(total_principal_val),
+                        "withdrawals": float(batch_total_withdrawals),
+                        "profit": float(batch_total_profit),
+                        "end_balance": float(round(batch_end_balance, 2)),
+                        "performance_rate_percent": float(bv_period.performance_rate or 0) * 100,
+                    }
+                elif latest_epoch and batch and _epoch_covers_batch(batch, latest_epoch.epoch_end):
                     performance_rate = float(latest_epoch.performance_rate * 100) if latest_epoch.performance_rate else 0.0
-                    
-                    # Try to get actual performance_rate from ValuationRun for accuracy
-                    vr = db.session.query(ValuationRun).join(
-                        CoreFund, ValuationRun.core_fund_id == CoreFund.id
-                    ).filter(
-                        ValuationRun.epoch_end == latest_epoch.epoch_end,
-                        func.lower(CoreFund.fund_name) == func.lower(fund_name)
-                    ).first()
+                    vr = (
+                        db.session.query(ValuationRun)
+                        .join(CoreFund, ValuationRun.core_fund_id == CoreFund.id)
+                        .filter(
+                            ValuationRun.epoch_end == latest_epoch.epoch_end,
+                            func.lower(CoreFund.fund_name) == func.lower(fund_name),
+                        )
+                        .first()
+                    )
                     if vr:
                         performance_rate = float(vr.performance_rate * 100)
-                    
                     valuation_data = {
                         "epoch_start": latest_epoch.epoch_start.isoformat(),
                         "epoch_end": latest_epoch.epoch_end.isoformat(),
-                        # ✅ FIX: Use start_balance from ledger (opening balance, NOT principal - profit)
                         "start_balance": float(latest_epoch.start_balance or 0),
                         "deposits": float(total_principal_val),
                         "withdrawals": float(batch_total_withdrawals),
                         "profit": float(batch_total_profit),
                         "end_balance": float(round(batch_end_balance, 2)),
-                        # ✅ NEW: Include actual performance_rate from database
                         "performance_rate_percent": performance_rate,
                     }
                 else:
-                    # No valuation yet - use principal only
+                    pe = bv_period.period_end_date.isoformat() if bv_period else None
                     valuation_data = {
-                        "epoch_start": None,
-                        "epoch_end": None,
+                        "epoch_start": pe,
+                        "epoch_end": pe,
                         "start_balance": float(total_principal_val),
                         "deposits": float(total_principal_val),
-                        "withdrawals": 0.0,
-                        "profit": 0.0,
-                        "end_balance": float(total_principal_val),
+                        "withdrawals": float(batch_total_withdrawals),
+                        "profit": float(batch_total_profit),
+                        "end_balance": float(round(batch_end_balance, 2)),
                         "performance_rate_percent": 0.0,
                     }
             except Exception as calc_err:
@@ -568,6 +613,11 @@ def get_investor_portfolio_aggregated(client_code):
                 "fund_id": fund_id,
                 "fund_name": fund_name,
                 "investments_count": investments_count,
+                "original_principal": float(total_original_principal_val),
+                "transaction_fee_usd": float(total_transaction_fee_val),
+                "entry_fee_usd": float(total_entry_fee_val),
+                "deployment_fee": float(total_transaction_fee_val),
+                "main_balance": float(total_principal_val),
                 "total_principal": float(total_principal_val),
                 "latest_valuation": valuation_data
             })
@@ -578,13 +628,15 @@ def get_investor_portfolio_aggregated(client_code):
         current_balance = round(sum(
             float(h["latest_valuation"]["end_balance"] if h["latest_valuation"] else h["total_principal"]) for h in holdings
         ), 2)
-        total_profit = round(current_balance - float(total_principal), 2)
+        total_profit = round(current_balance - float(total_main_balance), 2)
 
         data = {
             "client_code": client_code,
             "investor_name": investor_name,
-            "initial_investment": float(total_principal),
-            "total_principal": float(total_principal),
+            "initial_investment": float(total_original_principal),
+            "original_principal": float(total_original_principal),
+            "total_principal": float(total_main_balance),
+            "main_balance": float(total_main_balance),
             "current_balance": current_balance,
             "head_office_total": current_balance,
             "total_profit": float(total_profit),
@@ -974,172 +1026,277 @@ def download_investor_statement_pdf(client_code):
     Generate a branded investor statement PDF that matches the client statement layout.
     """
     try:
-        as_of = request.args.get("as_of")
-        
-        # If as_of is provided, we fetch the specific epoch ledger entries for that date
-        if as_of:
+        as_of_raw = (request.args.get("as_of") or "").strip()
+        period_only_raw = (request.args.get("period_only") or "").strip().lower()
+        period_only = period_only_raw in {"1", "true", "yes"}
+        as_of_dt = None
+        if as_of_raw:
             try:
-                target_date = datetime.fromisoformat(as_of.replace('Z', '+00:00'))
-                
-                # Fetch all investments for this client
-                investments = db.session.query(Investment).filter(
-                    Investment.internal_client_code == client_code
-                ).all()
-
-                if not investments:
-                    return make_response(jsonify({"status": 404, "message": f"No investments found for {client_code}"}), 404)
-
-                investor_name = investments[0].investor_name
-                
-                # Group investments by batch and compute values dynamically
-                from app.Batch.controllers import BatchController
-                
-                holdings_map = {}
-                target_dt_utc = target_date.replace(tzinfo=timezone.utc) if target_date.tzinfo is None else target_date.astimezone(timezone.utc)
-                
-                epoch_start = None
-                epoch_end = None
-                
-                for inv in investments:
-                    batch = db.session.query(Batch).filter(Batch.id == inv.batch_id).first() if inv.batch_id else None
-                    fund_name = (inv.fund.fund_name if inv.fund else inv.fund_name) or "Unknown"
-                    batch_id = inv.batch_id
-                    
-                    key = (batch_id, fund_name)
-                    if key not in holdings_map:
-                        holdings_map[key] = {
-                            "batch_id": batch_id,
-                            "batch_name": batch.batch_name if batch else "Unknown",
-                            "fund_name": fund_name,
-                            "deposits": 0.0,
-                            "withdrawals": 0.0,
-                            "profit": 0.0,
-                            "end_balance": 0.0,
-                            "has_data": False,
-                            "epoch_start": None,
-                            "epoch_end": None,
-                        }
-
-                    # Retrieve true simulated historical states
-                    sim_states = BatchController._simulate_client_fund_balances(inv, db.session)
-                    if sim_states and inv.id in sim_states:
-                        state = sim_states[inv.id]
-                        
-                        # Find the matching epoch in the history for the target date
-                        history = state.get("history", [])
-                        for h in history:
-                            h_end_utc = h["epoch_end"].replace(tzinfo=timezone.utc) if h["epoch_end"].tzinfo is None else h["epoch_end"].astimezone(timezone.utc)
-                            
-                            # Check if the epoch ending year and month matches
-                            if h_end_utc.year == target_dt_utc.year and h_end_utc.month == target_dt_utc.month:
-                                holdings_map[key]["deposits"] += float(h["deposit"])
-                                holdings_map[key]["withdrawals"] += float(h["withdrawal"])
-                                holdings_map[key]["profit"] += float(h["profit"])
-                                holdings_map[key]["end_balance"] += float(h["end_balance"])
-                                holdings_map[key]["has_data"] = True
-                                
-                                # Estimate start time for display (can just subtract ~30 days if not tracked)
-                                if not epoch_end:
-                                    epoch_end = h["epoch_end"]
-                                    # Fallback start date approximation for display
-                                    import datetime as dt_lib
-                                    epoch_start = epoch_end.replace(day=1)
-                                break
-                
-                # Filter holdings that actually existed during this epoch
-                holdings = []
-                for holding in holdings_map.values():
-                    if holding["has_data"]:
-                        holdings.append({
-                            "batch_id": holding["batch_id"],
-                            "batch_name": holding["batch_name"],
-                            "fund_name": holding["fund_name"],
-                            "latest_valuation": {
-                                "deposits": holding["deposits"],
-                                "withdrawals": holding["withdrawals"],
-                                "profit": holding["profit"],
-                                "end_balance": holding["end_balance"],
-                            }
-                        })
-                
-                if not holdings:
-                    return make_response(jsonify({"status": 404, "message": f"No active holdings found for {as_of}"}), 404)
-
-                unique_batches = len(set(h["batch_id"] for h in holdings))
-
-                total_deposits = sum(Decimal(str(h["latest_valuation"]["deposits"])) for h in holdings)
-                total_withdrawals = sum(Decimal(str(h["latest_valuation"]["withdrawals"])) for h in holdings)
-                total_current_value = sum(Decimal(str(h["latest_valuation"]["end_balance"])) for h in holdings)
-                total_profit = sum(Decimal(str(h["latest_valuation"]["profit"])) for h in holdings)
-                total_principal = sum(
-                    Decimal(str(h["latest_valuation"]["end_balance"]))
-                    - Decimal(str(h["latest_valuation"]["profit"]))
-                    + Decimal(str(h["latest_valuation"]["withdrawals"]))
-                    for h in holdings
-                )
-                
-                if epoch_start and epoch_end:
-                    period_range = f"{epoch_start.strftime('%b %d, %Y')} - {epoch_end.strftime('%b %d, %Y')}"
-                    statement_date = epoch_end.strftime('%B %d, %Y')
-                else:
-                    period_range = "Current Portfolio"
-                    statement_date = target_dt_utc.strftime('%B %d, %Y')
-                    
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return make_response(jsonify({"status": 400, "message": f"Invalid as_of processing: {str(e)}"}), 400)
-        else:
-            # Fallback to current portfolio aggregation (current behavior)
-            try:
-                json_res = get_investor_portfolio_aggregated(client_code)
-                payload = json_res.get_json() if hasattr(json_res, "get_json") else None
-                if not payload or payload.get("status") != 200:
-                    error_msg = payload.get("message") if payload else "Failed to fetch investor portfolio"
-                    print(f"❌ Portfolio aggregation failed for {client_code}: {error_msg}")
-                    return json_res
-
-                data = payload.get("data") or {}
-                investor_name = data.get("investor_name") or "Investor"
-                holdings = data.get("holdings") or []
-                unique_batches = data.get("unique_batches") or 0
-                
-                if not holdings:
-                    return make_response(jsonify({
-                        "status": 404, 
-                        "message": f"No holdings found for investor {client_code}"
-                    }), 404)
-                
-                total_principal = Decimal(str(data.get("total_principal") or 0))
-            except Exception as agg_err:
-                print(f"❌ Portfolio aggregation exception for {client_code}: {str(agg_err)}")
-                return make_response(jsonify({
-                    "status": 500,
-                    "message": f"Failed to aggregate portfolio: {str(agg_err)}"
-                }), 500)
-            
-            # Derive statement dates from available valuations
-            valuation_dates = [h.get("latest_valuation", {}).get("epoch_end") for h in holdings if h.get("latest_valuation", {}).get("epoch_end")]
-            period_range = "Current Portfolio"
-            statement_date = datetime.now().strftime('%B %d, %Y')
-            
-            if valuation_dates:
+                norm = as_of_raw.replace("Z", "+00:00")
+                as_of_dt = datetime.fromisoformat(norm)
+            except ValueError:
                 try:
-                    parsed_dates = [datetime.fromisoformat(d) for d in valuation_dates if d]
-                    if parsed_dates:
-                        max_date = max(parsed_dates)
+                    as_of_dt = datetime.strptime(as_of_raw, "%Y-%m-%d")
+                except ValueError:
+                    return make_response(jsonify({
+                        "status": 400,
+                        "message": "Invalid as_of format. Use ISO datetime or YYYY-MM-DD."
+                    }), 400)
+            as_of_dt = normalize_datetime_to_utc(as_of_dt)
+
+        # Use the current portfolio aggregation that matches the investor statement page.
+        json_res = get_investor_portfolio_aggregated(client_code)
+        payload = json_res.get_json() if hasattr(json_res, "get_json") else None
+
+        if not payload or payload.get("status") != 200:
+            error_msg = payload.get("message") if payload else "Failed to fetch investor portfolio"
+            print(f"❌ Portfolio aggregation failed for {client_code}: {error_msg}")
+            return json_res
+
+        data = payload.get("data") or {}
+        investor_name = data.get("investor_name") or "Investor"
+        holdings = data.get("holdings") or []
+        unique_batches = int(data.get("unique_batches") or 0)
+
+        total_principal = _safe_decimal(data.get("total_principal"))
+        total_current_value = _safe_decimal(data.get("current_balance"))
+        total_profit = _safe_decimal(data.get("total_profit"))
+        total_deposits = sum(_safe_decimal(h.get("latest_valuation", {}).get("deposits")) for h in holdings)
+        total_withdrawals = sum(_safe_decimal(h.get("latest_valuation", {}).get("withdrawals")) for h in holdings)
+
+        if total_current_value == Decimal('0.00'):
+            total_current_value = sum(_safe_decimal(h.get("latest_valuation", {}).get("end_balance")) for h in holdings)
+
+        if not holdings:
+            return make_response(jsonify({
+                "status": 404,
+                "message": f"No holdings found for investor {client_code}"
+            }), 404)
+
+        # If a period was requested, rebuild statement values from epochs up to that date.
+        # This prevents "latest snapshot" bleed into historical statement PDFs.
+        period_range = "Current Portfolio"
+        statement_date = datetime.now(timezone.utc).strftime('%B %d, %Y')
+        if as_of_dt is not None:
+            investments_as_of = db.session.query(Investment).filter(
+                func.lower(Investment.internal_client_code) == func.lower(client_code),
+                Investment.date_deposited.isnot(None),
+                Investment.date_deposited <= as_of_dt
+            ).all()
+
+            unique_batches = len({inv.batch_id for inv in investments_as_of if inv.batch_id is not None})
+            total_principal = sum((Decimal(str(inv.net_principal or 0)) for inv in investments_as_of), Decimal("0.00"))
+
+            latest_fund_epochs_sq = (
+                db.session.query(
+                    func.lower(EpochLedger.fund_name).label("fund_lower"),
+                    func.max(EpochLedger.epoch_end).label("latest_epoch_end"),
+                )
+                .filter(
+                    func.lower(EpochLedger.internal_client_code) == func.lower(client_code),
+                    EpochLedger.epoch_end <= as_of_dt,
+                )
+                .group_by(func.lower(EpochLedger.fund_name))
+                .subquery("latest_fund_epochs")
+            )
+
+            epochs_as_of = (
+                db.session.query(EpochLedger)
+                .join(
+                    latest_fund_epochs_sq,
+                    (func.lower(EpochLedger.fund_name) == latest_fund_epochs_sq.c.fund_lower)
+                    & (EpochLedger.epoch_end == latest_fund_epochs_sq.c.latest_epoch_end)
+                )
+                .filter(func.lower(EpochLedger.internal_client_code) == func.lower(client_code))
+                .all()
+            )
+
+            if epochs_as_of:
+                total_deposits = sum((Decimal(str(r.deposits or 0)) for r in epochs_as_of), Decimal("0.00"))
+                total_withdrawals = sum((Decimal(str(r.withdrawals or 0)) for r in epochs_as_of), Decimal("0.00"))
+                total_current_value = sum((Decimal(str(r.end_balance or 0)) for r in epochs_as_of), Decimal("0.00"))
+                total_profit = sum((Decimal(str(r.profit or 0)) for r in epochs_as_of), Decimal("0.00"))
+
+                principal_by_fund = {}
+                for inv in investments_as_of:
+                    fund_nm = (inv.fund.fund_name if getattr(inv, "fund", None) else inv.fund_name) or "Portfolio"
+                    principal_by_fund[fund_nm] = principal_by_fund.get(fund_nm, Decimal("0.00")) + Decimal(str(inv.net_principal or 0))
+
+                holdings = []
+                for row in epochs_as_of:
+                    holdings.append({
+                        "batch_name": "—",
+                        "fund_name": row.fund_name or "Portfolio",
+                        "total_principal": float(principal_by_fund.get(row.fund_name or "Portfolio", Decimal("0.00"))),
+                        "latest_valuation": {
+                            "epoch_start": row.epoch_start.isoformat() if row.epoch_start else None,
+                            "epoch_end": row.epoch_end.isoformat() if row.epoch_end else None,
+                            "start_balance": float(row.start_balance or 0),
+                            "deposits": float(row.deposits or 0),
+                            "withdrawals": float(row.withdrawals or 0),
+                            "profit": float(row.profit or 0),
+                            "end_balance": float(row.end_balance or 0),
+                            "performance_rate_percent": float((row.performance_rate or 0) * 100),
+                        },
+                    })
+
+                min_start = min((r.epoch_start for r in epochs_as_of if r.epoch_start), default=None)
+                max_end = max((r.epoch_end for r in epochs_as_of if r.epoch_end), default=None)
+                if min_start and max_end:
+                    period_range = f"{min_start.strftime('%b %d, %Y')} - {max_end.strftime('%b %d, %Y')}"
+                    statement_date = max_end.strftime('%B %d, %Y')
+                elif max_end:
+                    period_range = max_end.strftime('%B %Y')
+                    statement_date = max_end.strftime('%B %d, %Y')
+            else:
+                # No epochs in/through this period: display as-of date explicitly.
+                period_range = as_of_dt.strftime('%B %Y')
+                statement_date = as_of_dt.strftime('%B %d, %Y')
+
+        valuation_dates = [h.get("latest_valuation", {}).get("epoch_end") for h in holdings if h.get("latest_valuation", {}).get("epoch_end")]
+        if valuation_dates:
+            try:
+                parsed_dates = [datetime.fromisoformat(d) for d in valuation_dates if d]
+                if parsed_dates:
+                    max_date = max(parsed_dates)
+                    if as_of_dt is None:
                         period_range = f"{min(parsed_dates).strftime('%b %d, %Y')} - {max_date.strftime('%b %d, %Y')}"
                         statement_date = max_date.strftime('%B %d, %Y')
-                except Exception as date_err:
-                    print(f"⚠️  Warning: Could not parse valuation dates for {client_code}: {str(date_err)}")
+            except Exception as date_err:
+                print(f"⚠️  Warning: Could not parse valuation dates for {client_code}: {str(date_err)}")
+                if as_of_dt is None:
                     period_range = "Current Portfolio"
 
-            total_deposits = sum(Decimal(str(h.get("latest_valuation", {}).get("deposits") or 0)) for h in holdings)
-            total_withdrawals = sum(Decimal(str(h.get("latest_valuation", {}).get("withdrawals") or 0)) for h in holdings)
-            total_current_value = sum(Decimal(str(h.get("latest_valuation", {}).get("end_balance") or 0)) for h in holdings)
-            total_profit = sum(Decimal(str(h.get("latest_valuation", {}).get("profit") or 0)) for h in holdings)
-            total_principal = (
-                total_current_value - total_profit + total_withdrawals
+        # Build historical statement timeline to match Investor Statement page format.
+        timeline_statements = []
+        period_statement_override = None
+        try:
+            # In period-only mode, fetch the exact period values directly from DB (EpochLedger),
+            # so the PDF reflects authoritative period numbers.
+            if period_only and as_of_dt is not None:
+                target_date = as_of_dt.date()
+                month_rows = db.session.query(EpochLedger).filter(
+                    func.lower(EpochLedger.internal_client_code) == func.lower(client_code),
+                    func.date(EpochLedger.epoch_end) == target_date,
+                ).all()
+
+                if month_rows:
+                    period_start = min((r.epoch_start for r in month_rows if r.epoch_start), default=as_of_dt)
+                    period_end = max((r.epoch_end for r in month_rows if r.epoch_end), default=as_of_dt)
+                    opening_sum = sum((Decimal(str(r.start_balance or 0)) for r in month_rows), Decimal("0.00"))
+                    deposits_sum = sum((Decimal(str(r.deposits or 0)) for r in month_rows), Decimal("0.00"))
+                    withdrawals_sum = sum((Decimal(str(r.withdrawals or 0)) for r in month_rows), Decimal("0.00"))
+                    profit_sum = sum((Decimal(str(r.profit or 0)) for r in month_rows), Decimal("0.00"))
+                    closing_sum = sum((Decimal(str(r.end_balance or 0)) for r in month_rows), Decimal("0.00"))
+
+                    fund_names = sorted({(r.fund_name or "").strip() for r in month_rows if (r.fund_name or "").strip()})
+                    fund_name = fund_names[0] if len(fund_names) == 1 else "Portfolio"
+
+                    period_statement_override = {
+                        "type": "MONTHLY_REPORT",
+                        "date": period_end.isoformat(),
+                        "label": period_end.strftime("%B %Y"),
+                        "fund_name": fund_name,
+                        "opening_balance": float(opening_sum),
+                        "deposits": float(deposits_sum),
+                        "withdrawals": float(withdrawals_sum),
+                        "profit": float(profit_sum),
+                        "end_balance": float(closing_sum),
+                        "performance_rate": 0.0,
+                        "period_start": period_start,
+                        "period_end": period_end,
+                    }
+
+            timeline_res = get_investor_statements(client_code)
+            timeline_payload = timeline_res.get_json() if hasattr(timeline_res, "get_json") else {}
+            if isinstance(timeline_payload, dict) and timeline_payload.get("status") == 200:
+                rows = timeline_payload.get("data") or []
+                if as_of_dt is not None:
+                    filtered_rows = []
+                    for row in rows:
+                        row_date = row.get("date")
+                        if not row_date:
+                            continue
+                        try:
+                            row_dt = normalize_datetime_to_utc(datetime.fromisoformat(str(row_date).replace("Z", "+00:00")))
+                        except Exception:
+                            continue
+                        if row_dt <= as_of_dt:
+                            filtered_rows.append(row)
+                    rows = filtered_rows
+
+                rows.sort(key=lambda x: x.get("date") or "", reverse=True)
+                timeline_statements = rows
+        except Exception as timeline_err:
+            print(f"⚠️  Warning: Could not load timeline statements for {client_code}: {timeline_err}")
+
+        if timeline_statements:
+            # Optional: force this PDF to represent only the selected statement period (single row),
+            # used by historical statement row downloads.
+            if period_only and as_of_dt is not None:
+                selected_row = period_statement_override
+                if selected_row is None:
+                    target_date = as_of_dt.date()
+                    selected_row = next(
+                        (
+                            r for r in timeline_statements
+                            if (r.get("type") == "MONTHLY_REPORT")
+                            and r.get("date")
+                            and datetime.fromisoformat(str(r.get("date")).replace("Z", "+00:00")).date() == target_date
+                        ),
+                        None,
+                    )
+                if selected_row is None:
+                    target_date = as_of_dt.date()
+                    selected_row = next(
+                        (
+                            r for r in timeline_statements
+                            if r.get("date")
+                            and datetime.fromisoformat(str(r.get("date")).replace("Z", "+00:00")).date() == target_date
+                        ),
+                        None,
+                    )
+                if selected_row is not None:
+                    timeline_statements = [selected_row]
+
+            total_deposits = sum((Decimal(str(r.get("deposits") or 0)) for r in timeline_statements), Decimal("0.00"))
+            total_withdrawals = sum((Decimal(str(r.get("withdrawals") or 0)) for r in timeline_statements), Decimal("0.00"))
+            total_profit = sum(
+                (Decimal(str(r.get("profit") or 0)) for r in timeline_statements if r.get("type") == "MONTHLY_REPORT"),
+                Decimal("0.00")
             )
+            if period_only:
+                total_principal = Decimal(str(timeline_statements[0].get("opening_balance") or 0)) + total_deposits
+            else:
+                total_principal = total_deposits if total_deposits > 0 else total_principal
+            latest_end = timeline_statements[0].get("end_balance")
+            if latest_end is not None:
+                total_current_value = Decimal(str(latest_end or 0))
+
+            first_date_raw = timeline_statements[-1].get("date")
+            last_date_raw = timeline_statements[0].get("date")
+            try:
+                if first_date_raw and last_date_raw:
+                    first_dt = datetime.fromisoformat(str(first_date_raw).replace("Z", "+00:00"))
+                    last_dt = datetime.fromisoformat(str(last_date_raw).replace("Z", "+00:00"))
+                    period_start_dt = (
+                        period_statement_override.get('period_start')
+                        if isinstance(period_statement_override, dict)
+                        else None
+                    ) or first_dt
+                    period_end_dt = (
+                        period_statement_override.get('period_end')
+                        if isinstance(period_statement_override, dict)
+                        else None
+                    ) or last_dt
+                    period_range = (
+                        f"{period_start_dt.strftime('%d %b %Y')} - {period_end_dt.strftime('%d %b %Y')}"
+                        if period_only
+                        else f"{first_dt.strftime('%B %Y')} - {last_dt.strftime('%B %Y')}"
+                    )
+                    statement_date = last_dt.strftime('%B %d, %Y')
+            except Exception:
+                pass
 
         code = client_code
 
@@ -1224,8 +1381,7 @@ def download_investor_statement_pdf(client_code):
         info_data = [
             ['Client Code', f': {code}', 'Statement Date', f': {statement_date}'],
             ['Client Name', f': {investor_name}', 'Number of Holdings', f': {len(holdings)}'],
-            ['Batches', f': {unique_batches}', 'Statement Period', ': MTD'],
-            ['Period Range', f': {period_range}', '', ''],
+            ['Batches', f': {unique_batches}', 'Statement Period', f': {period_range}'],
         ]
         info_table = Table(info_data, colWidths=[1.2 * inch, 1.7 * inch, 1.2 * inch, 3.4 * inch])
         info_table.setStyle(TableStyle([
@@ -1235,14 +1391,13 @@ def download_investor_statement_pdf(client_code):
             ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ('TOPPADDING', (0, 0), (-1, -1), 4),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (2, 0), (2, -2), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -2), 'LEFT'),
         ]))
         story.append(info_table)
         story.append(Spacer(1, 0.25 * inch))
 
         # Account summary
         summary_data = [
+            ['Description', 'Amount'],
             ['Total Principal Invested', f'${total_principal:,.2f}'],
             ['Deposits (YTD)', f'${total_deposits:,.2f}'],
             ['Withdrawals (YTD)', f'${total_withdrawals:,.2f}'],
@@ -1255,6 +1410,7 @@ def download_investor_statement_pdf(client_code):
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f5f5f5')),
+            ('BACKGROUND', (0, 1), (-1, 1), colors.white),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
@@ -1264,82 +1420,75 @@ def download_investor_statement_pdf(client_code):
         story.append(summary_table)
         story.append(Spacer(1, 0.25 * inch))
 
-        # Holdings details
-        holdings_rows = [[
-            'Batch ID', 'Batch', 'Fund', 'Principal', 'Withdrawals', 'Current Value', 'Profit/Loss', 'Return %'
+        # Historical statements (same structure as investor statement page table, no actions column)
+        story.append(Paragraph(f'Historical Statements ({len(timeline_statements)})', section_heading_style))
+        history_rows = [[
+            'Date', 'Statement / Event', 'Fund', 'Deposits',
+            'Opening Amount', 'Withdrawals', 'Profit', 'Closing Balance'
         ]]
-        try:
-            for holding in holdings:
-                latest = holding.get('latest_valuation') or {}
-                withdrawals = Decimal(str(latest.get('withdrawals') or 0))
-                current_value = Decimal(str(latest.get('end_balance') or 0))
-                profit_loss = Decimal(str(latest.get('profit') or 0))
-                principal = current_value - profit_loss + withdrawals
-                return_pct = (profit_loss / principal * 100) if principal > 0 else Decimal('0.00')
+        for row in timeline_statements:
+            row_type = row.get('type') or ''
+            row_date = row.get('date') or ''
+            try:
+                row_dt = datetime.fromisoformat(str(row_date).replace("Z", "+00:00"))
+                row_date_txt = row_dt.strftime('%d %b %Y')
+            except Exception:
+                row_date_txt = '—'
 
-                holdings_rows.append([
-                    str(holding.get('batch_id') or '—'),
-                    holding.get('batch_name') or '—',
-                    holding.get('fund_name') or '—',
-                    f'${principal:,.2f}',
-                    f'({withdrawals:,.2f})' if withdrawals > 0 else f'${withdrawals:,.2f}',
-                    f'${current_value:,.2f}',
-                    f'${profit_loss:,.2f}',
-                    f'{return_pct:.2f}%'
-                ])
-        except Exception as row_err:
-            print(f"⚠️  Error building holdings row for {client_code}: {str(row_err)}")
-            holdings_rows = [['Batch ID', 'Batch', 'Fund', 'Principal', 'Withdrawals', 'Current Value', 'Profit/Loss', 'Return %']]
+            label = row.get('label')
+            if not label:
+                if row_type == 'DEPOSIT':
+                    try:
+                        label = f"Deposit - {datetime.fromisoformat(str(row_date).replace('Z', '+00:00')).strftime('%B')}"
+                    except Exception:
+                        label = "Deposit"
+                elif row_type == 'WITHDRAWAL':
+                    label = "Withdrawal"
+                elif row_type == 'MONTHLY_REPORT':
+                    try:
+                        label = datetime.fromisoformat(str(row_date).replace('Z', '+00:00')).strftime('%B %Y')
+                    except Exception:
+                        label = "Monthly Report"
+                else:
+                    label = "Statement"
 
-        if len(holdings_rows) == 1:
-            holdings_rows.append(['—', 'No holdings', '$0.00', '$0.00', '$0.00', '$0.00', '0.00%', '0.00%'])
+            deposits_val = Decimal(str(row.get('deposits') or 0))
+            opening_val = Decimal(str(row.get('opening_balance') or 0))
+            withdrawals_val = Decimal(str(row.get('withdrawals') or 0))
+            profit_val = Decimal(str(row.get('profit') or 0))
+            closing_val = Decimal(str(row.get('end_balance') or 0))
 
-        # Add a final Head Office total row
-        holdings_rows.append(['', 'HEAD OFFICE TOTAL', '', '', f'${total_withdrawals:,.2f}', f'${total_current_value:,.2f}', f'${total_profit:,.2f}', ''])
+            history_rows.append([
+                row_date_txt,
+                str(label),
+                row.get('fund_name') or '—',
+                f'${deposits_val:,.2f}' if deposits_val > 0 else '—',
+                f'${opening_val:,.2f}',
+                f'${withdrawals_val:,.2f}' if withdrawals_val > 0 else '—',
+                f'${profit_val:,.2f}' if row_type == 'MONTHLY_REPORT' else '—',
+                f'${closing_val:,.2f}',
+            ])
 
-        holdings_table = Table(holdings_rows, colWidths=[0.7 * inch, 1.1 * inch, 1.4 * inch, 1.0 * inch, 0.9 * inch, 1.1 * inch, 1.0 * inch, 0.8 * inch])
-        holdings_table.setStyle(TableStyle([
-            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
-            ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+        if len(history_rows) == 1:
+            history_rows.append(['—', 'No historical statements found', '—', '—', '$0.00', '—', '—', '$0.00'])
+
+        history_table = Table(
+            history_rows,
+            colWidths=[0.85 * inch, 1.55 * inch, 0.8 * inch, 0.85 * inch, 0.95 * inch, 0.85 * inch, 0.75 * inch, 0.9 * inch]
+        )
+        history_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 8),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 8),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#00005b')),
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f5f5f5')),
-            ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
+            ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fafafa')]),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
         ]))
-        story.append(Paragraph('Holdings Details', section_heading_style))
-        story.append(holdings_table)
-        story.append(Spacer(1, 0.15 * inch))
-
-        # Reconciliation
-        reconciliation_data = [
-            ['Opening Balance', f'${(total_current_value - total_profit - total_deposits + total_withdrawals):,.2f}'],
-            ['Deposits', f'${total_deposits:,.2f}'],
-            ['Withdrawals', f'(${total_withdrawals:,.2f})'],
-            ['Performance/Profit', f'${total_profit:,.2f}'],
-            ['Closing Balance', f'${total_current_value:,.2f}'],
-        ]
-        reconciliation_table = Table(reconciliation_data, colWidths=[3.5 * inch, 3.5 * inch])
-        reconciliation_table.setStyle(TableStyle([
-            ('FONT', (0, 0), (-1, -1), 'Helvetica', 10),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
-            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f9f9f9')),
-            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
-        ]))
-        story.append(Paragraph('Reconciliation', section_heading_style))
-        story.append(reconciliation_table)
-        story.append(Spacer(1, 0.12 * inch))
-        story.append(Paragraph(
-            'Formula: Opening + Deposits - Withdrawals + Profit = Closing Balance',
-            ParagraphStyle('ReconciliationNote', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#666666'))
-        ))
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(history_table)
+        story.append(Spacer(1, 0.22 * inch))
 
         # Footer
         footer_style = ParagraphStyle(
@@ -1514,9 +1663,6 @@ def get_investor_statements(client_code):
             Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES)
         ).all()
 
-        # Calculate total principal (sum of all deposits)
-        total_principal = sum(float(inv.amount_deposited) for inv in investments)
-        
         statements = []
         
         # === ADD DEPOSIT EVENTS ===
@@ -1527,10 +1673,16 @@ def get_investor_statements(client_code):
             if batch_id not in deposit_by_batch:
                 deposit_by_batch[batch_id] = {
                     "amount": 0.0,
+                    "original_principal": 0.0,
+                    "transaction_fee_usd": 0.0,
+                    "entry_fee_usd": 0.0,
                     "date": inv.date_deposited,
                     "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                 }
-            deposit_by_batch[batch_id]["amount"] += float(inv.amount_deposited)
+            deposit_by_batch[batch_id]["amount"] += float(inv.net_principal or 0)
+            deposit_by_batch[batch_id]["original_principal"] += float(inv.amount_deposited or 0)
+            deposit_by_batch[batch_id]["transaction_fee_usd"] += float(inv.transfer_fee_deducted or 0)
+            deposit_by_batch[batch_id]["entry_fee_usd"] += float(inv.deployment_fee_deducted or 0)
         
         # Create deposit statement entries
         # Fetch batch names for deposit events
@@ -1561,6 +1713,11 @@ def get_investor_statements(client_code):
                 "date": deposit_info["date"].isoformat(),
                 "label": event_label,
                 "fund_name": deposit_info["fund_name"],
+                "original_principal": round(deposit_info["original_principal"], 2),
+                "transaction_fee_usd": round(deposit_info["transaction_fee_usd"], 2),
+                "entry_fee_usd": round(deposit_info["entry_fee_usd"], 2),
+                "deployment_fee": round(deposit_info["transaction_fee_usd"], 2),
+                "main_balance": deposit_amount,
                 "deposits": deposit_amount,
                 "opening_balance": 0.0,  # Will be calculated in running balance phase
                 "withdrawals": 0.0,
@@ -1629,9 +1786,7 @@ def get_investor_statements(client_code):
             elif stmt["type"] == "MONTHLY_REPORT":
                 # MONTHLY_REPORT: opening MUST match running_balance to maintain sequence
                 stmt["opening_balance"] = round(running_balance, 2)
-                # Recalculate profit based on corrected opening: profit = opening * (perf_rate / 100)
-                profit_calculated = round(stmt["opening_balance"] * (stmt["performance_rate"] / 100), 2) if stmt["performance_rate"] else 0.0
-                stmt["profit"] = profit_calculated
+                # Do not recompute gains in route layer; use committed ledger/statement profit values.
                 # Closing = opening +/- deposits/withdrawals + profit
                 stmt["end_balance"] = round(
                     stmt["opening_balance"] + stmt["deposits"] - stmt["withdrawals"] + stmt["profit"],
@@ -1955,6 +2110,9 @@ def get_deposit_receipt_pdf(client_code, batch_id):
         # Aggregate investment data
         inv_first = investments[0]  # Get first for metadata
         total_amount_deposited = sum(float(inv.amount_deposited) for inv in investments)
+        total_transaction_cost = sum(float(inv.transfer_fee_deducted or 0) for inv in investments)
+        total_entry_fee = sum(float(inv.deployment_fee_deducted or 0) for inv in investments)
+        total_net_after_deductions = sum(float(inv.net_principal or 0) for inv in investments)
         deposit_date = inv_first.date_deposited
         investor_name = inv_first.investor_name
         
@@ -1970,6 +2128,46 @@ def get_deposit_receipt_pdf(client_code, batch_id):
             EpochLedger.internal_client_code == client_code,
             EpochLedger.fund_name == fund_name
         ).order_by(EpochLedger.epoch_end.desc()).first()
+
+        # Determine whether this is the client's first-ever deposit or an additional top-up.
+        prior_investment_exists = db.session.query(Investment.id).filter(
+            Investment.internal_client_code == client_code,
+            Investment.date_deposited.isnot(None),
+            Investment.date_deposited < deposit_date
+        ).first() is not None
+        is_initial_deposit = not prior_investment_exists
+
+        # Pull authoritative running balances for this specific deposit event.
+        previous_standing_from_statement = None
+        ending_standing_from_statement = None
+        net_deposit_from_statement = None
+        try:
+            statements_resp = get_investor_statements(client_code)
+            statements_payload = statements_resp.get_json() if hasattr(statements_resp, "get_json") else {}
+            statements_rows = statements_payload.get("data") if isinstance(statements_payload, dict) else []
+            if isinstance(statements_rows, list):
+                target_date = deposit_date.date() if deposit_date else None
+                matched_deposit = next(
+                    (
+                        row for row in statements_rows
+                        if row.get("type") == "DEPOSIT"
+                        and row.get("batch_id") == batch_id
+                        and (
+                            not target_date
+                            or (
+                                row.get("date")
+                                and datetime.fromisoformat(str(row.get("date")).replace("Z", "+00:00")).date() == target_date
+                            )
+                        )
+                    ),
+                    None
+                )
+                if matched_deposit:
+                    previous_standing_from_statement = float(matched_deposit.get("opening_balance") or 0)
+                    ending_standing_from_statement = float(matched_deposit.get("end_balance") or 0)
+                    net_deposit_from_statement = float(matched_deposit.get("deposits") or 0)
+        except Exception as stmt_err:
+            print(f"⚠️  Could not derive deposit event standings from statements for {client_code}/{batch_id}: {stmt_err}")
         
         pdf_buffer = BytesIO()
         doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, topMargin=0.5 * inch, bottomMargin=0.5 * inch)
@@ -2091,37 +2289,86 @@ def get_deposit_receipt_pdf(client_code, batch_id):
         ]))
         story.append(amount_table)
         story.append(Spacer(1, 0.25 * inch))
+
+        # Deductions breakdown: show for both initial and additional deposits.
+        deductions_data = [
+            ['Bank Transaction Cost', f'(${total_transaction_cost:,.2f})'],
+            ['Fund Entry Fee', f'(${total_entry_fee:,.2f})'],
+            ['Net Active Principal (After Deductions)', f'${total_net_after_deductions:,.2f}'],
+        ]
+        deductions_table = Table(deductions_data, colWidths=[5.2 * inch, 2.3 * inch])
+        deductions_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, -1), 'Helvetica', 10),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f9f9f9')),
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'),
+        ]))
+        story.append(Paragraph('Deposit Deductions (USD)', section_heading_style))
+        story.append(deductions_table)
+        story.append(Spacer(1, 0.2 * inch))
         
         # Account reconciliation
-        valuation_at_deposit = db.session.query(EpochLedger).filter(
-            EpochLedger.internal_client_code == client_code,
-            EpochLedger.fund_name == fund_name,
-            EpochLedger.epoch_start <= deposit_date,
-            EpochLedger.epoch_end >= deposit_date
-        ).order_by(EpochLedger.epoch_end.desc()).first()
-
-        if valuation_at_deposit:
-            opening_balance_calc = float(valuation_at_deposit.start_balance)
-        else:
-            previous_epoch = db.session.query(EpochLedger).filter(
+        opening_balance_calc = 0.0
+        if deposit_date is not None:
+            valuation_at_deposit = db.session.query(EpochLedger).filter(
                 EpochLedger.internal_client_code == client_code,
                 EpochLedger.fund_name == fund_name,
-                EpochLedger.epoch_end < deposit_date
+                EpochLedger.epoch_start <= deposit_date,
+                EpochLedger.epoch_end >= deposit_date
             ).order_by(EpochLedger.epoch_end.desc()).first()
-            opening_balance_calc = float(previous_epoch.end_balance) if previous_epoch else 0.0
 
-        deposits_total = total_amount_deposited
+            if valuation_at_deposit:
+                opening_balance_calc = float(valuation_at_deposit.start_balance or 0)
+            else:
+                previous_epoch = db.session.query(EpochLedger).filter(
+                    EpochLedger.internal_client_code == client_code,
+                    EpochLedger.fund_name == fund_name,
+                    EpochLedger.epoch_end < deposit_date
+                ).order_by(EpochLedger.epoch_end.desc()).first()
+                opening_balance_calc = float(previous_epoch.end_balance) if previous_epoch else 0.0
+
+        # Current standing should reflect post-deduction principal + later valuation effects.
+        from app.Batch.controllers import BatchController
+        current_balance = 0.0
+        for inv in investments:
+            inv_batch = batch if batch and batch.id == inv.batch_id else db.session.query(Batch).filter(Batch.id == inv.batch_id).first()
+            values = BatchController._calculate_batch_investment_values(inv, inv_batch, db.session)
+            current_balance += float(values.get("current_balance", 0))
+
+        deposits_total = net_deposit_from_statement if net_deposit_from_statement is not None else total_net_after_deductions
         withdrawals_total = 0.0
-        profit = 0.0
-        current_balance = opening_balance_calc + deposits_total
+        base_opening_balance = (
+            previous_standing_from_statement
+            if previous_standing_from_statement is not None
+            else opening_balance_calc
+        )
+        standing_after_deposit = (
+            ending_standing_from_statement
+            if ending_standing_from_statement is not None
+            else (base_opening_balance + deposits_total)
+        )
+        profit = current_balance - (standing_after_deposit - withdrawals_total)
 
-        reconciliation_data = [
-            ['Opening Balance', f'${opening_balance_calc:,.2f}'],
-            ['Deposits This Period', f'${deposits_total:,.2f}'],
-            ['Withdrawals This Period', f'(${withdrawals_total:,.2f})'],
-            ['Performance / Profit', f'${profit:,.2f}'],
-            ['Current Account Balance', f'${current_balance:,.2f}'],
-        ]
+        if is_initial_deposit:
+            reconciliation_data = [
+                ['Opening Balance (Before Initial Deposit)', f'${base_opening_balance:,.2f}'],
+                ['Initial Deposit Amount', f'${total_amount_deposited:,.2f}'],
+                ['Bank Transaction Cost', f'(${total_transaction_cost:,.2f})'],
+                ['Fund Entry Fee', f'(${total_entry_fee:,.2f})'],
+                ['Final Standing Balance (After Deductions)', f'${standing_after_deposit:,.2f}'],
+            ]
+        else:
+            reconciliation_data = [
+                ['Previous Standing Before Top-up', f'${base_opening_balance:,.2f}'],
+                ['Additional Deposit Amount', f'${total_amount_deposited:,.2f}'],
+                ['Net Amount Added (After Fees)', f'${deposits_total:,.2f}'],
+                ['Total Standing After Deposit', f'${standing_after_deposit:,.2f}'],
+            ]
         
         reconciliation_table = Table(reconciliation_data, colWidths=[5.2 * inch, 2.3 * inch])
         reconciliation_table.setStyle(TableStyle([
@@ -2133,10 +2380,14 @@ def get_deposit_receipt_pdf(client_code, batch_id):
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
         ]))
-        story.append(Paragraph('Account Reconciliation (USD)', section_heading_style))
+        story.append(Paragraph(
+            'Initial Deposit Reconciliation (USD)' if is_initial_deposit else 'Additional Deposit Reconciliation (USD)',
+            section_heading_style
+        ))
         story.append(reconciliation_table)
-        story.append(Spacer(1, 0.2 * inch))
+        story.append(Spacer(1, 0.12 * inch))
         
         # Details section
         details_style = ParagraphStyle(
@@ -2147,15 +2398,24 @@ def get_deposit_receipt_pdf(client_code, batch_id):
             leading=11,
             leftIndent=0
         )
-        details_text = (
-            f"<b>Deposit Confirmation:</b> This statement confirms that USD {total_amount_deposited:,.2f} "
-            f"was received for {investor_name} ({client_code}) into the {fund_name} fund as part of "
-            f"<b>{batch_name}</b>. The deposit has been processed and allocated to your investment account. "
-            f"Your current account balance reflects this deposit, withdrawals, and applicable performance gains/losses. "
-            f"All figures are in United States Dollars (USD) unless otherwise noted."
-        )
+        if is_initial_deposit:
+            details_text = (
+                f"<b>Initial Deposit Confirmation:</b> USD {total_amount_deposited:,.2f} was received for "
+                f"{investor_name} ({client_code}) into {fund_name} under <b>{batch_name}</b>. "
+                f"Transaction cost of USD {total_transaction_cost:,.2f} and entry fee of USD {total_entry_fee:,.2f} "
+                f"were applied, resulting in a net active principal and final standing balance of "
+                f"USD {standing_after_deposit:,.2f}."
+            )
+        else:
+            details_text = (
+                f"<b>Additional Deposit Confirmation:</b> A top-up deposit of USD {total_amount_deposited:,.2f} "
+                f"was received for {investor_name} ({client_code}) into {fund_name} under <b>{batch_name}</b>. "
+                f"The standing balance before deposit was USD {base_opening_balance:,.2f}; "
+                f"net amount added after applicable fees is USD {deposits_total:,.2f}, "
+                f"bringing total standing after deposit to USD {standing_after_deposit:,.2f}."
+            )
         story.append(Paragraph(details_text, details_style))
-        story.append(Spacer(1, 0.2 * inch))
+        story.append(Spacer(1, 0.12 * inch))
         
         # Footer
         footer_style = ParagraphStyle(
@@ -2166,12 +2426,9 @@ def get_deposit_receipt_pdf(client_code, batch_id):
             leading=10,
         )
         story.append(Paragraph(
-            '<b>Disclaimer:</b> This is an electronically generated deposit confirmation. '
-            'No signature is required. This statement is provided for informational purposes only. '
-            'All figures are subject to verification and may not reflect real-time data.',
-            footer_style
-        ))
-        story.append(Paragraph(
+            'Disclaimer: This is an electronically generated deposit confirmation. No signature is required. '
+            'This statement is provided for informational purposes only. All figures are subject to verification '
+            'and may not reflect real-time data. '
             f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y at %H:%M UTC')} | "
             f"Batch ID: {batch_id} | Investment ID: {inv_first.id}",
             footer_style
@@ -2766,15 +3023,34 @@ def list_pending_emails():
     }
     """
     try:
-        from app.Investments.model import PendingEmail
+        from app.Investments.model import PendingEmail, Investment
         rows = (
             db.session.query(PendingEmail)
             .filter(PendingEmail.status == 'Pending_Confirmation')
             .order_by(PendingEmail.created_at.asc())
             .all()
         )
-        data = [
-            {
+        data = []
+        for r in rows:
+            inv = r.investor
+            if not inv and r.investor_id:
+                inv = db.session.get(Investment, r.investor_id)
+
+            net_after_deductions = None
+            if inv is not None:
+                net_after_deductions = (
+                    (inv.amount_deposited or 0)
+                    - (inv.transfer_fee_deducted or 0)
+                    - (inv.deployment_fee_deducted or 0)
+                )
+
+            entry_fee_percent = None
+            if r.batch is not None:
+                entry_fee_percent = getattr(r.batch, "transfer_entry_fee_percent", None)
+                if entry_fee_percent is None:
+                    entry_fee_percent = getattr(r.batch, "entry_fee_percentage", None)
+
+            data.append({
                 "id": r.id,
                 "email_type": r.email_type,
                 "recipient_email": r.recipient_email,
@@ -2787,9 +3063,12 @@ def list_pending_emails():
                 "batch_id": r.batch_id,
                 "investor_id": r.investor_id,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
+                "initial_deposit_usd": float(inv.amount_deposited) if inv and inv.amount_deposited is not None else None,
+                "transaction_fee_usd": float(inv.transfer_fee_deducted) if inv and inv.transfer_fee_deducted is not None else None,
+                "entry_fee_usd": float(inv.deployment_fee_deducted) if inv and inv.deployment_fee_deducted is not None else None,
+                "entry_fee_percent": float(entry_fee_percent) if entry_fee_percent is not None else None,
+                "main_balance": float(net_after_deductions) if net_after_deductions is not None else None,
+            })
         return make_response(jsonify({"status": 200, "count": len(data), "data": data}), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
@@ -2823,12 +3102,13 @@ def confirm_pending_email(email_id):
 
         # ── Send via SMTP ──
         try:
+            bcc_email = current_app.config.get("MAIL_BCC", EmailService.BCC_EMAIL)
             msg = Message(
                 subject=pending.subject,
                 recipients=[pending.recipient_email],
-                bcc=[EmailService.BCC_EMAIL],
+                bcc=[bcc_email],
                 body=pending.body,
-                sender=current_app.config.get('MAIL_DEFAULT_SENDER', EmailService.BCC_EMAIL)
+                sender=current_app.config.get('MAIL_DEFAULT_SENDER', bcc_email)
             )
             mail.send(msg)
             send_ok = True

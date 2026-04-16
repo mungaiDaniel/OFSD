@@ -9,7 +9,7 @@ Run with: pytest tests/test_batch_crud.py -v
 import pytest
 import json
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from app.database.database import db
 from app.Batch.model import Batch
@@ -226,10 +226,25 @@ class TestBatchRetrieval:
                 current_hash='d' * 64,
             )
             db.session.add_all([ledger_one, ledger_two])
+
+            from app.Valuation.model import BatchValuation
+
+            db.session.add(
+                BatchValuation(
+                    batch_id=batch.id,
+                    period_end_date=datetime(2026, 5, 31, tzinfo=timezone.utc),
+                    balance_at_end_of_period=Decimal("26250.00"),
+                    performance_rate=Decimal("0.05"),
+                    total_principal=Decimal("25000.00"),
+                    total_profit=Decimal("1250.00"),
+                    total_withdrawals=Decimal("0.00"),
+                )
+            )
             db.session.commit()
+            batch_id = batch.id
 
         response = client.get(
-            f'/api/v1/batches/{batch.id}',
+            f'/api/v1/batches/{batch_id}',
             headers=get_auth_headers(auth_token)
         )
 
@@ -316,6 +331,20 @@ class TestBatchRetrieval:
                 current_hash='b' * 64,
             )
             db.session.add(stale_ledger)
+
+            from app.Valuation.model import BatchValuation
+
+            db.session.add(
+                BatchValuation(
+                    batch_id=sample_batch.id,
+                    period_end_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
+                    balance_at_end_of_period=Decimal("60000.00"),
+                    performance_rate=Decimal("0"),
+                    total_principal=Decimal("52500.00"),
+                    total_profit=Decimal("7500.00"),
+                    total_withdrawals=Decimal("0.00"),
+                )
+            )
             db.session.commit()
 
         response = client.get(
