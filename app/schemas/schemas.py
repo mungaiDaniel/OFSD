@@ -4,8 +4,8 @@ class AdminSchema(Schema):
     id = fields.Int()
     name = fields.Str()
     email = fields.Email()
-    password = fields.Str()
-    user_role = fields.Str()
+    role = fields.Str()
+    status = fields.Str()
     created = fields.DateTime()
 
 

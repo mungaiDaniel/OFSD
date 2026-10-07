@@ -1,0 +1,4 @@
+Client Code,Client Name,Email,Date Deposited,Amount Deposited,Date Transferred,Amount Transferred,Date Deployed,Amount Deployed,Number of Shares,Fund Invested In,Share Class,Currency,Batch Name,Current Balance
+ATM-002,Ann Wambui Kithinzi,ann.kithinzi@example.com,2026-01-25,50000.00,—,49950.00,2026-02-01,49800.00,498.0000,Atium,ATM-USD-A,USD,Batch Feb 2026 - Atium USD,53908.50
+ATM-001,Joy Kendi Muthuri,joy.kendi@example.com,2026-01-02,1000000.00,—,999500.00,2026-01-10,998000.00,771.9200,Atium,ATM-KES-I,KES,Batch Jan 2026 - Atium KES,1072639.73
+AXM-001,Kamal Mani,kamal.mani@example.com,2026-01-05,100000.00,—,100000.00,2026-01-15,100000.00,1000.0000,Axiom,AXM-USD-A,USD,Batch Jan 2026 - Axiom,115450.00

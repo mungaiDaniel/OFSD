@@ -1,0 +1,11 @@
+{
+  "run": {
+    "id": 6,
+    "core_fund_id": 1,
+    "epoch_start": "2026-06-01T03:00:00",
+    "epoch_end": "2026-06-30T03:00:00",
+    "head_office_total": 165762.5
+  },
+  "ledgers": [],
+  "statements": []
+}

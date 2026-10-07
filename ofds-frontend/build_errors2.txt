@@ -1,0 +1,52 @@
+﻿yarn run v1.22.22
+$ tsc -b && vite build
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+[32mΓ£ô[39m 1715 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                                      [39m[1m[2m  1.09 kB[22m[1m[22m[2m Γöé gzip:   0.56 kB[22m
+[2mdist/[22m[35massets/index-DRQQ0Vxp.css                       [39m[1m[2m252.53 kB[22m[1m[22m[2m Γöé gzip:  35.78 kB[22m
+[2mdist/[22m[36massets/table-vendor-CcTw8je4.js                 [39m[1m[2m  0.04 kB[22m[1m[22m[2m Γöé gzip:   0.06 kB[22m
+[2mdist/[22m[36massets/fundService-Cxw0fBNn.js                  [39m[1m[2m  0.20 kB[22m[1m[22m[2m Γöé gzip:   0.17 kB[22m
+[2mdist/[22m[36massets/valuationService-cadPHmFm.js             [39m[1m[2m  0.29 kB[22m[1m[22m[2m Γöé gzip:   0.20 kB[22m
+[2mdist/[22m[36massets/chevron-right-dblFTsyC.js                [39m[1m[2m  0.29 kB[22m[1m[22m[2m Γöé gzip:   0.24 kB[22m
+[2mdist/[22m[36massets/plus-C9M2sJiJ.js                         [39m[1m[2m  0.32 kB[22m[1m[22m[2m Γöé gzip:   0.25 kB[22m
+[2mdist/[22m[36massets/arrow-left-Cvy8G_6C.js                   [39m[1m[2m  0.33 kB[22m[1m[22m[2m Γöé gzip:   0.26 kB[22m
+[2mdist/[22m[36massets/search-DS1Mw0A5.js                       [39m[1m[2m  0.34 kB[22m[1m[22m[2m Γöé gzip:   0.27 kB[22m
+[2mdist/[22m[36massets/upload-Ce6_-jIA.js                       [39m[1m[2m  0.42 kB[22m[1m[22m[2m Γöé gzip:   0.32 kB[22m
+[2mdist/[22m[36massets/download-D7f03l6-.js                     [39m[1m[2m  0.43 kB[22m[1m[22m[2m Γöé gzip:   0.32 kB[22m
+[2mdist/[22m[36massets/shield-BsfAfXzt.js                       [39m[1m[2m  0.44 kB[22m[1m[22m[2m Γöé gzip:   0.33 kB[22m
+[2mdist/[22m[36massets/reportService-M1ZgPwaY.js                [39m[1m[2m  0.54 kB[22m[1m[22m[2m Γöé gzip:   0.32 kB[22m
+[2mdist/[22m[36massets/file-spreadsheet-CsJtauKR.js             [39m[1m[2m  0.54 kB[22m[1m[22m[2m Γöé gzip:   0.33 kB[22m
+[2mdist/[22m[36massets/FundPerformanceLineChart-BwdTbyS0.js     [39m[1m[2m  0.64 kB[22m[1m[22m[2m Γöé gzip:   0.41 kB[22m
+[2mdist/[22m[36massets/batchService-MDM63CgT.js                 [39m[1m[2m  0.67 kB[22m[1m[22m[2m Γöé gzip:   0.34 kB[22m
+[2mdist/[22m[36massets/StatusBadge-BDAcem0P.js                  [39m[1m[2m  0.84 kB[22m[1m[22m[2m Γöé gzip:   0.39 kB[22m
+[2mdist/[22m[36massets/FundAllocationDoughnut-CftNp3pY.js       [39m[1m[2m  0.87 kB[22m[1m[22m[2m Γöé gzip:   0.52 kB[22m
+[2mdist/[22m[36massets/zod-CF8Ht9JM.js                          [39m[1m[2m  1.06 kB[22m[1m[22m[2m Γöé gzip:   0.56 kB[22m
+[2mdist/[22m[36massets/BatchStageStepper-De8tzVN9.js            [39m[1m[2m  1.54 kB[22m[1m[22m[2m Γöé gzip:   0.62 kB[22m
+[2mdist/[22m[36massets/KPICard-Bd6vyQ1p.js                      [39m[1m[2m  1.68 kB[22m[1m[22m[2m Γöé gzip:   0.75 kB[22m
+[2mdist/[22m[36massets/LoginPage-Bq9XihdY.js                    [39m[1m[2m  3.06 kB[22m[1m[22m[2m Γöé gzip:   1.32 kB[22m
+[2mdist/[22m[36massets/DepositsWithdrawalsBarChart-DDoW3ESn.js  [39m[1m[2m  3.12 kB[22m[1m[22m[2m Γöé gzip:   1.22 kB[22m
+[2mdist/[22m[36massets/FundDetailPage-BgfnmNHf.js               [39m[1m[2m  3.69 kB[22m[1m[22m[2m Γöé gzip:   1.46 kB[22m
+[2mdist/[22m[36massets/PortfolioPage-D_EP6nVa.js                [39m[1m[2m  3.79 kB[22m[1m[22m[2m Γöé gzip:   1.56 kB[22m
+[2mdist/[22m[36massets/ReportListPage-W8pP5fd2.js               [39m[1m[2m  4.01 kB[22m[1m[22m[2m Γöé gzip:   1.37 kB[22m
+[2mdist/[22m[36massets/SettingsPage-Bcu8zRg9.js                 [39m[1m[2m  4.27 kB[22m[1m[22m[2m Γöé gzip:   1.36 kB[22m
+[2mdist/[22m[36massets/UserManagementPage-DMajIX7e.js           [39m[1m[2m  4.33 kB[22m[1m[22m[2m Γöé gzip:   1.53 kB[22m
+[2mdist/[22m[36massets/RegisterPage-DUqmNQgO.js                 [39m[1m[2m  4.35 kB[22m[1m[22m[2m Γöé gzip:   1.58 kB[22m
+[2mdist/[22m[36massets/FundListPage-DvbIVRip.js                 [39m[1m[2m  4.36 kB[22m[1m[22m[2m Γöé gzip:   1.51 kB[22m
+[2mdist/[22m[36massets/WithdrawalListPage-Brwn0sPe.js           [39m[1m[2m  4.72 kB[22m[1m[22m[2m Γöé gzip:   1.73 kB[22m
+[2mdist/[22m[36massets/ValuationListPage-BSCENsw7.js            [39m[1m[2m  4.89 kB[22m[1m[22m[2m Γöé gzip:   1.56 kB[22m
+[2mdist/[22m[36massets/ReportDetailPage-BPHdTD9O.js             [39m[1m[2m  5.80 kB[22m[1m[22m[2m Γöé gzip:   1.94 kB[22m
+[2mdist/[22m[36massets/AuditLogPage-pO5bXsuw.js                 [39m[1m[2m  6.11 kB[22m[1m[22m[2m Γöé gzip:   2.01 kB[22m
+[2mdist/[22m[36massets/ValuationCreatePage-DKBdr_e4.js          [39m[1m[2m  6.78 kB[22m[1m[22m[2m Γöé gzip:   2.10 kB[22m
+[2mdist/[22m[36massets/BatchCreatePage-uGHbxdNV.js              [39m[1m[2m  6.84 kB[22m[1m[22m[2m Γöé gzip:   2.18 kB[22m
+[2mdist/[22m[36massets/OverviewPage-m17DwG8e.js                 [39m[1m[2m  6.92 kB[22m[1m[22m[2m Γöé gzip:   2.46 kB[22m
+[2mdist/[22m[36massets/BatchListPage-C9i_Z51C.js                [39m[1m[2m  7.12 kB[22m[1m[22m[2m Γöé gzip:   2.45 kB[22m
+[2mdist/[22m[36massets/BatchDetailPage-BVGEArJP.js              [39m[1m[2m  7.36 kB[22m[1m[22m[2m Γöé gzip:   2.45 kB[22m
+[2mdist/[22m[36massets/BatchPerformancePage-Bw9EZNHC.js         [39m[1m[2m  9.69 kB[22m[1m[22m[2m Γöé gzip:   3.00 kB[22m
+[2mdist/[22m[36massets/form-vendor-B7BGwO_7.js                  [39m[1m[2m 87.28 kB[22m[1m[22m[2m Γöé gzip:  24.62 kB[22m
+[2mdist/[22m[36massets/chart-vendor-CSYNlie9.js                 [39m[1m[2m184.39 kB[22m[1m[22m[2m Γöé gzip:  64.61 kB[22m
+[2mdist/[22m[36massets/index-DnZ-RfH9.js                        [39m[1m[2m391.46 kB[22m[1m[22m[2m Γöé gzip: 126.28 kB[22m
+[32mΓ£ô built in 22.05s[39m
+Done in 38.74s.

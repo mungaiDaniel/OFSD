@@ -1,0 +1,570 @@
+Reloader watcher process detected — skipping scheduler startup here (worker process will start them).
+ * Serving Flask app 'main'
+ * Debug mode: on
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:4455
+Press CTRL+C to quit
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+127.0.0.1 - - [20/Sep/2026 11:07:51] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:07:51] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:13] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:13] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:20] "OPTIONS /api/v1/bulk-upload/mapping?headers=Client%20Code||Name||Email||Phone%20Number||Fund||Shares%20Code||Amount%20Deposited%20(USD)||Date HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:20] "GET /api/v1/bulk-upload/mapping?headers=Client%20Code||Name||Email||Phone%20Number||Fund||Shares%20Code||Amount%20Deposited%20(USD)||Date HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:26] "OPTIONS /api/v1/bulk-upload/mapping HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:26] "POST /api/v1/bulk-upload/mapping HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:27] "OPTIONS /api/v1/bulk-upload/validate HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:31] "POST /api/v1/bulk-upload/validate HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:37] "OPTIONS /api/v1/bulk-upload/commit HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:39] "POST /api/v1/bulk-upload/commit HTTP/1.1" 202 -
+127.0.0.1 - - [20/Sep/2026 11:08:39] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:39] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:41] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:42] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:44] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:46] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:46] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:47] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:49] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:51] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:52] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:52] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:54] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:56] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:57] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:59] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:08:59] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:01] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:02] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:04] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:04] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:06] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:07] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:09] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:10] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:10] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:12] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:13] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:15] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:17] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:17] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:18] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:20] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:22] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:23] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:23] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:25] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:27] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:28] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:30] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:30] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:31] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:33] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:35] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:36] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:36] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:38] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:40] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:41] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:43] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:43] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:44] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:46] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:48] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:49] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:49] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:51] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:52] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:54] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:56] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:56] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:57] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:09:59] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:01] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:02] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:02] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:04] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:06] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:07] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:07] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:09] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:11] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:12] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:14] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:14] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:15] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:17] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:19] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:20] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:20] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:22] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:23] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:25] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:27] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:27] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:28] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:30] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:32] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:33] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:33] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:35] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:36] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:38] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:40] "OPTIONS /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:40] "GET /api/v1/bulk-upload/jobs/7 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:45] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:45] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:51] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:51] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:55] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:58] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:58] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:58] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:10:58] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:00] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:00] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:00] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:00] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "GET /api/v1/batches HTTP/1.1" 200 -
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:662: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:716: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+127.0.0.1 - - [20/Sep/2026 11:11:02] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:02] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:03] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:03] "OPTIONS /api/v1/reports/daily-activity?date_from=2026-09-20&date_to=2026-09-20 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:04] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:07] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:08] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:08] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:09] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:09] "GET /api/v1/reports/daily-activity?date_from=2026-09-20&date_to=2026-09-20 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:10] "OPTIONS /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:10] "OPTIONS /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:10] "OPTIONS /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:10] "OPTIONS /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:10] "GET /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:11] "GET /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:15] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:15] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:15] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:16] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:22] "GET /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:27] "OPTIONS /api/v1/emails/suppress-all HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:30] "POST /api/v1/emails/suppress-all HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:30] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:30] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:30] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:30] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:33] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:33] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:33] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:33] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "OPTIONS /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "OPTIONS /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "OPTIONS /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "OPTIONS /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "GET /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:34] "GET /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:36] "OPTIONS /api/v1/batches/24/investments-light HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:45] "GET /api/v1/batches/24/investments-light HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:45] "GET /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:11:52] "GET /api/v1/reports/batch/24/reconciliation HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:11] "OPTIONS /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:33] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:33] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:46] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:52] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:52] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:12:59] "PATCH /api/v1/batches/24 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:38] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/withdrawals?page=1&per_page=200 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/withdrawals?page=1&per_page=200 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/withdrawals?status=Pending&count_only=true HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "OPTIONS /api/v1/withdrawals?status=Pending&count_only=true HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/withdrawals?page=1&per_page=200 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/withdrawals?status=Pending&count_only=true HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/withdrawals?status=Pending&count_only=true HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/withdrawals?page=1&per_page=200 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:40] "GET /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:41] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:41] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:42] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:42] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:44] "OPTIONS /api/v1/investors?page=1&per_page=50&search=j HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:45] "OPTIONS /api/v1/investors?page=1&per_page=50&search=ja HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:45] "GET /api/v1/investors?page=1&per_page=50&search=j HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:45] "GET /api/v1/investors?page=1&per_page=50&search=ja HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:47] "OPTIONS /api/v1/investors/DPRP-F046339/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:47] "OPTIONS /api/v1/investors/DPRP-F046339/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:47] "OPTIONS /api/v1/investors/DPRP-F046339/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:47] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "OPTIONS /api/v1/investors/DPRP-F046339/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "OPTIONS /api/v1/investors/DPRP-F046339/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "OPTIONS /api/v1/investors/DPRP-F046339/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/investors/DPRP-F046339/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/investors/DPRP-F046339/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/investors/DPRP-F046339/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/investors/DPRP-F046339/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/investors/DPRP-F046339/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:48] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:49] "GET /api/v1/investors/DPRP-F046339/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:49] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:50] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:14:58] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:15:00] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:15:10] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\status_update_controller.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\status_update_controller.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\status_update_controller.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\utils\\email_service.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\utils\\email_service.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+127.0.0.1 - - [20/Sep/2026 11:22:48] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:49] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:49] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:49] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:49] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:50] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:50] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:50] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:50] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:22:51] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "OPTIONS /api/v1/emails/suppress-all HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "POST /api/v1/emails/suppress-all HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "OPTIONS /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "GET /api/v1/emails/inbox HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "OPTIONS /api/v1/emails/queue-status HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:02] "GET /api/v1/emails/queue-status HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\utils\\email_service.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:08] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:662: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+127.0.0.1 - - [20/Sep/2026 11:23:08] "GET /api/v1/batches HTTP/1.1" 200 -
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:716: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+127.0.0.1 - - [20/Sep/2026 11:23:09] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:09] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:09] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:09] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:09] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:10] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:10] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:13] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:13] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:13] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:13] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:13] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:14] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:15] "OPTIONS /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:15] "OPTIONS /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:15] "GET /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:15] "GET /api/v1/funds HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/reports/runs HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/valuation/nav/runs?limit=50 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/reports/runs HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:16] "OPTIONS /api/v1/valuation/nav/runs?limit=50 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/reports/runs HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/valuation/nav/runs?limit=50 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/reports/runs HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/valuation/nav/runs?limit=50 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:17] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:18] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:18] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:21] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:21] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:21] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:23:21] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\utils\\email_service.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\scratch_test_deploy_stage.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Investments\\route.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+ * Detected change in 'C:\\Users\\dantez\\Documents\\projects\\OFSD\\app\\Batch\\controllers.py', reloading
+Batch scheduler initialized
+Email send queue scheduler initialized
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 603-870-143
+127.0.0.1 - - [20/Sep/2026 11:34:43] "GET /api/v1/login HTTP/1.1" 405 -
+127.0.0.1 - - [20/Sep/2026 11:37:26] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:26] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:662: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+127.0.0.1 - - [20/Sep/2026 11:37:29] "GET /api/v1/batches HTTP/1.1" 200 -
+C:\Users\dantez\Documents\projects\OFSD\app\Funds\routes.py:716: SAWarning: Coercing Subquery object into a select() for use in IN(); please pass a select() construct explicitly
+  Withdrawal.internal_client_code.in_(active_codes_subq),
+127.0.0.1 - - [20/Sep/2026 11:37:29] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:29] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:30] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:30] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:30] "OPTIONS /api/v1/reports/daily-activity?date_from=2026-09-20&date_to=2026-09-20 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:31] "GET /api/v1/stats/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:35] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:35] "OPTIONS /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:36] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:36] "GET /api/v1/batches HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:37] "GET /api/v1/reports/daily-activity?date_from=2026-09-20&date_to=2026-09-20 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:38] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:38] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:38] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:38] "OPTIONS /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:39] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:39] "GET /api/v1/investors?page=1&per_page=1 HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:41] "OPTIONS /api/v1/investors?page=1&per_page=50&search=g HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:42] "GET /api/v1/investors?page=1&per_page=50&search=g HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:37:44] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:03] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:03] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:06] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:07] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:35] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:35] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:38:38] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/emails/pending HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "OPTIONS /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/overview HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/history HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/investors/DPRP-F045176/statements HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:10] "GET /api/v1/funds/summary HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:15] "OPTIONS /api/v1/investors/DPRP-F045176/statement/pdf HTTP/1.1" 200 -
+127.0.0.1 - - [20/Sep/2026 11:39:16] "GET /api/v1/investors/DPRP-F045176/statement/pdf HTTP/1.1" 200 -

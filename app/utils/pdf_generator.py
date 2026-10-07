@@ -5,42 +5,59 @@ This module generates investor statements showing their fund positions,
 accrued days, and distributed profits across funds.
 """
 
-from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.platypus import Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-from datetime import datetime
+from reportlab.lib.enums import TA_LEFT
+from datetime import datetime, timezone
 from decimal import Decimal
 import io
+from typing import Optional, Dict, List, Any
+from xml.sax.saxutils import escape
+
+from app.utils.statement_theme import (
+    append_branded_footer,
+    append_divider_line,
+    append_fund_title,
+    build_doc_template,
+    build_statement_brand_block,
+    get_statement_theme,
+    resolve_jh_logo_path,
+)
 
 
 class PDFStatementGenerator:
-    """Generate PDF investment statements grouped by fund"""
+    """Generate PDF investment statements with multiple statement types"""
 
-    def __init__(self, batch_data, output_path=None):
-        """
-        Initialize PDF generator.
-        
-        Args:
-            batch_data: dict containing batch info, investments, and distributions
-            output_path: Path to save PDF (if None, returns bytes)
-        """
-        self.batch_data = batch_data
+    STATEMENT_TYPE_DEPOSIT = "deposit"
+    STATEMENT_TYPE_MONTHLY = "monthly"
+    STATEMENT_TYPE_WITHDRAWAL = "withdrawal"
+
+    def __init__(self, statement_data: Dict[str, Any], output_path: Optional[str] = None):
+        self.statement_data = statement_data
         self.output_path = output_path
+        self.statement_type = statement_data.get('statement_type', self.STATEMENT_TYPE_MONTHLY)
+        fund = statement_data.get('fund', {}) or {}
+        fund_name = fund.get('fund_name') or statement_data.get('fund_name')
+        self.theme = get_statement_theme([fund_name] if fund_name else [])
+        self.jh_logo_path = resolve_jh_logo_path([fund_name] if fund_name else [])
         self.styles = getSampleStyleSheet()
         self._setup_custom_styles()
 
+    def _hex(self, value: str):
+        return colors.HexColor(value)
+
     def _setup_custom_styles(self):
         """Define custom styles for the PDF"""
+        theme = self.theme
         self.title_style = ParagraphStyle(
             'CustomTitle',
             parent=self.styles['Heading1'],
-            fontSize=16,
-            textColor=colors.HexColor('#1a1a1a'),
+            fontSize=18,
+            textColor=self._hex(theme.primary),
             spaceAfter=12,
-            alignment=TA_CENTER,
+            alignment=TA_LEFT,
             fontName='Helvetica-Bold'
         )
 
@@ -48,8 +65,18 @@ class PDFStatementGenerator:
             'CustomHeading',
             parent=self.styles['Heading2'],
             fontSize=12,
-            textColor=colors.HexColor('#333333'),
-            spaceAfter=6,
+            textColor=self._hex(theme.primary),
+            spaceAfter=8,
+            fontName='Helvetica-Bold'
+        )
+
+        self.fund_title_style = ParagraphStyle(
+            'CustomFundTitle',
+            parent=self.styles['Heading1'],
+            fontSize=13,
+            textColor=self._hex(theme.primary),
+            spaceAfter=4,
+            leading=16,
             fontName='Helvetica-Bold'
         )
 
@@ -57,222 +84,302 @@ class PDFStatementGenerator:
             'CustomNormal',
             parent=self.styles['Normal'],
             fontSize=10,
-            textColor=colors.HexColor('#333333')
+            textColor=self._hex('#333333'),
+            leading=14
         )
 
+        self.small_style = ParagraphStyle(
+            'CustomSmall',
+            parent=self.styles['Normal'],
+            fontSize=8,
+            textColor=self._hex(theme.text_muted),
+            leading=12
+        )
+        self.table_value_style = ParagraphStyle(
+            'TableValue',
+            parent=self.normal_style,
+            fontSize=10,
+            textColor=self._hex('#333333'),
+            leading=12
+        )
+        self.footer_style = ParagraphStyle(
+            'CustomFooter',
+            parent=self.normal_style,
+            fontSize=9,
+            textColor=self._hex(theme.text_muted),
+            leading=12,
+        )
+        self.tagline_style = ParagraphStyle(
+            'CustomTagline',
+            parent=self.normal_style,
+            fontSize=8,
+            textColor=self._hex('#333333'),
+            leading=11,
+        )
+
+    def _format_currency(self, amount: Decimal, currency: str) -> str:
+        if currency == "KES":
+            return f"KES {float(amount):,.2f}"
+        return f"${float(amount):,.2f}"
+
+    def _kv_table_style(self) -> TableStyle:
+        theme = self.theme
+        return TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), self._hex(theme.label_column_bg)),
+            ('TEXTCOLOR', (0, 0), (0, -1), self._hex(theme.primary)),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+        ])
+
+    def _history_table_style(self) -> TableStyle:
+        theme = self.theme
+        return TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), self._hex(theme.table_header_bg)),
+            ('TEXTCOLOR', (0, 0), (-1, 0), self._hex(theme.table_header_text)),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self._hex(theme.row_alt)])
+        ])
+
     def generate(self):
-        """
-        Generate the PDF document.
-        
-        Returns:
-            bytes: PDF content if output_path is None, else writes to file
-        """
         if self.output_path:
-            doc = SimpleDocTemplate(self.output_path, pagesize=letter)
+            doc = build_doc_template(self.output_path, self.theme)
         else:
             buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            doc = build_doc_template(buffer, self.theme)
 
-        # Build content
         story = []
-        
-        # Title
-        story.append(Paragraph(
-            "Investment Statement",
-            self.title_style
-        ))
-        story.append(Spacer(1, 0.2 * inch))
+        if self.statement_type == self.STATEMENT_TYPE_DEPOSIT:
+            story.extend(self._build_deposit_statement())
+        elif self.statement_type == self.STATEMENT_TYPE_MONTHLY:
+            story.extend(self._build_monthly_statement())
+        elif self.statement_type == self.STATEMENT_TYPE_WITHDRAWAL:
+            story.extend(self._build_withdrawal_statement())
+        else:
+            raise ValueError(f"Unknown statement type: {self.statement_type}")
 
-        # Batch Summary
-        story.extend(self._build_batch_summary())
-        story.append(Spacer(1, 0.2 * inch))
-
-        # Fund Sections
-        story.extend(self._build_fund_sections())
-
-        # Build PDF
         doc.build(story)
 
         if self.output_path:
             return f"PDF saved to {self.output_path}"
-        else:
-            buffer.seek(0)
-            return buffer.getvalue()
+        buffer.seek(0)
+        return buffer.getvalue()
 
-    def _build_batch_summary(self):
-        """Build batch summary section"""
+    def _build_header_section(self) -> List[Any]:
         content = []
-        batch = self.batch_data.get('batch', {})
+        investor = self.statement_data.get('investor', {})
+        share_class = self.statement_data.get('share_class', {})
+        fund = self.statement_data.get('fund', {})
 
-        summary_data = [
-            ['Batch Name', batch.get('batch_name', 'N/A')],
-            ['Certificate Number', batch.get('certificate_number', 'N/A')],
-            ['Deployment Date', batch.get('date_deployed', 'N/A')],
-            ['Expected Close Date', batch.get('expected_close_date', 'N/A')],
-            ['Total Principal', f"${self.batch_data.get('total_principal', 0):,.2f}"],
-            ['Statement Date', datetime.utcnow().strftime('%Y-%m-%d')]
+        title_text = {
+            self.STATEMENT_TYPE_DEPOSIT: "Deposit Confirmation Statement",
+            self.STATEMENT_TYPE_MONTHLY: "Monthly Valuation Statement",
+            self.STATEMENT_TYPE_WITHDRAWAL: "Withdrawal Statement"
+        }.get(self.statement_type, "Investment Statement")
+
+        brand_block = build_statement_brand_block(self.theme, self.jh_logo_path)
+        if brand_block is not None:
+            content.append(brand_block)
+            content.append(Spacer(1, 0.08 * inch))
+            append_divider_line(content, self.theme, width=6.5)
+            content.append(Spacer(1, 0.10 * inch))
+
+        fund_name = fund.get('fund_name')
+        if self.theme.is_jh and fund_name:
+            content.append(Paragraph(escape(str(fund_name).upper()), self.fund_title_style))
+            content.append(Spacer(1, 0.06 * inch))
+
+        content.append(Paragraph(title_text, self.title_style))
+        content.append(Spacer(1, 0.2 * inch))
+
+        header_data = [
+            ['Investor Name', Paragraph(escape(str(investor.get('investor_name', 'N/A'))), self.table_value_style)],
+            ['Client Code', Paragraph(escape(str(investor.get('internal_client_code', 'N/A'))), self.table_value_style)],
+            ['Fund Name', Paragraph(escape(str(fund.get('fund_name', 'N/A'))), self.table_value_style)],
+            ['Share Class', Paragraph(escape(f"{share_class.get('class_name', 'N/A')} ({share_class.get('currency', 'USD')})"), self.table_value_style)],
+            ['Statement Date', Paragraph(datetime.now(timezone.utc).strftime('%Y-%m-%d'), self.table_value_style)]
         ]
 
-        table = Table(summary_data, colWidths=[2.5 * inch, 4 * inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e8f4f8')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
-        ]))
-
-        content.append(table)
+        header_table = Table(header_data, colWidths=[2.5 * inch, 4 * inch])
+        header_table.setStyle(self._kv_table_style())
+        content.append(header_table)
+        content.append(Spacer(1, 0.2 * inch))
         return content
 
-    def _build_fund_sections(self):
-        """Build sections for each fund"""
+    def _append_footer(self, content: List[Any], disclaimer: str) -> None:
+        pdf_styles = {
+            "footer": self.footer_style,
+            "tagline": self.tagline_style,
+        }
+        append_branded_footer(
+            content,
+            self.theme,
+            pdf_styles,
+            disclaimer,
+            f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y %H:%M UTC')}",
+        )
+
+    def _build_deposit_statement(self) -> List[Any]:
         content = []
-        investments = self.batch_data.get('investments', [])
-        distributions = self.batch_data.get('distributions', [])
+        content.extend(self._build_header_section())
 
-        # Group investments by fund
-        funds_dict = {}
-        for inv in investments:
-            fund_name = inv.get('fund_name', 'Default')
-            if fund_name not in funds_dict:
-                funds_dict[fund_name] = []
-            funds_dict[fund_name].append(inv)
+        investor = self.statement_data.get('investor', {})
+        share_class = self.statement_data.get('share_class', {})
+        currency = share_class.get('currency', 'USD')
 
-        for fund_name in sorted(funds_dict.keys()):
-            content.append(PageBreak())
-            
-            # Fund title
-            content.append(Paragraph(
-                f"Fund: {fund_name}",
-                self.heading_style
-            ))
-            content.append(Spacer(1, 0.1 * inch))
+        content.append(Paragraph("Deposit Details", self.heading_style))
 
-            # Investments table
-            content.extend(self._build_fund_investments_table(fund_name, funds_dict[fund_name]))
-            content.append(Spacer(1, 0.15 * inch))
-
-            # Distributions table
-            fund_distributions = [d for d in distributions if d.get('fund_name') == fund_name]
-            if fund_distributions:
-                content.extend(self._build_distributions_table(fund_name, fund_distributions))
-
-        return content
-
-    def _build_fund_investments_table(self, fund_name, investments):
-        """Build investments table for a specific fund"""
-        content = []
-        
-        content.append(Paragraph("Investments by Fund", self.heading_style))
-
-        table_data = [
-            ['Internal Code', 'Investor Name', 'Amount (USD)', 'Date Deposited', 'Status']
+        deposit_data = [
+            ['Deposit Amount', self._format_currency(investor.get('amount_deposited', Decimal('0')), currency)],
+            ['Transfer Cost', self._format_currency(investor.get('transfer_fee_deducted', Decimal('0')), currency)],
+            ['Entry Fee (2%)', self._format_currency(investor.get('entry_fee', Decimal('0')), currency)],
+            ['Net Invested', self._format_currency(investor.get('net_invested', Decimal('0')), currency)],
+            ['NAV per Share at Deployment', f"{float(investor.get('deployment_nav', 0)):,.6f}"],
+            ['Shares Purchased', f"{float(investor.get('shares_purchased', 0)):,.2f}"],
+            ['Contract Note Number', investor.get('contract_note', 'N/A')]
         ]
 
-        for inv in investments:
-            table_data.append([
-                inv.get('internal_client_code', 'N/A'),
-                inv.get('investor_name', 'N/A'),
-                f"${float(inv.get('amount_deposited', 0)):,.2f}",
-                inv.get('date_deposited', 'N/A'),
-                'Active' if inv.get('active', True) else 'Inactive'
-            ])
+        deposit_table = Table(deposit_data, colWidths=[3 * inch, 3.5 * inch])
+        deposit_table.setStyle(self._kv_table_style())
+        content.append(deposit_table)
+        content.append(Spacer(1, 0.3 * inch))
 
-        table = Table(table_data, colWidths=[1.2 * inch, 2 * inch, 1.2 * inch, 1.3 * inch, 0.8 * inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')])
-        ]))
-
-        content.append(table)
+        self._append_footer(
+            content,
+            "<b>Disclaimer:</b> This statement confirms receipt of your deposit. Investment values may fluctuate. "
+            "Please retain this document for your records.",
+        )
         return content
 
-    def _build_distributions_table(self, fund_name, distributions):
-        """Build profit distributions table"""
+    def _build_monthly_statement(self) -> List[Any]:
         content = []
-        
-        content.append(Paragraph("Profit Distributions", self.heading_style))
+        content.extend(self._build_header_section())
 
-        table_data = [
-            ['Internal Code', 'Investor', 'Days Active', 'Weighted Capital', 'Share %', 'Profit Allocated']
+        share_class = self.statement_data.get('share_class', {})
+        currency = share_class.get('currency', 'USD')
+
+        content.append(Paragraph("Current Position", self.heading_style))
+
+        position_data = [
+            ['Shares Held', f"{float(self.statement_data.get('shares_held', 0)):,.2f}"],
+            ['Previous NAV', f"{float(self.statement_data.get('previous_nav', 0)):,.6f}"],
+            ['Current NAV', f"{float(self.statement_data.get('current_nav', 0)):,.6f}"],
+            ['Performance %', f"{float(self.statement_data.get('performance_pct', 0)):,.2f}%"],
+            ['Current Market Value', self._format_currency(self.statement_data.get('current_value', Decimal('0')), currency)]
         ]
 
-        total_allocated = Decimal('0.00')
+        position_table = Table(position_data, colWidths=[3 * inch, 3.5 * inch])
+        position_table.setStyle(self._kv_table_style())
+        content.append(position_table)
+        content.append(Spacer(1, 0.2 * inch))
 
-        for dist in distributions:
-            allocated = dist.get('profit_allocated', Decimal('0.00'))
-            if isinstance(allocated, str):
-                allocated = Decimal(allocated)
-            
-            table_data.append([
-                dist.get('internal_client_code', 'N/A'),
-                dist.get('investor_name', 'N/A'),
-                str(dist.get('days_active', 0)),
-                f"${float(dist.get('weighted_capital', 0)):,.2f}",
-                f"{float(dist.get('profit_share_percentage', 0)):.2f}%",
-                f"${float(allocated):,.2f}"
-            ])
-            total_allocated += allocated
+        if self.statement_data.get('valuation_history'):
+            content.append(Paragraph("Historical Valuations", self.heading_style))
 
-        # Add total row
-        table_data.append([
-            '', '', '', '',
-            'TOTAL',
-            f"${float(total_allocated):,.2f}"
-        ])
+            history_data = [['Date', 'NAV', 'Value']]
+            for valuation in self.statement_data['valuation_history']:
+                history_data.append([
+                    valuation.get('date', 'N/A'),
+                    f"{float(valuation.get('nav', 0)):,.6f}",
+                    self._format_currency(valuation.get('value', Decimal('0')), currency)
+                ])
 
-        table = Table(table_data, colWidths=[1 * inch, 1.5 * inch, 0.9 * inch, 1.3 * inch, 0.9 * inch, 1.2 * inch])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#D9E1F2')),
-            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-            ('BACKGROUND', (0, 1), (-1, -2), colors.white),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f0f0f0')])
-        ]))
+            history_table = Table(history_data, colWidths=[1.5 * inch, 2.5 * inch, 2.5 * inch])
+            history_table.setStyle(self._history_table_style())
+            content.append(history_table)
+            content.append(Spacer(1, 0.2 * inch))
 
-        content.append(table)
+        if self.statement_data.get('transaction_history'):
+            content.append(Paragraph("Transaction History", self.heading_style))
+
+            transaction_data = [['Date', 'Type', 'Amount']]
+            for transaction in self.statement_data['transaction_history']:
+                transaction_data.append([
+                    transaction.get('date', 'N/A'),
+                    transaction.get('type', 'N/A'),
+                    self._format_currency(transaction.get('amount', Decimal('0')), currency)
+                ])
+
+            transaction_table = Table(transaction_data, colWidths=[1.5 * inch, 2 * inch, 2.5 * inch])
+            transaction_table.setStyle(self._history_table_style())
+            content.append(transaction_table)
+
         return content
+
+    def _build_withdrawal_statement(self) -> List[Any]:
+        content = []
+        content.extend(self._build_header_section())
+
+        share_class = self.statement_data.get('share_class', {})
+        currency = share_class.get('currency', 'USD')
+
+        content.append(Paragraph("Withdrawal Details", self.heading_style))
+
+        withdrawal_data = [
+            ['Shares Redeemed', f"{float(self.statement_data.get('shares_redeemed', 0)):,.2f}"],
+            ['Redemption NAV', f"{float(self.statement_data.get('redemption_nav', 0)):,.6f}"],
+            ['Gross Proceeds', self._format_currency(self.statement_data.get('gross_proceeds', Decimal('0')), currency)],
+            ['Transfer Cost', self._format_currency(self.statement_data.get('transfer_cost', Decimal('0')), currency)],
+            ['Exit Fee', self._format_currency(self.statement_data.get('exit_fee', Decimal('0')), currency)],
+            ['Net Withdrawal', self._format_currency(self.statement_data.get('net_withdrawal', Decimal('0')), currency)]
+        ]
+
+        withdrawal_table = Table(withdrawal_data, colWidths=[3 * inch, 3.5 * inch])
+        withdrawal_table.setStyle(self._kv_table_style())
+        content.append(withdrawal_table)
+        content.append(Spacer(1, 0.2 * inch))
+
+        if self.statement_data.get('remaining_shares', 0) > 0:
+            content.append(Paragraph("Remaining Position", self.heading_style))
+
+            remaining_data = [
+                ['Shares Remaining', f"{float(self.statement_data.get('remaining_shares', 0)):,.2f}"],
+                ['Current Value', self._format_currency(self.statement_data.get('remaining_value', Decimal('0')), currency)]
+            ]
+
+            remaining_table = Table(remaining_data, colWidths=[3 * inch, 3.5 * inch])
+            remaining_table.setStyle(self._kv_table_style())
+            content.append(remaining_table)
+
+        return content
+
+
+def generate_deposit_statement_pdf(statement_data, output_path=None):
+    statement_data['statement_type'] = PDFStatementGenerator.STATEMENT_TYPE_DEPOSIT
+    generator = PDFStatementGenerator(statement_data, output_path)
+    return generator.generate()
+
+
+def generate_monthly_statement_pdf(statement_data, output_path=None):
+    statement_data['statement_type'] = PDFStatementGenerator.STATEMENT_TYPE_MONTHLY
+    generator = PDFStatementGenerator(statement_data, output_path)
+    return generator.generate()
+
+
+def generate_withdrawal_statement_pdf(statement_data, output_path=None):
+    statement_data['statement_type'] = PDFStatementGenerator.STATEMENT_TYPE_WITHDRAWAL
+    generator = PDFStatementGenerator(statement_data, output_path)
+    return generator.generate()
 
 
 def generate_investor_statement_pdf(batch_id, output_path=None):
-    """
-    Convenience function to generate PDF statement for a batch.
-    
-    Args:
-        batch_id: ID of the batch
-        output_path: Optional path to save PDF
-    
-    Returns:
-        bytes or str: PDF bytes or confirmation message
-    """
     from app.Batch.model import Batch
-    from app.Investments.model import Investment
-    from app.Performance.pro_rata_distribution import ProRataDistribution
+    from app.Investments.model import Investment, EpochLedger
 
     try:
-        batch = Batch.query.get(batch_id)
+        from app.database.database import db
+        batch = db.session.get(Batch, batch_id)
         if not batch:
             return False, "Batch not found"
 
-        # Gather data
         batch_data = {
             'batch': {
                 'id': batch.id,
@@ -294,25 +401,28 @@ def generate_investor_statement_pdf(batch_id, output_path=None):
                 }
                 for inv in batch.investments
             ],
-            'distributions': [
-                {
-                    'investment_id': dist.investment_id,
-                    'investor_name': dist.investor_name,
-                    'internal_client_code': dist.internal_client_code,
-                    'fund_name': dist.fund_name,
-                    'days_active': dist.days_active,
-                    'weighted_capital': dist.weighted_capital,
-                    'profit_share_percentage': dist.profit_share_percentage,
-                    'profit_allocated': dist.profit_allocated
-                }
-                for dist in batch.distributions
-            ]
+            'distributions': []
         }
 
-        # Generate PDF
+        distributions = []
+        for ledger, inv in db.session.query(EpochLedger, Investment).join(
+            Investment, Investment.internal_client_code == EpochLedger.internal_client_code
+        ).filter(
+            Investment.batch_id == batch_id
+        ).all():
+            distributions.append({
+                'investor_name': getattr(inv, 'investor_name', 'Client'),
+                'internal_client_code': ledger.internal_client_code,
+                'fund_name': ledger.fund_name,
+                'weighted_capital': ledger.start_balance,
+                'profit_share_percentage': 0,
+                'profit_allocated': ledger.profit
+            })
+        batch_data['distributions'] = distributions
+        batch_data['total_profit'] = sum(float(d['profit_allocated']) for d in batch_data['distributions'])
+
         generator = PDFStatementGenerator(batch_data, output_path)
         result = generator.generate()
-
         return True, result
 
     except Exception as e:

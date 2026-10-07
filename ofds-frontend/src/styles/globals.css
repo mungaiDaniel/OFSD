@@ -1,0 +1,606 @@
+@import "tailwindcss";
+
+/* ══════════════════════════════════════════════════════
+   OFDS DESIGN TOKENS — Matched to reference dashboard
+   ══════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Backgrounds — Deep Navy Canvas ── */
+  --color-bg-base:         #0a1020;
+  --color-bg-surface:      #1e293b;
+  --color-bg-surface-alt:  #243447;
+  --color-bg-overlay:      #2d3f55;
+  --color-bg-input:        #0d1929;
+
+  /* ── Brand Blues — Royal Blue ── */
+  --color-brand-600: #0040cc;
+  --color-brand-500: #0052e0;
+  --color-brand-400: #0066ff;
+  --color-brand-300: #4d94ff;
+  --color-brand-200: #99c2ff;
+  --color-brand-100: #cce0ff;
+  --color-brand-50:  rgba(0, 102, 255, 0.1);
+
+  /* ── Success ── */
+  --color-success:       #22c55e;
+  --color-success-hover: #4ade80;
+  --color-success-bg:    rgba(34, 197, 94, 0.12);
+
+  /* ── Destructive ── */
+  --color-destructive:       #ef4444;
+  --color-destructive-hover: #f87171;
+  --color-destructive-bg:    rgba(239, 68, 68, 0.12);
+
+  /* ── Warning ── */
+  --color-warning:       #f59e0b;
+  --color-warning-hover: #fbbf24;
+  --color-warning-bg:    rgba(245, 158, 11, 0.12);
+
+  /* ── Text ── */
+  --color-text-primary:   #ffffff;
+  --color-text-secondary: #94a3b8;
+  --color-text-tertiary:  #64748b;
+  --color-text-disabled:  #475569;
+
+  /* ── Borders ── */
+  --color-border-subtle:  rgba(255, 255, 255, 0.05);
+  --color-border-default: rgba(255, 255, 255, 0.1);
+  --color-border-strong:  rgba(255, 255, 255, 0.2);
+  --color-border-brand:   #0066ff;
+
+  /* ── Chart Colors ── */
+  --color-chart-axiom:      #0066ff;
+  --color-chart-atium:      #22c55e;
+  --color-chart-fund-3:     #f59e0b;
+  --color-chart-fund-4:     #a855f7;
+  --color-chart-deposit:    #22c55e;
+  --color-chart-withdrawal: #ef4444;
+  --color-chart-grid:       rgba(255,255,255,0.06);
+  --color-chart-label:      #64748b;
+
+  /* ── Typography ── */
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body:    "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", "Fira Code", monospace;
+
+  /* ── Layout ── */
+  --sidebar-width:     250px;
+  --sidebar-collapsed: 64px;
+  --topbar-height:     56px;
+}
+
+:root {
+  --color-kes: #fcd34d;
+  --color-kes-strong: #f59e0b;
+  --color-kes-bg: rgba(245, 158, 11, 0.12);
+  --color-kes-border: rgba(245, 158, 11, 0.3);
+  --color-usd: #60a5fa;
+  --color-usd-strong: #3b82f6;
+  --color-usd-bg: rgba(59, 130, 246, 0.12);
+  --color-usd-border: rgba(59, 130, 246, 0.3);
+}
+
+.ofds-page {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.ofds-page-title {
+  color: var(--color-text-primary);
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.ofds-page-subtitle {
+  color: var(--color-text-secondary);
+  margin: 0;
+  font-size: 13px;
+}
+.ofds-glass {
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  background: rgba(16, 24, 45, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.ofds-section-label {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin: 0 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* ══════════════════════════════════════════════════════
+   BASE STYLES
+   ══════════════════════════════════════════════════════ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+.btn-hover {
+  transition: all 0.25s ease-in-out;
+}
+
+.btn-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0.95;
+}
+#root { min-height: 100vh; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-bg-base); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* ── Utilities ── */
+.focus-ring:focus-visible  { outline: 2px solid var(--color-brand-400); outline-offset: 2px; }
+.font-tabular { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ══════════════════════════════════════════════════════
+   BOOTSTRAP 5 OVERRIDES — Matched to Reference Images
+   ══════════════════════════════════════════════════════ */
+
+/* ── Cards — Floating dark surface, no visible border ── */
+.card {
+  background-color: var(--color-bg-surface) !important;
+  color: var(--color-text-primary) !important;
+  border: none !important;
+  border-radius: 0.75rem !important;
+}
+.card-body { padding: 1.25rem !important; }
+
+/* remove strong white outlines that may appear when focus or active */
+.card:focus-visible,
+.card:active,
+.card:hover {
+  border-color: rgba(255,255,255,0.06) !important;
+  background: var(--color-bg-surface) !important;
+}
+
+/* ── Form Inputs — Dark transparent with pill option ── */
+.form-control,
+.form-select {
+  background-color: var(--color-bg-input) !important;
+  color: var(--color-text-primary) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.form-control::placeholder { color: var(--color-text-disabled) !important; }
+.form-control:focus,
+.form-select:focus {
+  background-color: var(--color-bg-input) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-brand-400) !important;
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.2) !important;
+}
+.form-label { color: var(--color-text-secondary) !important; font-weight: 500; }
+
+/* ── Buttons — Royal Blue Primary ── */
+.btn-primary {
+  background-color: var(--color-brand-400) !important;
+  border-color: var(--color-brand-400) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+}
+.btn-primary:hover {
+  background-color: var(--color-brand-500) !important;
+  border-color: var(--color-brand-500) !important;
+  box-shadow: 0 4px 15px rgba(0, 102, 255, 0.35) !important;
+  transform: translateY(-1px);
+}
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.6 !important; }
+
+/* ── Table — Dark with Royal Blue hover ── */
+.table-dark {
+  --bs-table-bg: var(--color-bg-surface) !important;
+  --bs-table-border-color: rgba(255, 255, 255, 0.05) !important;
+  --bs-table-striped-bg: var(--color-bg-surface-alt) !important;
+  color: var(--color-text-primary) !important;
+}
+.table-dark th {
+  color: var(--color-text-secondary) !important;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--color-bg-surface-alt) !important;
+  border-color: rgba(255,255,255,0.05) !important;
+}
+.table-dark td {
+  border-color: rgba(255,255,255,0.04) !important;
+  vertical-align: middle;
+}
+.table-dark tbody tr {
+  transition: background-color 0.15s ease;
+  cursor: pointer;
+}
+.table-dark tbody tr:hover {
+  background-color: rgba(0, 102, 255, 0.07) !important;
+}
+
+/* ── Sidebar Navigation Links ── */
+.sidebar-nav .nav-link {
+  color: var(--color-text-secondary) !important;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  margin-bottom: 2px;
+  border-left: 2px solid transparent;
+}
+.sidebar-nav .nav-link:hover {
+  background-color: rgba(0, 102, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+.sidebar-nav .nav-link.active {
+  background-color: rgba(0, 102, 255, 0.12) !important;
+  color: #ffffff !important;
+  border-left-color: var(--color-brand-400);
+  font-weight: 600;
+}
+
+/* ── Modals / Dropdowns ── */
+.modal-content,
+.dropdown-menu {
+  background-color: var(--color-bg-surface-alt) !important;
+  color: var(--color-text-primary) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+.dropdown-item { color: var(--color-text-primary) !important; }
+.dropdown-item:hover {
+  background-color: rgba(0, 102, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+/* ── KPI Value Glow ── */
+.kpi-value-glow {
+  text-shadow: 0 0 20px rgba(0, 102, 255, 0.3);
+}
+
+/* ── Status Badges ── */
+.badge-active   { background-color: rgba(34, 197, 94, 0.12)  !important; color: #22c55e !important; }
+.badge-pending  { background-color: rgba(245, 158, 11, 0.12) !important; color: #f59e0b !important; }
+.badge-closed   { background-color: rgba(239, 68, 68, 0.12)  !important; color: #ef4444 !important; }
+
+
+
+@theme {
+  /* ── Backgrounds (3-layer depth) ── */
+  --color-bg-base: #060B1A;
+  --color-bg-surface: #0B1228;
+  --color-bg-surface-alt: #0F1833;
+  --color-bg-overlay: #131E3D;
+  --color-bg-input: #0A1020;
+
+  /* ── Brand Blues (action hierarchy) ── */
+  --color-brand-600: #0017C0;
+  --color-brand-500: #2A54A0;
+  --color-brand-400: #3B6FD4;
+  --color-brand-300: #6B9AEE;
+  --color-brand-200: #9BBCF5;
+  --color-brand-100: #C5D9FA;
+  --color-brand-50: #0B1A3A;
+
+  /* ── Success ── */
+  --color-success: #3DBB78;
+  --color-success-hover: #5CCFA0;
+  --color-success-bg: #0B2E1F;
+
+  /* ── Destructive ── */
+  --color-destructive: #D44B4B;
+  --color-destructive-hover: #E06868;
+  --color-destructive-bg: #2E0B0B;
+
+  /* ── Warning ── */
+  --color-warning: #D4940B;
+  --color-warning-hover: #E8AD2E;
+  --color-warning-bg: #2E1F0B;
+
+  /* ── Text hierarchy ── */
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #94A3B8;
+  --color-text-tertiary: #64748B;
+  --color-text-disabled: #475569;
+
+  /* ── Borders ── */
+  --color-border-subtle: #1E293B;
+  --color-border-default: #334155;
+  --color-border-strong: #475569;
+  --color-border-brand: #3B6FD4;
+
+  /* ── Chart identity ── */
+  --color-chart-axiom: #3B6FD4;
+  --color-chart-atium: #3DBB78;
+  --color-chart-fund-3: #D4940B;
+  --color-chart-fund-4: #9B6FE3;
+  --color-chart-deposit: #3DBB78;
+  --color-chart-withdrawal: #D44B4B;
+  --color-chart-grid: #1E293B;
+  --color-chart-label: #94A3B8;
+
+  /* ── Typography ── */
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  /* ── Spacing (8px base grid) ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ── Layout ── */
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 56px;
+}
+
+/* ══════════════════════════════════════════════════════
+   BASE STYLES
+   ══════════════════════════════════════════════════════ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── Scrollbar styling (dark theme) ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
+
+/* ── Focus ring utility ── */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-border-brand);
+  outline-offset: 2px;
+}
+
+/* ── Monospaced number utility ── */
+.font-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ══════════════════════════════════════════════════════
+   BOOTSTRAP 5 OVERRIDES
+   ══════════════════════════════════════════════════════ */
+
+/* Form Control Inputs */
+.form-control, .form-select {
+  background-color: var(--color-bg-input) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-border-default) !important;
+}
+
+.form-control:focus, .form-select:focus {
+  background-color: var(--color-bg-input) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-brand-400) !important;
+  box-shadow: 0 0 0 0.25rem rgba(59, 111, 212, 0.25) !important;
+}
+
+/* Cards */
+.card {
+  background-color: var(--color-bg-surface) !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: var(--color-brand-400) !important;
+  border-color: var(--color-brand-400) !important;
+  color: #FFFFFF !important;
+}
+
+.btn-primary:hover {
+  background-color: var(--color-brand-500) !important;
+  border-color: var(--color-brand-500) !important;
+  color: #FFFFFF !important;
+}
+
+/* Modals / Dropdowns */
+.modal-content, .dropdown-menu {
+  background-color: var(--color-bg-surface-alt) !important;
+  color: var(--color-text-primary) !important;
+  border-color: var(--color-border-subtle) !important;
+}
+
+.dropdown-item {
+  color: var(--color-text-primary) !important;
+}
+.dropdown-item:hover {
+  background-color: var(--color-bg-overlay) !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   APP SHELL — mobile sidebar + main content padding
+   ══════════════════════════════════════════════════════ */
+
+.app-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1040;
+  margin: 0;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app-main-content {
+  padding: 0.75rem;
+}
+
+@media (min-width: 576px) {
+  .app-main-content {
+    padding: 1.25rem;
+  }
+}
+
+@media (min-width: 992px) {
+  .app-main-content {
+    padding: 1.5rem 2rem 2rem;
+  }
+}
+
+@media (min-width: 1200px) {
+  .app-main-content {
+    padding: 1.75rem 2.25rem 2.25rem;
+  }
+}
+
+/* Page title row: stack CTA under title on narrow screens */
+.page-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+@media (max-width: 575.98px) {
+  .page-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* Horizontal scroll for wide tables (use wrapper around .table) */
+.app-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Collapsed sidebar: center nav icons */
+.sidebar-nav .nav-link {
+  justify-content: flex-start;
+}
+
+@media (min-width: 992px) {
+  .app-sidebar-desktop-collapsed .sidebar-nav .nav-link {
+    justify-content: center;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   PRINT — hide app chrome; statement pages fill the sheet
+   ══════════════════════════════════════════════════════ */
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* App wrapper uses dark inline backgrounds; force pure white in print */
+  .min-h-screen,
+  .app-main-column,
+  .container-fluid {
+    background: #fff !important;
+  }
+
+  .app-sidebar,
+  .app-topbar,
+  .app-sidebar-backdrop {
+    display: none !important;
+  }
+
+  [data-sonner-toaster],
+  [data-sonner-toast] {
+    display: none !important;
+  }
+
+  .app-main-column {
+    margin-left: 0 !important;
+    min-height: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .app-main-content {
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .investor-statement-document {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 12mm 14mm !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

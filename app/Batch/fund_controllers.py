@@ -11,9 +11,10 @@ from app.Performance.pro_rata_distribution import ProRataDistribution
 from app.database.database import db
 from app.logic.pro_rata_service import MultiFundProRataService
 from app.utils.excel_handler import ExcelUploadHandler
+from app.utils.email_service import EmailService
 from app.utils.pdf_generator import generate_investor_statement_pdf
 from flask import jsonify, make_response
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 
@@ -217,7 +218,7 @@ class BatchFundPerformanceController:
                 gross_profit=gross_profit,
                 transaction_costs=transaction_costs,
                 cumulative_profit=cumulative,
-                report_date=datetime.utcnow(),
+                report_date=datetime.now(timezone.utc),
                 reporting_period=data.get('reporting_period', 'MONTHLY')
             )
 
@@ -291,6 +292,12 @@ class ExcelUploadController:
                     "status": 400,
                     "message": message
                 }), 400)
+
+            # Send Stage 1 Batch email asynchronously
+            try:
+                EmailService.send_deposit_received_batch(batch, excel_data)
+            except Exception as email_err:
+                logger.warning(f"Failed to trigger stage 1 batch emails: {email_err}")
 
             return make_response(jsonify({
                 "status": 201,

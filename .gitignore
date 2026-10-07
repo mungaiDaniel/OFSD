@@ -1,0 +1,5 @@
+venv
+
+
+# Secrets - never commit
+.env

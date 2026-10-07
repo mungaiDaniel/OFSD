@@ -2,6 +2,8 @@ from app.Admin.model import User
 from app.schemas.schemas import admin_schema, admins_schema
 from app.database.database import db
 from flask import jsonify, make_response
+from app.utils.email_service import EmailService
+from sqlalchemy import func
 
 
 
@@ -10,24 +12,47 @@ class UserController:
 
     @classmethod
     def create_user(cls, data, session):
+        # Validate required fields
+        if not data.get('email'):
+            return make_response(jsonify({
+                "status": 400,
+                "message": "email is required"
+            }), 400)
+        
+        if not data.get('password'):
+            return make_response(jsonify({
+                "status": 400,
+                "message": "password is required"
+            }), 400)
+        
+        if not data.get('name'):
+            return make_response(jsonify({
+                "status": 400,
+                "message": "name is required"
+            }), 400)
         
         password = User.generate_password_hash(data.get('password'))
+        email = str(data.get("email") or "").strip().lower()
         
+        # Gatekeeper defaults: new signups are pending + normal user.
         user = cls.model(
             name=data.get('name'),
-            email=data.get('email'),
+            email=email,
             password=password,
-            user_role= "user"
+            role='user',
+            status='pending',
         )
         
 
-        if session.query(User.query.filter(User.email == user.email).exists()).scalar():
+        if session.query(User.query.filter(func.lower(User.email) == email).exists()).scalar():
             
             return make_response(jsonify({
             "status": 409,
             "message": "user with that email already exists"
         }), 409)
         
+
+        user.save(session)
 
         user.save(session)
        
@@ -40,8 +65,7 @@ class UserController:
 
     @staticmethod
     def get_admin():
-        user_role = 'super_admin'
-        employe = User.query.filter_by(user_role=user_role).all()
+        employe = User.query.filter(User.role.in_(['admin', 'super_admin'])).all()
         result = admins_schema.dump(employe)
 
         return result
@@ -56,7 +80,7 @@ class UserController:
         if admin is None:
             return 
 
-        admin.user_role = user_role
+        admin.role = user_role
 
 
         db.session.commit()
@@ -72,7 +96,7 @@ class UserController:
         if admin is None:
             return
 
-        admin.user_role = user_role
+        admin.role = user_role
 
 
         db.session.commit()
@@ -82,9 +106,8 @@ class UserController:
     def get_user_by_id(cls, id, session):
         user = User.get_one(cls.model, id, session)
     
-        if user is  None:
-            
-            return         
+        if user is None:
+            return None
         return user
         
         
