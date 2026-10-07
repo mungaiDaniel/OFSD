@@ -22,6 +22,7 @@ from app.Investments.model import (
 )
 from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError
+from app.utils.statement_theme import resolve_product_type
 
 funds_v1 = Blueprint("funds_v1", __name__, url_prefix='/')
 
@@ -1055,6 +1056,7 @@ def compute_funds_summary_data(session=None):
             "id": fund.id,
             "fund_name": fund.fund_name,
             "fund_code": fund.fund_code,
+            "product_type": resolve_product_type([fund.fund_name], [fund.fund_code]),
             "is_active": fund.is_active,
             "investors_count": int(investors_count),
             "classes": classes_data,

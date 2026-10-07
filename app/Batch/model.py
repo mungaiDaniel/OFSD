@@ -1,5 +1,6 @@
 from app.database.database import db
 from base_model import Base
+from app.database.product_type import ProductTypeEnum, FUNDS
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric, ForeignKey, Date, Index, UniqueConstraint, Text
 
@@ -9,6 +10,7 @@ class Batch(Base, db.Model):
     __table_args__ = (
         UniqueConstraint('batch_name', name='uq_batches_batch_name'),
         Index('ix_batches_share_class_is_open', 'share_class_id', 'is_open'),
+        Index('ix_batches_product_type', 'product_type'),
     )
     
     id = Column(Integer, primary_key=True)
@@ -34,6 +36,11 @@ class Batch(Base, db.Model):
     cached_total_capital = Column(Numeric(20, 2), nullable=True)
     cached_total_capital_at = Column(DateTime(timezone=True), nullable=True)
     
+    # FUNDS vs SHARES (see app.database.product_type). Derived from the batch's
+    # fund identity at creation time and immutable after — every deposit/holding
+    # in this batch must match it (see Investment.product_type).
+    product_type = Column(ProductTypeEnum, nullable=False, default=FUNDS, server_default=FUNDS)
+
     # Share-based valuation columns
     share_class_id = Column(Integer, ForeignKey('share_classes.id', ondelete='SET NULL'), nullable=True)
     is_open = Column(Boolean, default=True, nullable=False)  # True while accepting investors, False after Thursday close
@@ -45,11 +52,23 @@ class Batch(Base, db.Model):
     deployment_breakdown = Column(Text, nullable=True)  # JSON serialization of multi-class deployment totals
     deployment_date_actual = Column(Date, nullable=True)  # Actual deployment date from Head Office confirmation
 
-    # DPRP oversubscription pro-rata allocation (see is_dangote_dprp_fund) — set once, at
-    # deployment time, when the admin toggles "Oversubscribed" in the deploy modal because the
-    # batch's total deposits exceed what could actually be deployed into DPRP shares.
+    # Oversubscription banner (see app.logic.shares_deployment_service): True when a
+    # SHARES batch's shares_allocated_total < shares_demand_total. Previously also set by
+    # the old flat-rate DPRP allocation (Task 2/3 replaced that with the NGN-based
+    # allocation below); allocation_rate is unused by the new logic and kept only so
+    # historical batches deployed under the old system still display their rate.
     is_oversubscribed = Column(Boolean, default=False, nullable=False)
-    allocation_rate = Column(Numeric(7, 4), nullable=True)  # e.g. 60.0000 = 60% deployed, 40% refunded
+    allocation_rate = Column(Numeric(7, 4), nullable=True)  # DEPRECATED — see shares_deployment_service
+
+    # SHARES-only deployment inputs/results (see app.logic.shares_deployment_service) —
+    # entered manually at the Deployed step, locked once batch.deployment_confirmed is
+    # True. total_shares (above) doubles as "sum of shares actually allocated" for a
+    # SHARES batch, matching its existing meaning ("Sum of all investor shares in batch").
+    shares_exchange_rate_ngn = Column(Numeric(20, 6), nullable=True)  # NGN per 1 USD, as entered by staff
+    shares_price_per_share_ngn = Column(Numeric(20, 4), nullable=True)
+    shares_allocated_total = Column(Integer, nullable=True)  # Whole shares allotted by the issuer
+    shares_demand_total = Column(Integer, nullable=True)  # SUM(max_shares_i) before any allocation/rounds
+    shares_unallocated_total = Column(Integer, nullable=True)  # shares_allocated_total minus what was actually allocated
 
     # Relationships
     share_class = db.relationship('ShareClass', foreign_keys=[share_class_id], uselist=False, backref=db.backref('batches', lazy='dynamic'))

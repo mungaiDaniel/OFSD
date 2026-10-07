@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { fundService } from "@/services/fundService";
 import { investmentService } from "@/services/investmentService";
 import { ROUTES } from "@/lib/constants";
-import type { CoreFund, FundShareClass } from "@/lib/types";
+import type { CoreFund, FundShareClass, ProductType } from "@/lib/types";
+import { ProductToggle } from "@/components/ui/ProductToggle";
 
 interface DirectoryEntry {
   internal_client_code: string;
@@ -144,12 +145,19 @@ function SectionHeader({ step, title }: { step: number; title: string }) {
 
 export default function AddInvestorPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialProduct: ProductType = searchParams.get("product") === "SHARES" ? "SHARES" : "FUNDS";
 
+  const [product, setProduct] = useState<ProductType>(initialProduct);
   const [directory, setDirectory] = useState<DirectoryEntry[]>([]);
-  const [funds, setFunds] = useState<CoreFund[]>([]);
+  const [allFunds, setAllFunds] = useState<CoreFund[]>([]);
   const [fundsLoading, setFundsLoading] = useState(true);
   const [classes, setClasses] = useState<FundShareClass[]>([]);
   const [classesLoading, setClassesLoading] = useState(false);
+
+  // Only the funds matching the chosen Product — picking Funds/Shares is what
+  // actually scopes which funds/share classes the dropdown below offers.
+  const funds = useMemo(() => allFunds.filter((f) => (f.product_type ?? "FUNDS") === product), [allFunds, product]);
 
   const [clientCode, setClientCode] = useState("");
   const [investorName, setInvestorName] = useState("");
@@ -169,7 +177,7 @@ export default function AddInvestorPage() {
           fundService.getAll(),
           investmentService.getInvestorDirectory(),
         ]);
-        setFunds(fundList.filter((f) => f.is_active));
+        setAllFunds(fundList.filter((f) => f.is_active));
         setDirectory(((dirRes.data as DirectoryEntry[]) || []));
       } catch {
         toast.error("Failed to load funds");
@@ -178,6 +186,12 @@ export default function AddInvestorPage() {
       }
     })();
   }, []);
+
+  // Changing Product invalidates whatever fund/class was selected under the
+  // other product — the dropdown below is about to show a different list.
+  useEffect(() => {
+    setFundId("");
+  }, [product]);
 
   useEffect(() => {
     if (!fundId) {
@@ -549,6 +563,17 @@ export default function AddInvestorPage() {
           overflow: "hidden",
         }}
       >
+        {/* Section 0: Product — first control, scopes the Fund & class dropdowns below */}
+        <div style={{ padding: "18px 22px", borderBottom: "1px solid rgba(255, 255, 255, 0.07)" }}>
+          <SectionHeader step={0} title="Product" />
+          <ProductToggle value={product} onChange={(v) => setProduct(v as ProductType)} />
+          <div style={{ fontSize: "10px", color: "rgb(71, 85, 105)", marginTop: "8px" }}>
+            {product === "SHARES"
+              ? "Shares (DPRP) deposits are valued at price per share, not NAV."
+              : "Funds deposits are valued at NAV per share."}
+          </div>
+        </div>
+
         {/* Section 1: Investor identity */}
         <div style={{ padding: "18px 22px", borderBottom: "1px solid rgba(255, 255, 255, 0.07)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
@@ -770,7 +795,7 @@ export default function AddInvestorPage() {
               <label style={labelStyle}>
                 Fund <span style={{ color: "rgb(239, 68, 68)", marginLeft: "3px" }}>*</span>
               </label>
-              <select value={fundId} onChange={(e) => setFundId(e.target.value)} disabled={fundsLoading} style={selectBase}>
+              <select aria-label="Fund" value={fundId} onChange={(e) => setFundId(e.target.value)} disabled={fundsLoading} style={selectBase}>
                 <option value="">{fundsLoading ? "Loading funds…" : "Select a fund…"}</option>
                 {funds.map((f) => (
                   <option key={f.id} value={f.id}>
@@ -784,6 +809,7 @@ export default function AddInvestorPage() {
                 Share Class <span style={{ color: "rgb(239, 68, 68)", marginLeft: "3px" }}>*</span>
               </label>
               <select
+                aria-label="Share Class"
                 value={classId}
                 onChange={(e) => setClassId(e.target.value)}
                 disabled={!fundId || classesLoading}

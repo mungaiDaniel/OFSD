@@ -20,6 +20,7 @@ from app.Batch.model import Batch
 from app.Funds.share_class import ShareClass
 from app.logic.batch_management_service import BatchManagementService
 from app.Valuation.model import ValuationRun, BatchValuation
+from app.database.product_type import FUNDS, SHARES
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -308,6 +309,7 @@ def get_investor_directory():
         page = max(request.args.get("page", default=1, type=int) or 1, 1)
         per_page = min(max(request.args.get("per_page", default=50, type=int) or 50, 1), 200)
         search = (request.args.get("search") or "").strip()
+        product = (request.args.get("product") or "").strip().upper() or None
 
         # Cheap first pass: resolve just this page's client codes with LIMIT/OFFSET
         # pushed down into SQL — this used to fetch the FULL distinct, sorted code
@@ -316,17 +318,19 @@ def get_investor_directory():
         # transfer up to 100,000 rows just to keep 50 of them. total comes from a
         # separate COUNT(DISTINCT ...) aggregate instead of len() on that full list.
         def _search_filter(q):
-            if not search:
-                return q
-            like = f"%{search}%"
-            return q.filter(
-                or_(
-                    Investment.investor_name.ilike(like),
-                    Investment.internal_client_code.ilike(like),
-                    Investment.investor_email.ilike(like),
-                    Investment.investor_phone.ilike(like),
+            if search:
+                like = f"%{search}%"
+                q = q.filter(
+                    or_(
+                        Investment.investor_name.ilike(like),
+                        Investment.internal_client_code.ilike(like),
+                        Investment.investor_email.ilike(like),
+                        Investment.investor_phone.ilike(like),
+                    )
                 )
-            )
+            if product:
+                q = q.filter(Investment.product_type == product)
+            return q
 
         total = _search_filter(
             db.session.query(func.count(func.distinct(Investment.internal_client_code)))
@@ -349,12 +353,10 @@ def get_investor_directory():
                 "pagination": {"page": page, "per_page": per_page, "total": total, "total_pages": total_pages},
             }), 200)
 
-        all_investments = (
-            db.session.query(Investment)
-            .filter(Investment.internal_client_code.in_(page_codes))
-            .order_by(Investment.investor_name.asc())
-            .all()
-        )
+        all_investments_q = db.session.query(Investment).filter(Investment.internal_client_code.in_(page_codes))
+        if product:
+            all_investments_q = all_investments_q.filter(Investment.product_type == product)
+        all_investments = all_investments_q.order_by(Investment.investor_name.asc()).all()
 
         investor_map = {}
         investor_ids = set()
@@ -489,6 +491,158 @@ def get_investor_directory():
             "data": investors,
             "pagination": {"page": page, "per_page": per_page, "total": total, "total_pages": total_pages},
         }), 200)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/investors/export', methods=['GET'])
+@jwt_required()
+def export_investor_directory():
+    """
+    Task 6: "Export to Excel" for the investor directory — ALL investors
+    matching the current `search`/`product` filters (not just the visible
+    page), generated server-side. Reuses the exact same per-investor balance
+    calculation as get_investor_directory (BatchController._calculate_batch_
+    investment_values), just processed in fixed-size chunks of client codes
+    instead of one page, so peak memory never scales with the total row
+    count — a 100,000-row export processes CHUNK_SIZE codes at a time and
+    writes each chunk straight into a write-only (streaming) worksheet, the
+    same openpyxl mode used for the batch/investor Excel exports elsewhere.
+
+    Query params: search, product — identical semantics to GET /investors.
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from app.utils.audit_log import create_audit_log
+    from app.Batch.controllers import BatchController
+
+    CHUNK_SIZE = 1000
+    try:
+        search = (request.args.get("search") or "").strip()
+        product = (request.args.get("product") or "").strip().upper() or None
+
+        def _search_filter(q):
+            if search:
+                like = f"%{search}%"
+                q = q.filter(
+                    or_(
+                        Investment.investor_name.ilike(like),
+                        Investment.internal_client_code.ilike(like),
+                        Investment.investor_email.ilike(like),
+                        Investment.investor_phone.ilike(like),
+                    )
+                )
+            if product:
+                q = q.filter(Investment.product_type == product)
+            return q
+
+        all_codes = [
+            r[0]
+            for r in _search_filter(
+                db.session.query(Investment.internal_client_code).group_by(Investment.internal_client_code)
+            ).order_by(func.max(Investment.investor_name).asc()).all()
+        ]
+
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet("Investors")
+        headers = [
+            "Investor Name", "Client Code", "Email", "Phone", "Fund / Class", "Class Code",
+            "Currency", "Shares", "Market Value", "Performance %", "Deposits", "Unique Batches",
+        ]
+        ws.append(headers)
+
+        row_count = 0
+        for i in range(0, len(all_codes), CHUNK_SIZE):
+            chunk_codes = all_codes[i:i + CHUNK_SIZE]
+
+            chunk_investments_q = db.session.query(Investment).filter(Investment.internal_client_code.in_(chunk_codes))
+            if product:
+                chunk_investments_q = chunk_investments_q.filter(Investment.product_type == product)
+            chunk_investments = chunk_investments_q.all()
+
+            investor_map = {}
+            batch_ids_per_client = {}
+            for inv in chunk_investments:
+                code = inv.internal_client_code
+                fund_name = inv.fund_name or (inv.fund.fund_name if inv.fund else None)
+                class_code = inv.share_class.class_code if getattr(inv, "share_class", None) else None
+                currency = inv.share_class.currency if getattr(inv, "share_class", None) else None
+                if code not in investor_map:
+                    investor_map[code] = {
+                        "investor_name": inv.investor_name,
+                        "internal_client_code": code,
+                        "investor_email": inv.investor_email,
+                        "investor_phone": inv.investor_phone,
+                        "fund_name": fund_name,
+                        "class_code": class_code,
+                        "currency": currency,
+                        "shares": 0.0,
+                        "market_value": 0.0,
+                        "performance_pct": None,
+                        "investments": 0,
+                        "unique_batches": 0,
+                    }
+                investor_map[code]["investments"] += 1
+                batch_ids_per_client.setdefault(code, set())
+                if inv.batch_id is not None:
+                    batch_ids_per_client[code].add(inv.batch_id)
+                if getattr(inv, "shares_owned", None) is not None:
+                    investor_map[code]["shares"] += float(inv.shares_owned or 0)
+
+            for code, batch_ids in batch_ids_per_client.items():
+                investor_map[code]["unique_batches"] = len(batch_ids)
+
+            chunk_batch_ids = {inv.batch_id for inv in chunk_investments if inv.batch_id is not None}
+            batches_by_id = {
+                b.id: b for b in db.session.query(Batch).filter(Batch.id.in_(chunk_batch_ids)).all()
+            } if chunk_batch_ids else {}
+            prefetch = BatchController._prefetch_valuation_cascade(db.session, chunk_investments)
+
+            investor_balances = {}
+            for inv in chunk_investments:
+                code = inv.internal_client_code
+                batch = batches_by_id.get(inv.batch_id) if inv.batch_id is not None else None
+                investor_balances.setdefault(code, Decimal("0.00"))
+                try:
+                    inv_values = BatchController._calculate_batch_investment_values(inv, batch, db.session, **prefetch)
+                    investor_balances[code] += Decimal(str(inv_values["current_balance"]))
+                except Exception:
+                    investor_balances[code] += Decimal(str(inv.net_principal or 0))
+
+            for code in chunk_codes:
+                row = investor_map.get(code)
+                if not row:
+                    continue
+                balance = float(round(investor_balances.get(code, Decimal("0.00")), 2))
+                fund_label = row["fund_name"] or "—"
+                if row["class_code"]:
+                    fund_label = f"{fund_label} ({row['class_code']})"
+                ws.append([
+                    row["investor_name"], row["internal_client_code"], row["investor_email"],
+                    row["investor_phone"], fund_label, row["class_code"], row["currency"],
+                    row["shares"] or None, balance, row["performance_pct"], row["investments"],
+                    row["unique_batches"],
+                ])
+                row_count += 1
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        create_audit_log(
+            action="EXCEL_EXPORT",
+            target_type="investor_directory",
+            description=f"Exported investor directory to Excel (scope: {product or 'ALL'}, search: {search or '—'})",
+            new_value={"scope": product or "ALL", "search": search or None, "row_count": row_count},
+        )
+
+        filename = f"Investors_{product or 'All'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        return send_file(
+            output,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename,
+        )
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
@@ -2382,12 +2536,161 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
         _render_statements_table(other_rows, "Other")
     story.append(Spacer(1, 0.08 * inch))
 
-    # Oversubscription/refund info is NOT shown on regular statements — it's a
+    # Oversubscription/refund info is NOT shown on this (FUNDS) section — it's a
     # one-time event tied to a single deployment, not something that belongs on
     # every recurring statement this investor ever receives. See
     # EmailService.send_oversubscription_refund_notices for the separate,
     # one-time notice (sent once, from the Withdrawals page) that replaces
     # what used to be the "_append_dprp_oversubscription_block" section here.
+    # The SHARES section below (Task 5) is different: refund USD/status there
+    # is a plain factual field describing the holding's current state, not a
+    # one-time narrative, and the task spec explicitly calls for it.
+
+
+def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_styles, body_font, body_font_bold, theme):
+    """
+    Renders the "Shares (Dangote Petroleum Refinery IPO)" statement section:
+    one Description/Amount table per SHARES holding (deposit), using the
+    fee/allocation fields Tasks 2-3 already computed and stored directly on
+    Investment — no EpochLedger/NAV machinery involved, since SHARES is valued
+    at price per share, not NAV (see Task 3). A totals table is added when the
+    investor has more than one SHARES holding.
+
+    USD-denominated fields (deposit, entry fee, transaction cost, net, refund)
+    and NGN-denominated fields (net, price per share, value) are always kept
+    on separate rows/totals — never summed together (Task 5 rule).
+    """
+    section_heading_style = pdf_styles["section_heading"]
+    normal_style = pdf_styles["normal"]
+
+    holdings = (
+        db.session.query(Investment)
+        .filter(
+            func.lower(Investment.internal_client_code) == func.lower(client_code),
+            Investment.fund_id.in_(shares_fund_ids),
+        )
+        .order_by(Investment.date_deposited.asc())
+        .all()
+    )
+    if not holdings:
+        story.append(Paragraph("No Shares holdings found.", normal_style))
+        return
+
+    cent = Decimal("0.01")
+
+    def _money(value):
+        return _format_statement_money(value, "USD")
+
+    def _ngn(value, places=2):
+        if value is None:
+            return "—"
+        quant = Decimal("1").scaleb(-places) if places else Decimal("1")
+        return f"NGN {Decimal(str(value)).quantize(quant):,.{places}f}"
+
+    def _rate(value):
+        return str(Decimal(str(value)).normalize()) if value is not None else "—"
+
+    def _shares_qty(value):
+        return f"{Decimal(str(value)):,.4f}" if value is not None else "—"
+
+    totals = {
+        "deposit": Decimal("0.00"), "entry_fee": Decimal("0.00"), "tx_cost": Decimal("0.00"),
+        "net_usd": Decimal("0.00"), "net_ngn": Decimal("0.00"), "shares": Decimal("0.00"),
+        "value_ngn": Decimal("0.00"), "refund_usd": Decimal("0.00"),
+    }
+
+    for inv in holdings:
+        deposit = Decimal(str(inv.amount_deposited or 0))
+        entry_fee = Decimal(str(inv.deployment_fee_deducted or 0))
+        tx_cost = Decimal(str(inv.transfer_fee_deducted or 0))
+        # Deliberately NOT Investment.net_principal — that property also
+        # subtracts oversubscription_refund_amount, which this section shows
+        # as its own separate "Refund (USD)" row (see module docstring above).
+        net_usd = (deposit - entry_fee - tx_cost).quantize(cent)
+        refund_usd = Decimal(str(inv.oversubscription_refund_amount or 0))
+        exchange_rate = inv.shares_exchange_rate_ngn
+        net_ngn = inv.net_ngn
+        price_per_share = inv.shares_price_per_share_ngn
+        shares_owned = inv.shares_owned
+        value_ngn = (
+            (Decimal(str(shares_owned)) * Decimal(str(price_per_share))).quantize(cent)
+            if shares_owned is not None and price_per_share is not None
+            else None
+        )
+
+        refund_status = "—"
+        if refund_usd > 0:
+            refund_wd = (
+                db.session.query(Withdrawal)
+                .filter(
+                    func.lower(Withdrawal.internal_client_code) == func.lower(client_code),
+                    Withdrawal.fund_id == inv.fund_id,
+                    Withdrawal.source == WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                )
+                .order_by(Withdrawal.date_withdrawn.desc())
+                .first()
+            )
+            refund_status = normalize_withdrawal_status(refund_wd.status) if refund_wd else "Pending"
+
+        totals["deposit"] += deposit
+        totals["entry_fee"] += entry_fee
+        totals["tx_cost"] += tx_cost
+        totals["net_usd"] += net_usd
+        if net_ngn is not None:
+            totals["net_ngn"] += Decimal(str(net_ngn))
+        if shares_owned is not None:
+            totals["shares"] += Decimal(str(shares_owned))
+        if value_ngn is not None:
+            totals["value_ngn"] += value_ngn
+        totals["refund_usd"] += refund_usd
+
+        if len(holdings) > 1:
+            batch_label = inv.batch.batch_name if getattr(inv, "batch", None) else f"Batch {inv.batch_id}"
+            deposit_date_txt = inv.date_deposited.strftime("%d %b %Y") if inv.date_deposited else "—"
+            story.append(Paragraph(f"Deposit — {escape(str(batch_label))} ({deposit_date_txt})", normal_style))
+            story.append(Spacer(1, 0.04 * inch))
+
+        holding_rows = [
+            ["Description", "Amount"],
+            ["Deposit (USD)", _money(deposit)],
+            ["Entry Fee (USD)", _money(entry_fee)],
+            ["Transaction Cost (USD)", _money(tx_cost)],
+            ["Net (USD)", _money(net_usd)],
+            ["Exchange Rate Used (NGN / USD)", _rate(exchange_rate)],
+            ["Net (NGN)", _ngn(net_ngn)],
+            ["Price Per Share (NGN)", _ngn(price_per_share, places=4)],
+            ["Shares Allocated", _shares_qty(shares_owned)],
+            ["Value at Price Per Share (NGN)", _ngn(value_ngn)],
+            ["Refund (USD)", _money(refund_usd) if refund_usd > 0 else "—"],
+            ["Refund Status", refund_status],
+        ]
+        holding_table = Table(holding_rows, colWidths=[4.2 * inch, 3.3 * inch])
+        holding_table.setStyle(summary_table_style(theme, body_font, body_font_bold))
+        story.append(holding_table)
+        story.append(Spacer(1, 0.14 * inch))
+
+    if len(holdings) > 1:
+        totals_rows = [
+            ["Description", "Amount"],
+            ["Total Deposit (USD)", _money(totals["deposit"])],
+            ["Total Entry Fee (USD)", _money(totals["entry_fee"])],
+            ["Total Transaction Cost (USD)", _money(totals["tx_cost"])],
+            ["Total Net (USD)", _money(totals["net_usd"])],
+            ["Total Net (NGN)", _ngn(totals["net_ngn"])],
+            ["Total Shares Allocated", _shares_qty(totals["shares"])],
+            ["Total Value at Price Per Share (NGN)", _ngn(totals["value_ngn"])],
+            ["Total Refund (USD)", _money(totals["refund_usd"]) if totals["refund_usd"] > 0 else "—"],
+        ]
+        if theme.is_jh:
+            story.append(build_orange_banner_table('Shares Totals', theme, body_font_bold, font_size=10))
+            story.append(Spacer(1, 0.06 * inch))
+        else:
+            story.append(Paragraph('Shares Totals', section_heading_style))
+            story.append(Spacer(1, 0.08 * inch))
+        totals_table = Table(totals_rows, colWidths=[4.2 * inch, 3.3 * inch])
+        totals_table.setStyle(summary_table_style(theme, body_font, body_font_bold))
+        story.append(totals_table)
+        story.append(Spacer(1, 0.10 * inch))
 
 
 def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_only=False, fund_ids=None):
@@ -2404,10 +2707,17 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
     client holds (alphabetical by fund name), with a portfolio-level summary
     block at the top. A single id -> FUND-SCOPED statement (one section, no
     portfolio summary — structurally identical to any other NAV fund's
-    statement, plus the DPRP oversubscription block when applicable). Several
-    ids (but not literally every fund the client holds) -> a consolidated
-    statement scoped to just those funds — same section rendering either way;
-    see _append_fund_statement_section for the shared per-fund logic.
+    statement). Several ids (but not literally every fund the client holds)
+    -> a consolidated statement scoped to just those funds — same section
+    rendering either way; see _append_fund_statement_section for the shared
+    per-fund logic.
+
+    Task 5: resolved_fund_ids is further split into funds_section_ids
+    (product_type FUNDS, rendered exactly as before under a "FUNDS" heading)
+    and shares_section_ids (product_type SHARES, rendered once under a
+    "SHARES (DANGOTE PETROLEUM REFINERY IPO)" heading via
+    _append_shares_statement_section) — one investor, one PDF, two sections,
+    neither one touching the other's data/math.
     """
     try:
         all_client_investments = db.session.query(Investment).filter(
@@ -2446,6 +2756,23 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
         # statement trivially "sorts" to itself).
         resolved_fund_ids.sort(key=lambda fid: (fund_id_to_name.get(fid) or "").lower())
         is_consolidated = len(resolved_fund_ids) > 1
+
+        # Task 5: split into the two product sections. product_type lives on
+        # Investment (one per deposit), not CoreFund, so take the first
+        # investment seen for each fund id — every investment under a given
+        # fund_id shares the same product_type by construction (Task 1).
+        fund_id_to_product = {}
+        for inv in all_client_investments:
+            if inv.fund_id is not None and inv.fund_id not in fund_id_to_product:
+                fund_id_to_product[inv.fund_id] = inv.product_type or FUNDS
+        funds_section_ids = [fid for fid in resolved_fund_ids if fund_id_to_product.get(fid, FUNDS) != SHARES]
+        shares_section_ids = [fid for fid in resolved_fund_ids if fund_id_to_product.get(fid, FUNDS) == SHARES]
+        # Drives the FUNDS portfolio-summary block and each fund's own
+        # sub-heading — scoped to funds_section_ids (not resolved_fund_ids),
+        # so a Shares holding never gets pulled into NAV-based aggregation.
+        # is_consolidated above is left untouched (still resolved_fund_ids-
+        # based) — it only decides branding/the "Fund(s) Invested In" label.
+        show_funds_portfolio_summary = len(funds_section_ids) > 1
 
         code = client_code
         # Statement Date is the date this PDF is generated, not the date of
@@ -2566,28 +2893,52 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
         story.append(info_table)
         story.append(Spacer(1, 0.18 * inch))
 
-        if is_consolidated:
+        if show_funds_portfolio_summary:
             _append_portfolio_summary_block(
                 story, pdf_styles, theme, body_font, body_font_bold, client_code,
-                resolved_fund_ids, fund_id_to_name, as_of_dt,
+                funds_section_ids, fund_id_to_name, as_of_dt,
             )
 
-        for idx, section_fund_id in enumerate(resolved_fund_ids):
-            fund_name_for_section = fund_id_to_name.get(section_fund_id) or "Portfolio"
-            if is_consolidated:
-                if idx > 0:
-                    story.append(Spacer(1, 0.10 * inch))
-                    story.append(Table(
-                        [['']], colWidths=[7.3 * inch],
-                        style=[('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor(theme.divider_grey))],
-                    ))
-                    story.append(Spacer(1, 0.10 * inch))
-                story.append(Paragraph(fund_name_for_section.upper(), section_heading_style))
+        both_sections_present = bool(funds_section_ids) and bool(shares_section_ids)
+
+        if funds_section_ids:
+            if both_sections_present:
+                story.append(Paragraph("FUNDS", section_heading_style))
                 story.append(Spacer(1, 0.08 * inch))
 
-            _append_fund_statement_section(
-                story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
-                theme, pdf_styles, body_font, body_font_bold, statement_date,
+            for idx, section_fund_id in enumerate(funds_section_ids):
+                fund_name_for_section = fund_id_to_name.get(section_fund_id) or "Portfolio"
+                if show_funds_portfolio_summary:
+                    if idx > 0:
+                        story.append(Spacer(1, 0.10 * inch))
+                        story.append(Table(
+                            [['']], colWidths=[7.3 * inch],
+                            style=[('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor(theme.divider_grey))],
+                        ))
+                        story.append(Spacer(1, 0.10 * inch))
+                    story.append(Paragraph(fund_name_for_section.upper(), section_heading_style))
+                    story.append(Spacer(1, 0.08 * inch))
+
+                _append_fund_statement_section(
+                    story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                    theme, pdf_styles, body_font, body_font_bold, statement_date,
+                )
+
+        # Task 5: one "SHARES (DANGOTE PETROLEUM REFINERY IPO)" section, omitted
+        # entirely when the investor has no Shares holdings. Never mixes its
+        # USD/NGN figures into the FUNDS section's NAV-based totals above.
+        if shares_section_ids:
+            if both_sections_present:
+                story.append(Spacer(1, 0.10 * inch))
+                story.append(Table(
+                    [['']], colWidths=[7.3 * inch],
+                    style=[('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor(theme.divider_grey))],
+                ))
+                story.append(Spacer(1, 0.10 * inch))
+            story.append(Paragraph("SHARES (DANGOTE PETROLEUM REFINERY IPO)", section_heading_style))
+            story.append(Spacer(1, 0.08 * inch))
+            _append_shares_statement_section(
+                story, client_code, shares_section_ids, pdf_styles, body_font, body_font_bold, theme,
             )
 
         append_branded_footer(
@@ -2616,6 +2967,8 @@ def download_investor_statement_excel(client_code):
     """
     try:
         # Check authentication (JWT header or ?token= param)
+        from flask_jwt_extended import decode_token, verify_jwt_in_request
+
         qs_token = request.args.get("token", "").strip()
         if qs_token:
             try:
@@ -2631,20 +2984,32 @@ def download_investor_statement_excel(client_code):
         # Get investor info
         inv = db.session.query(Investment).filter(
             func.lower(Investment.internal_client_code) == func.lower(client_code)
-        ).order_by(desc(Investment.id)).first()
+        ).order_by(Investment.id.desc()).first()
 
         investor_name = inv.investor_name if inv else client_code
         email = inv.investor_email if inv else ""
 
-        # Get portfolio aggregation
-        portfolio_res = get_investor_portfolio_aggregated(client_code)
-        p_data = portfolio_res.get_json().get("data", {}) if hasattr(portfolio_res, "get_json") else {}
+        # Task 5: the FUNDS sheets below (Portfolio Summary / Statement
+        # Timeline) are EpochLedger-based and meaningless for a Shares-only
+        # investor (SHARES never posts to EpochLedger — see Task 3) — omit
+        # them entirely rather than emit an all-zero/empty "Funds" section.
+        has_funds_holdings = db.session.query(Investment.id).filter(
+            func.lower(Investment.internal_client_code) == func.lower(client_code),
+            Investment.product_type == FUNDS,
+        ).first() is not None
 
-        # Get timeline statements
-        timeline_res = get_investor_statements(client_code)
-        t_json = timeline_res.get_json() if hasattr(timeline_res, "get_json") else {}
-        t_data = t_json.get("data", {}) if isinstance(t_json, dict) else {}
-        timeline_rows = (t_data if isinstance(t_data, list) else t_data.get("statements", [])) or []
+        # Get portfolio aggregation
+        p_data = {}
+        timeline_rows = []
+        if has_funds_holdings:
+            portfolio_res = get_investor_portfolio_aggregated(client_code)
+            p_data = portfolio_res.get_json().get("data", {}) if hasattr(portfolio_res, "get_json") else {}
+
+            # Get timeline statements
+            timeline_res = get_investor_statements(client_code)
+            t_json = timeline_res.get_json() if hasattr(timeline_res, "get_json") else {}
+            t_data = t_json.get("data", {}) if isinstance(t_json, dict) else {}
+            timeline_rows = (t_data if isinstance(t_data, list) else t_data.get("statements", [])) or []
 
         # Build Summary sheet
         summary_rows = [{
@@ -2677,6 +3042,57 @@ def download_investor_statement_excel(client_code):
                 "Audit Hash": str(r.get("audit_hash") or "")[:20] + "..." if r.get("audit_hash") else "—",
             })
 
+        # Task 5: Shares holdings sheet — built directly from Investment rows
+        # (product_type SHARES), independent of the FUNDS-only EpochLedger-
+        # based aggregation above (SHARES never posts to EpochLedger — see
+        # Task 3). Omitted entirely (no sheet) when the investor holds none.
+        shares_holdings = db.session.query(Investment).filter(
+            func.lower(Investment.internal_client_code) == func.lower(client_code),
+            Investment.product_type == SHARES,
+        ).order_by(Investment.date_deposited.asc()).all()
+
+        shares_rows = []
+        for s in shares_holdings:
+            deposit = Decimal(str(s.amount_deposited or 0))
+            entry_fee = Decimal(str(s.deployment_fee_deducted or 0))
+            tx_cost = Decimal(str(s.transfer_fee_deducted or 0))
+            net_usd = deposit - entry_fee - tx_cost
+            refund_usd = Decimal(str(s.oversubscription_refund_amount or 0))
+            value_ngn = (
+                float(Decimal(str(s.shares_owned)) * Decimal(str(s.shares_price_per_share_ngn)))
+                if s.shares_owned is not None and s.shares_price_per_share_ngn is not None
+                else "—"
+            )
+            refund_status = "—"
+            if refund_usd > 0:
+                refund_wd = (
+                    db.session.query(Withdrawal)
+                    .filter(
+                        func.lower(Withdrawal.internal_client_code) == func.lower(client_code),
+                        Withdrawal.fund_id == s.fund_id,
+                        Withdrawal.source == WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                    )
+                    .order_by(Withdrawal.date_withdrawn.desc())
+                    .first()
+                )
+                refund_status = normalize_withdrawal_status(refund_wd.status) if refund_wd else "Pending"
+            shares_rows.append({
+                "Batch": s.batch.batch_name if getattr(s, "batch", None) else (s.batch_id or "—"),
+                "Deposit Date": s.date_deposited.strftime("%Y-%m-%d") if s.date_deposited else "—",
+                "Deposit (USD)": float(deposit),
+                "Entry Fee (USD)": float(entry_fee),
+                "Transaction Cost (USD)": float(tx_cost),
+                "Net (USD)": float(net_usd),
+                "Exchange Rate (NGN/USD)": float(s.shares_exchange_rate_ngn) if s.shares_exchange_rate_ngn is not None else "—",
+                "Net (NGN)": float(s.net_ngn) if s.net_ngn is not None else "—",
+                "Price Per Share (NGN)": float(s.shares_price_per_share_ngn) if s.shares_price_per_share_ngn is not None else "—",
+                "Shares Allocated": float(s.shares_owned) if s.shares_owned is not None else "—",
+                "Value at Price Per Share (NGN)": value_ngn,
+                "Refund (USD)": float(refund_usd) if refund_usd > 0 else "—",
+                "Refund Status": refund_status,
+            })
+
+        import pandas as pd
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -2686,8 +3102,16 @@ def download_investor_statement_excel(client_code):
 
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            pd.DataFrame(summary_rows).to_excel(writer, index=False, sheet_name="Portfolio Summary")
-            pd.DataFrame(history_rows or []).to_excel(writer, index=False, sheet_name="Statement Timeline")
+            if has_funds_holdings:
+                pd.DataFrame(summary_rows).to_excel(writer, index=False, sheet_name="Portfolio Summary")
+                pd.DataFrame(history_rows or []).to_excel(writer, index=False, sheet_name="Statement Timeline")
+            if shares_rows:
+                pd.DataFrame(shares_rows).to_excel(writer, index=False, sheet_name="Shares Holdings")
+            if not has_funds_holdings and not shares_rows:
+                # Neither section applies (e.g. a client_code with no holdings
+                # at all) — fall back to the summary sheet so the workbook
+                # always has at least one visible sheet, as it did pre-Task 5.
+                pd.DataFrame(summary_rows).to_excel(writer, index=False, sheet_name="Portfolio Summary")
 
             for sheet_name in writer.sheets:
                 ws = writer.sheets[sheet_name]
@@ -4279,11 +4703,15 @@ def list_investor_deposits(client_code):
     """
     try:
         session = db.session
-        
+        product = (request.args.get("product") or "").strip().upper() or None
+
         # Get all investments for this investor
-        investments = session.query(Investment).filter(
+        deposits_q = session.query(Investment).filter(
             Investment.internal_client_code == client_code
-        ).order_by(Investment.date_deposited.desc()).all()
+        )
+        if product:
+            deposits_q = deposits_q.filter(Investment.product_type == product)
+        investments = deposits_q.order_by(Investment.date_deposited.desc()).all()
 
         if not investments:
             return make_response(jsonify({"status": 404, "message": "No deposits found for this investor"}), 404)
@@ -4304,14 +4732,6 @@ def list_investor_deposits(client_code):
             # Determine if investment is movable (same logic as move logic)
             is_movable = False
             if batch and not is_deployed:
-                is_movable = (
-                    func.coalesce(batch.stage, 1) < 3
-                    and not func.coalesce(batch.deployment_confirmed, False)
-                    and batch.deployment_date_actual is None
-                    and batch.deployment_nav is None
-                    and not func.coalesce(batch.is_active, False)
-                )
-                # Simplify boolean evaluation
                 is_movable = bool(
                     (batch.stage or 1) < 3
                     and not (batch.deployment_confirmed or False)
@@ -4331,6 +4751,7 @@ def list_investor_deposits(client_code):
                 "currency": share_class.currency if share_class else None,
                 "is_deployed": is_deployed,
                 "is_movable": is_movable,
+                "product_type": inv.product_type,
             })
 
         return make_response(jsonify({"status": 200, "data": data}), 200)
@@ -6752,6 +7173,7 @@ def get_investor_overview(client_code):
                 "batch_stage": int(getattr(batch, "stage", 1) or 1),
                 "batch_is_active": bool(getattr(batch, "is_active", False)),
                 "batch_is_open": bool(getattr(batch, "is_open", False)),
+                "product_type": inv.product_type,
                 "share_class_id": int(inv.share_class_id) if inv.share_class_id is not None else None,
                 "fund_name": inv.fund_name,
                 "class_code": inv.share_class.class_code if inv.share_class else None,

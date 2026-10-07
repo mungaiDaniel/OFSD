@@ -795,6 +795,14 @@ class PortfolioValuationService:
         if not fund:
             raise ValueError(f"Fund with id {fund_id} not found")
 
+        from app.utils.statement_theme import resolve_product_type
+        from app.database.product_type import SHARES
+        if resolve_product_type([fund.fund_name], [fund.fund_code]) == SHARES:
+            raise ValueError(
+                f"Monthly valuation reconciliation does not apply to SHARES products "
+                f"(fund '{fund.fund_name}' is SHARES, not FUNDS)"
+            )
+
         fund_name = fund.fund_name
 
         investor_inputs = cls._build_investor_inputs(
@@ -1033,6 +1041,14 @@ class PortfolioValuationService:
         fund = session.query(CoreFund).filter(CoreFund.id == fund_id).first()
         if not fund:
             raise ValueError(f"Fund with id {fund_id} not found")
+
+        from app.utils.statement_theme import resolve_product_type
+        from app.database.product_type import SHARES
+        if resolve_product_type([fund.fund_name], [fund.fund_code]) == SHARES:
+            raise ValueError(
+                f"Monthly valuation reconciliation does not apply to SHARES products "
+                f"(fund '{fund.fund_name}' is SHARES, not FUNDS)"
+            )
 
         investor_inputs = cls._build_investor_inputs(
             fund_id=fund_id,
@@ -1296,6 +1312,14 @@ class PortfolioValuationService:
         core = session.query(CoreFund).filter(func.lower(CoreFund.fund_name) == fn).first()
         if not core:
             raise ValueError(f"Fund '{fn}' not found")
+
+        from app.utils.statement_theme import resolve_product_type
+        from app.database.product_type import SHARES
+        if resolve_product_type([core.fund_name], [core.fund_code]) == SHARES:
+            raise ValueError(
+                f"Monthly valuation reconciliation does not apply to SHARES products "
+                f"(fund '{core.fund_name}' is SHARES, not FUNDS)"
+            )
 
         # Use the same investor input logic as fund_id path (includes approved withdrawals + weighting)
         investor_inputs = cls._build_investor_inputs(

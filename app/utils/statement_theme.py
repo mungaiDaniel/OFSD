@@ -97,6 +97,19 @@ def is_dangote_dprp_fund(fund_names=(), fund_codes=()) -> bool:
     )
 
 
+def resolve_product_type(fund_names=(), fund_codes=()) -> str:
+    """
+    FUNDS vs SHARES product classification for batches/deposits.
+
+    Reuses is_dangote_dprp_fund — the single source of truth for DPRP identity,
+    already used for statement/PDF theming — since DPRP is currently the only
+    SHARES product. Everything else is FUNDS.
+    """
+    from app.database.product_type import FUNDS, SHARES
+
+    return SHARES if is_dangote_dprp_fund(fund_names, fund_codes) else FUNDS
+
+
 def get_statement_theme(fund_names=(), fund_codes=()) -> StatementTheme:
     """Return JH theme when any invested fund is Janus Henderson."""
     if is_janus_henderson_fund(fund_names, fund_codes):

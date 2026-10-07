@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 
 from dotenv import load_dotenv
 
@@ -56,6 +57,9 @@ class TestingConfig():
         ONEDRIVE_USER_ID = os.environ.get('ONEDRIVE_USER_ID')
         ONEDRIVE_BACKUP_FOLDER = os.environ.get('ONEDRIVE_BACKUP_FOLDER') or 'OFSD-DB-Backups'
 
+        # Minimum deposit (before fees) accepted into a SHARES (DPRP) batch.
+        MIN_DEPOSIT_USD = Decimal(os.environ.get('MIN_DEPOSIT_USD', '2000'))
+
 
 class DevelopmentConfig():
         SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-minimum-32-bytes-long-required-for-secure-jwt'
@@ -106,6 +110,9 @@ class DevelopmentConfig():
         ONEDRIVE_USER_ID = os.environ.get('ONEDRIVE_USER_ID')
         ONEDRIVE_BACKUP_FOLDER = os.environ.get('ONEDRIVE_BACKUP_FOLDER') or 'OFSD-DB-Backups'
 
+        # Minimum deposit (before fees) accepted into a SHARES (DPRP) batch.
+        MIN_DEPOSIT_USD = Decimal(os.environ.get('MIN_DEPOSIT_USD', '2000'))
+
 class ProductionConfig():
         
         SECRET_KEY = os.environ.get('SECRET_KEY') or 'prod-secret-key-minimum-32-bytes-long-required-for-secure-jwt-operations'
@@ -150,6 +157,9 @@ class ProductionConfig():
         AZURE_CLIENT_SECRET = os.environ.get('AZURE_CLIENT_SECRET')
         ONEDRIVE_USER_ID = os.environ.get('ONEDRIVE_USER_ID')
         ONEDRIVE_BACKUP_FOLDER = os.environ.get('ONEDRIVE_BACKUP_FOLDER') or 'OFSD-DB-Backups'
+
+        # Minimum deposit (before fees) accepted into a SHARES (DPRP) batch.
+        MIN_DEPOSIT_USD = Decimal(os.environ.get('MIN_DEPOSIT_USD', '2000'))
 
 # postgresql://salonapi_user:UDCYfmsCp7DYWk2ar4ssjzYGfGmjJf31@dpg-d0tvqoadbo4c73a7qpog-a/salonapi
 

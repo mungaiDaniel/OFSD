@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Date, Numeric, ForeignKey, UniqueConstraint, Index, Enum
+from sqlalchemy import Column, Integer, String, Text, DateTime, Date, Numeric, ForeignKey, UniqueConstraint, Index, Enum, event, text
 from app.database.database import db
+from app.database.product_type import ProductTypeEnum, FUNDS
 from base_model import Base
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -26,6 +27,13 @@ class Investment(Base, db.Model):
     fund_id = Column(Integer, ForeignKey('core_funds.id'), nullable=True, index=True)
     share_class_id = Column(Integer, ForeignKey('share_classes.id', ondelete='SET NULL'), nullable=True)
 
+    # Inherited from this deposit's batch (see Batch.product_type) — kept on the
+    # row itself (rather than always joining to batches) so list/filter queries
+    # over deposits/holdings by product can use a plain indexed column. Set
+    # automatically by the _inherit_product_type_from_batch event below when not
+    # already provided by the caller.
+    product_type = Column(ProductTypeEnum, nullable=False, default=FUNDS, server_default=FUNDS, index=True)
+
     # New fields for enhanced investor tracking
     wealth_manager = Column(String(100), nullable=True)
     IFA = Column(String(100), nullable=True)  # Independent Financial Advisor
@@ -40,6 +48,22 @@ class Investment(Base, db.Model):
     previous_nav_price = Column(Numeric(20, 6), nullable=True)  # Previous NAV for display on investor detail
     rounding_adjustment = Column(Numeric(20, 4), nullable=True, default=Decimal("0.0000"))  # Adjustment for official value reconciliation
     official_receipt_value = Column(Numeric(20, 2), nullable=True)  # Official Head Office receipt value
+
+    # SHARES-only (see app.logic.shares_transfer_service): balance after the entry fee
+    # is deducted from the raw deposit, before the proportional transaction cost is
+    # taken out of it. NULL for FUNDS investments — they never populate this field.
+    balance_after_entry_fee_usd = Column(Numeric(20, 2), nullable=True)
+
+    # SHARES-only (see app.logic.shares_deployment_service), set once at the Deployed
+    # step: the exact rate/price used for THIS investment, stored per-row (not just
+    # read off the batch) so the historical record survives even if the batch's own
+    # fields are ever cleared by an admin reversal. net_ngn = net_principal * exchange
+    # rate; shares_owned (below) holds the whole shares actually allocated, and
+    # oversubscription_refund_amount (below) doubles as this investment's refund_usd —
+    # same reuse as Task 2's deployment_fee_deducted/transfer_fee_deducted.
+    shares_exchange_rate_ngn = Column(Numeric(20, 6), nullable=True)
+    shares_price_per_share_ngn = Column(Numeric(20, 4), nullable=True)
+    net_ngn = Column(Numeric(20, 2), nullable=True)
 
     # DPRP oversubscription pro-rata: the slice of this investment's net principal that was
     # NOT deployed into shares because the batch's fund had a hard cap on what could actually
@@ -97,6 +121,39 @@ class Investment(Base, db.Model):
         if "KES" in raw:
             return "KES"
         return "USD"
+
+
+@event.listens_for(Investment, "before_insert")
+def _inherit_product_type_from_batch(mapper, connection, target):
+    """
+    A deposit/holding always takes its product_type from its batch — this is
+    what makes the column a reliable filter/index instead of a second,
+    independently-settable source of truth that could drift from the batch it
+    lives in. Only runs at creation: batch_id is never reassigned after a
+    deposit exists today, so there is no update-time case to cover, and adding
+    one would mean a per-row SELECT on every ORM update — exactly what
+    bulk_update_mappings elsewhere in this codebase was written to avoid.
+
+    Covers every ORM creation path (manual add, Excel upload, tests, ...)
+    automatically. Raw Core `insert()` statements (the high-volume bulk-upload
+    path) bypass mapper events entirely and must set product_type explicitly —
+    see app/BulkUpload/route.py.
+    """
+    if target.batch_id is None:
+        return
+    row = connection.execute(
+        text("SELECT product_type FROM batches WHERE id = :batch_id"),
+        {"batch_id": target.batch_id},
+    ).first()
+    if row is None:
+        return
+    batch_product_type = row[0]
+    if target.product_type and target.product_type != batch_product_type:
+        raise ValueError(
+            f"Cannot save a {target.product_type} deposit into batch {target.batch_id}, "
+            f"which is a {batch_product_type} batch."
+        )
+    target.product_type = batch_product_type
 
 
 class EmailLog(Base, db.Model):

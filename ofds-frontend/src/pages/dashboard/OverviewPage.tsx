@@ -7,6 +7,7 @@ import { dashboardService, type OverviewStats } from "@/services/dashboardServic
 import ClientActivitySection from "@/components/overview/ClientActivitySection";
 import { ROUTES } from "@/lib/constants";
 import type { FundClassSummary, FundsSummaryResponse, Batch } from "@/lib/types";
+import { ProductToggle, OVERVIEW_PRODUCT_OPTIONS, type ProductFilterValue } from "@/components/ui/ProductToggle";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // OVERVIEW PAGE — Production-matching layout
@@ -154,6 +155,23 @@ export default function OverviewPage() {
     [searchParams, setSearchParams]
   );
 
+  // Product filter — same URL-persisted pattern as the fund filter above.
+  // Default "ALL" shows both the (Funds-only) NAV section and the Shares
+  // summary section below it, as two separate blocks — never blended into
+  // one figure, since NAV and price-per-share aren't comparable numbers.
+  const productFilter = (searchParams.get("product") as ProductFilterValue) ?? "ALL";
+  const setProductFilter = useCallback(
+    (value: ProductFilterValue) => {
+      const next = new URLSearchParams(searchParams);
+      if (value === "ALL") next.delete("product");
+      else next.set("product", value);
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
+  const showFundsSection = productFilter !== "SHARES";
+  const showSharesSection = productFilter !== "FUNDS";
+
   const fetchFundSummary = useCallback(async () => {
     setLoadingFundSummary(true);
     try {
@@ -191,21 +209,42 @@ export default function OverviewPage() {
 
   // ── Derived data ────────────────────────────────────────────────────────────
 
-  // All active funds, for the selector dropdown — sorted alphabetically.
+  // All active FUNDS funds, for the selector dropdown — sorted alphabetically.
+  // SHARES (DPRP) has no NAV to scope this dropdown to; see the Shares
+  // summary section below instead.
   const allFunds = useMemo(
-    () => [...(fundSummary?.funds ?? [])].sort((a, b) => a.fund_name.localeCompare(b.fund_name)),
+    () =>
+      [...(fundSummary?.funds ?? [])]
+        .filter((f) => (f.product_type ?? "FUNDS") === "FUNDS")
+        .sort((a, b) => a.fund_name.localeCompare(b.fund_name)),
     [fundSummary]
   );
 
-  // "All Funds" (default) → every fund; otherwise just the one selected.
-  // Every card below is derived from this one array, so selecting a fund
-  // filters ALL of them together rather than each card having its own
-  // separate filter logic.
+  // "All Funds" (default) → every FUNDS fund; otherwise just the one selected.
+  // Every NAV-based card/chart below is derived from this one array, so
+  // selecting a fund filters ALL of them together rather than each card
+  // having its own separate filter logic. Always excludes SHARES funds
+  // (DPRP) regardless of the fund dropdown — they're valued at price per
+  // share, not NAV, so they never belong in this NAV-labeled arithmetic; see
+  // the separate Shares summary section below instead.
   const filteredFunds = useMemo(() => {
     if (!fundSummary) return [];
-    if (!isFundScoped) return fundSummary.funds;
-    return fundSummary.funds.filter((f) => String(f.id) === selectedFundId);
+    const fundsOnly = fundSummary.funds.filter((f) => (f.product_type ?? "FUNDS") === "FUNDS");
+    if (!isFundScoped) return fundsOnly;
+    return fundsOnly.filter((f) => String(f.id) === selectedFundId);
   }, [fundSummary, isFundScoped, selectedFundId]);
+
+  // SHARES batches for the separate Shares summary section — computed from
+  // the same batches list already fetched for the Batches KPI/list below, no
+  // extra request needed.
+  const sharesBatches = useMemo(() => batches.filter((b) => b.product_type === "SHARES"), [batches]);
+  const sharesAumUsd = useMemo(() => sharesBatches.reduce((s, b) => s + (b.total_capital || 0), 0), [sharesBatches]);
+  const sharesInvestors = useMemo(() => sharesBatches.reduce((s, b) => s + (b.investors_count || 0), 0), [sharesBatches]);
+  const sharesOversubscribedCount = useMemo(() => sharesBatches.filter((b) => b.is_oversubscribed).length, [sharesBatches]);
+  const sharesUnallocatedTotal = useMemo(
+    () => sharesBatches.reduce((s, b) => s + (b.shares_unallocated_total || 0), 0),
+    [sharesBatches]
+  );
 
   const selectedFund = isFundScoped ? filteredFunds[0] : undefined;
 
@@ -374,8 +413,13 @@ export default function OverviewPage() {
           </p>
         </div>
 
-        {/* Fund filter — scopes every card on this page, persisted in the URL */}
-        <div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: "16px", flexWrap: "wrap" }}>
+          {/* Product filter — default All shows both sections below; persisted in the URL */}
+          <ProductToggle value={productFilter} onChange={setProductFilter} options={OVERVIEW_PRODUCT_OPTIONS} label="Product" />
+
+          {/* Fund filter — scopes the Funds NAV section only, persisted in the URL */}
+          {showFundsSection && (
+          <div>
           <label
             style={{
               display: "block",
@@ -410,9 +454,14 @@ export default function OverviewPage() {
               </option>
             ))}
           </select>
+          </div>
+          )}
         </div>
       </div>
 
+      {/* ── Funds NAV section — hidden entirely when Product = Shares ── */}
+      {showFundsSection && (
+      <>
       {/* ── KPI Row (4 cards) ── */}
       <div
         className="overview-kpi-grid"
@@ -934,6 +983,66 @@ export default function OverviewPage() {
           </div>
         </div>
       </div>
+      </>
+      )}
+
+      {/* ── Shares summary — a separate section/cards, never blended into the
+          Funds NAV figures above (different valuation model: price per share,
+          not NAV). Hidden entirely when Product = Funds. ── */}
+      {showSharesSection && (
+        <div style={{ marginBottom: "24px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "12px",
+            }}
+          >
+            <h2 style={{ fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)", margin: 0 }}>
+              Shares (DPRP)
+            </h2>
+            <button
+              onClick={() => navigate(ROUTES.SHARES_BATCHES)}
+              style={{ fontSize: "11px", fontWeight: 500, color: "var(--color-brand-400)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+            >
+              View Shares batches →
+            </button>
+          </div>
+          <div
+            className="overview-kpi-grid"
+            style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px" }}
+          >
+            <div style={{ ...CARD, padding: "18px 22px" }}>
+              <div style={SECTION_LABEL}>Shares AUM (USD)</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-usd)", letterSpacing: "-0.02em" }}>
+                {sharesAumUsd > 0 ? sharesAumUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
+                Current standing across {sharesBatches.length} batch{sharesBatches.length !== 1 ? "es" : ""}
+              </div>
+            </div>
+            <div style={{ ...CARD, padding: "18px 22px" }}>
+              <div style={SECTION_LABEL}>Shares Investors</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
+                {sharesInvestors.toLocaleString()}
+              </div>
+            </div>
+            <div style={{ ...CARD, padding: "18px 22px" }}>
+              <div style={SECTION_LABEL}>Oversubscribed Batches</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: sharesOversubscribedCount > 0 ? "#F59E0B" : "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
+                {sharesOversubscribedCount}
+              </div>
+            </div>
+            <div style={{ ...CARD, padding: "18px 22px" }}>
+              <div style={SECTION_LABEL}>Unallocated Shares</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
+                {sharesUnallocatedTotal.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Client Activity (search one investor, or pull everyone's activity for a day) ── */}
       <ClientActivitySection />

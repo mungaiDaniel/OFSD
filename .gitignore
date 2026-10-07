@@ -12,6 +12,7 @@ __pycache__/
 # Frontend
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Logs and temp files
 *.log

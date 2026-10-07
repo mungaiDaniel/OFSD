@@ -11,11 +11,14 @@
  * identically to entering these rows one at a time.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { ROUTES } from "@/lib/constants";
 import { useBulkUploadJob } from "@/context/BulkUploadJobContext";
+import { fundService } from "@/services/fundService";
+import type { CoreFund, ProductType } from "@/lib/types";
+import { ProductToggle } from "@/components/ui/ProductToggle";
 import {
   bulkUploadService,
   BULK_UPLOAD_SYSTEM_FIELDS,
@@ -141,6 +144,21 @@ function downloadBlob(blob: Blob, filename: string) {
 
 export default function BulkUploadPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [product, setProduct] = useState<ProductType>(searchParams.get("product") === "SHARES" ? "SHARES" : "FUNDS");
+  const [fundsById, setFundsById] = useState<Map<number, CoreFund>>(new Map());
+  useEffect(() => {
+    fundService.getAll().then((funds) => setFundsById(new Map(funds.map((f) => [f.id, f])))).catch(() => {});
+  }, []);
+  /** The product this row's resolved fund actually belongs to, if known. */
+  const rowProduct = useCallback(
+    (row: ValidatedRow): ProductType | null => {
+      const fundId = row.resolved.fund_id;
+      if (fundId == null) return null;
+      return fundsById.get(fundId)?.product_type ?? null;
+    },
+    [fundsById]
+  );
   const [step, setStep] = useState<Step>("upload");
   const [dragOver, setDragOver] = useState(false);
   const [fileName, setFileName] = useState<string>("");
@@ -341,7 +359,20 @@ export default function BulkUploadPage() {
       const result = await bulkUploadService.validate(mappedRows);
       setValidatedRows(result.rows);
       setSummary(result.summary);
-      setSelected(new Set(result.rows.filter((r) => r.status !== "error").map((r) => r.row_index)));
+      // Rows resolving to a fund from the OTHER product are excluded by default
+      // (not an error — the mixing is already impossible server-side, see
+      // Task 1 — just a likely sign this row belongs in the other upload).
+      setSelected(
+        new Set(
+          result.rows
+            .filter((r) => r.status !== "error")
+            .filter((r) => {
+              const p = rowProduct(r);
+              return p == null || p === product;
+            })
+            .map((r) => r.row_index)
+        )
+      );
       setDecisions({});
       setPreviewPage(1);
       setStep("preview");
@@ -426,6 +457,10 @@ export default function BulkUploadPage() {
           Import many investors from a spreadsheet — validated before anything is written, using the same creation path as adding one investor at a time.
         </p>
       </div>
+
+      {/* Product — first control; rows resolving to the other product's funds
+          are flagged in the preview and unselected by default. */}
+      <ProductToggle value={product} onChange={(v) => setProduct(v as ProductType)} label="Product" />
 
       {/* Step indicator */}
       <div style={{ display: "flex", gap: "6px", fontSize: "11px", color: "#475569" }}>
@@ -643,6 +678,14 @@ export default function BulkUploadPage() {
                           {r.status !== "valid" && r.resolved.existing_fund_names.length > 0 && (
                             <div style={{ color: "#64748B" }}>Already holds: {r.resolved.existing_fund_names.join(", ")}</div>
                           )}
+                          {(() => {
+                            const p = rowProduct(r);
+                            return p && p !== product ? (
+                              <div style={{ color: "#F59E0B" }}>
+                                Resolves to a {p === "SHARES" ? "Shares" : "Funds"} fund — unselected by default
+                              </div>
+                            ) : null;
+                          })()}
                         </td>
                         <td style={{ padding: "8px 12px" }}>
                           {needsDecision ? (

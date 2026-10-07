@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 from sqlalchemy import and_, or_
 
 from app.database.database import db
+from app.database.product_type import SHARES
 from app.Batch.model import Batch
 from app.Batch.core_fund import CoreFund
 from app.Funds.share_class import ShareClass
@@ -181,8 +182,9 @@ class BatchManagementService:
         # find_or_create_batch() keeps reusing this same open batch for every
         # subsequent DPRP deposit instead of the usual "reuse until Thursday,
         # then spin up a new one" behavior every other fund gets.
-        from app.utils.statement_theme import is_dangote_dprp_fund
+        from app.utils.statement_theme import is_dangote_dprp_fund, resolve_product_type
         is_dprp = is_dangote_dprp_fund([core_fund.fund_name], [core_fund.fund_code])
+        product_type = resolve_product_type([core_fund.fund_name], [core_fund.fund_code])
         if is_dprp:
             auto_close_at = None
         else:
@@ -201,6 +203,7 @@ class BatchManagementService:
             date_deployed=None,  # Will be set during deployment
             is_active=False,  # Becomes active after deployment
             stage=1,  # Deposited stage
+            product_type=product_type,
         )
 
         db.session.add(batch)
@@ -232,6 +235,28 @@ class BatchManagementService:
                 f"Investment share class {investment.share_class_id} "
                 f"does not match batch share class {batch.share_class_id}"
             )
+
+        # Block mixing: a SHARES deposit cannot go into a FUNDS batch and vice
+        # versa. The share_class_id check above already makes a real mismatch
+        # unreachable through this path, but this keeps the rule explicit and
+        # gives a clear error if that invariant is ever loosened.
+        if investment.product_type and investment.product_type != batch.product_type:
+            raise ValueError(
+                f"Cannot add a {investment.product_type} deposit to a "
+                f"{batch.product_type} batch ({batch.batch_name})"
+            )
+        investment.product_type = batch.product_type
+
+        # Minimum deposit (before fees) for SHARES batches — see Task 2 /
+        # app.logic.shares_transfer_service.get_min_deposit_usd.
+        if batch.product_type == SHARES:
+            from app.logic.shares_transfer_service import get_min_deposit_usd
+            min_deposit = get_min_deposit_usd()
+            if Decimal(str(investment.amount_deposited or 0)) < min_deposit:
+                raise ValueError(
+                    f"Deposit of {investment.amount_deposited} USD is below the "
+                    f"{min_deposit} USD minimum (before fees) for a SHARES batch"
+                )
 
         investment.batch_id = batch.id
         db.session.add(investment)

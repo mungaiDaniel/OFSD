@@ -6,6 +6,7 @@ import type {
   CreateNewInvestorRequest,
   AddExistingDepositRequest,
   InvestorOverviewData,
+  ProductType,
 } from "@/lib/types";
 
 export const investmentService = {
@@ -14,13 +15,21 @@ export const investmentService = {
     return res.data;
   },
 
-  async getInvestorDirectory(params?: { page?: number; per_page?: number; search?: string }): Promise<ApiResponse> {
+  async getInvestorDirectory(params?: { page?: number; per_page?: number; search?: string; product?: ProductType }): Promise<ApiResponse> {
     const query = new URLSearchParams();
     if (params?.page) query.set("page", String(params.page));
     if (params?.per_page) query.set("per_page", String(params.per_page));
     if (params?.search) query.set("search", params.search);
+    if (params?.product) query.set("product", params.product);
     const qs = query.toString();
     const res = await api.get<ApiResponse>(qs ? `${API.INVESTOR_DIRECTORY}?${qs}` : API.INVESTOR_DIRECTORY);
+    return res.data;
+  },
+
+  /** Every deposit (holding) for this investor, optionally scoped to one product. */
+  async getInvestorDeposits(clientCode: string, product?: ProductType): Promise<ApiResponse> {
+    const qs = product ? `?product=${product}` : "";
+    const res = await api.get<ApiResponse>(`${API.INVESTOR_DEPOSITS(clientCode)}${qs}`);
     return res.data;
   },
 
@@ -99,6 +108,25 @@ export const investmentService = {
   async getInvestorEmailLogs(clientCode: string): Promise<ApiResponse> {
     const res = await api.get<ApiResponse>(API.INVESTOR_EMAIL_LOGS(clientCode));
     return res.data;
+  },
+
+  /** Server-generated Excel export of every investor matching the current search/product filters (not just the visible page). */
+  async exportInvestorDirectory(params?: { search?: string; product?: ProductType }): Promise<void> {
+    const query = new URLSearchParams();
+    if (params?.search) query.set("search", params.search);
+    if (params?.product) query.set("product", params.product);
+    const qs = query.toString();
+    const res = await api.get(qs ? `${API.INVESTOR_DIRECTORY_EXPORT}?${qs}` : API.INVESTOR_DIRECTORY_EXPORT, {
+      responseType: "blob",
+    });
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `investors-${params?.product || "all"}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    document.body.appendChild(link);
+    link.click();
+    link.parentNode?.removeChild(link);
+    window.URL.revokeObjectURL(url);
   },
 
   async downloadInvestorStatementPdf(clientCode: string): Promise<void> {

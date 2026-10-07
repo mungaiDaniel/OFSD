@@ -143,6 +143,55 @@ def create_app(config_filename):
             # Gatekeeper user fields (safe, idempotent)
             db.session.execute(text("ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending'"))
             db.session.execute(text("ALTER TABLE \"user\" ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'"))
+
+            # FUNDS vs SHARES product_type (see app.database.product_type / migration
+            # 017_add_product_type). Schema + backfill both repeated here, idempotently,
+            # because this startup sync — not `flask db upgrade` — is what actually keeps
+            # a running production DB in sync with the models in this app.
+            db.session.execute(text("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'product_type_enum') THEN
+                        CREATE TYPE product_type_enum AS ENUM ('FUNDS', 'SHARES');
+                    END IF;
+                END $$;
+            """))
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS product_type product_type_enum"))
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS product_type product_type_enum"))
+            db.session.execute(text("""
+                UPDATE batches b
+                SET product_type = 'SHARES'
+                FROM share_classes sc JOIN core_funds cf ON cf.id = sc.core_fund_id
+                WHERE b.share_class_id = sc.id AND b.product_type IS NULL
+                  AND (UPPER(COALESCE(cf.fund_code, '')) = 'DPRP'
+                       OR LOWER(COALESCE(cf.fund_name, '')) LIKE '%dangote%'
+                       OR LOWER(COALESCE(cf.fund_name, '')) LIKE '%dprp%')
+            """))
+            db.session.execute(text("UPDATE batches SET product_type = 'FUNDS' WHERE product_type IS NULL"))
+            db.session.execute(text("""
+                UPDATE investments i SET product_type = b.product_type
+                FROM batches b WHERE i.batch_id = b.id AND i.product_type IS NULL
+            """))
+            db.session.execute(text("UPDATE investments SET product_type = 'FUNDS' WHERE product_type IS NULL"))
+            db.session.execute(text("ALTER TABLE batches ALTER COLUMN product_type SET NOT NULL"))
+            db.session.execute(text("ALTER TABLE batches ALTER COLUMN product_type SET DEFAULT 'FUNDS'"))
+            db.session.execute(text("ALTER TABLE investments ALTER COLUMN product_type SET NOT NULL"))
+            db.session.execute(text("ALTER TABLE investments ALTER COLUMN product_type SET DEFAULT 'FUNDS'"))
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_batches_product_type ON batches (product_type)"))
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_investments_product_type ON investments (product_type)"))
+
+            # SHARES Transferred-stage fees (Task 2 — app.logic.shares_transfer_service).
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS balance_after_entry_fee_usd NUMERIC(20, 2)"))
+
+            # SHARES Deployed-stage USD->NGN allocation (Task 3 — app.logic.shares_deployment_service).
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS shares_exchange_rate_ngn NUMERIC(20, 6)"))
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS shares_price_per_share_ngn NUMERIC(20, 4)"))
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS shares_allocated_total INTEGER"))
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS shares_demand_total INTEGER"))
+            db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS shares_unallocated_total INTEGER"))
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS shares_exchange_rate_ngn NUMERIC(20, 6)"))
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS shares_price_per_share_ngn NUMERIC(20, 4)"))
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS net_ngn NUMERIC(20, 2)"))
+
             # Commit everything above before the optional legacy-column backfill below, so that
             # if it fails it can't silently discard all the schema-sync statements that already
             # succeeded in this same transaction (see rollback() in the except branch — Postgres

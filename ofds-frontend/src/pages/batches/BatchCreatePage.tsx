@@ -5,12 +5,22 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { createBatchSchema, type CreateBatchFormData } from "@/lib/validators/batch.schema";
 import { batchService } from "@/services/batchService";
 import { ROUTES } from "@/lib/constants";
+import type { ProductType } from "@/lib/types";
+import { ProductBadge } from "@/components/ui/ProductBadge";
 import { toast } from "sonner";
 import { Upload, FileSpreadsheet, ArrowLeft } from "lucide-react";
 import { EmailConfirmationModal } from "@/components/ui/EmailConfirmationModal";
 
-export default function BatchCreatePage() {
+interface BatchCreatePageProps {
+  /** Creates a batch of this product automatically — omit for the (legacy)
+   * combined /batches/new, which defaults to FUNDS on the backend. */
+  product?: ProductType;
+  backPath?: string;
+}
+
+export default function BatchCreatePage({ product, backPath }: BatchCreatePageProps) {
   const navigate = useNavigate();
+  const listPath = backPath ?? ROUTES.BATCHES;
   const [tab, setTab] = useState<"manual" | "excel">("manual");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -27,16 +37,16 @@ export default function BatchCreatePage() {
 
   const onManualSubmit = async (data: CreateBatchFormData) => {
     try {
-      const res = await batchService.create(data);
+      const res = await batchService.create(product ? { ...data, product_type: product } : data);
       const batchId = (res.data as any)?.id;
-      
+
       toast.success("Batch created successfully. Please upload investor file.");
-      
+
       if (batchId) {
         setCreatedBatch({ id: batchId, name: data.batch_name });
         setTab("excel");
       } else {
-        navigate(ROUTES.BATCHES);
+        navigate(listPath);
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to create batch";
@@ -64,7 +74,10 @@ export default function BatchCreatePage() {
 
       if (!batchId) {
         // 1. Create batch
-        const createRes = await batchService.create({ batch_name: excelBatchName.trim() });
+        const createRes = await batchService.create({
+          batch_name: excelBatchName.trim(),
+          ...(product ? { product_type: product } : {}),
+        });
         batchId = (createRes.data as { id?: number })?.id;
 
         if (!batchId) {
@@ -117,13 +130,16 @@ export default function BatchCreatePage() {
       {/* Header */}
       <div className="mb-4 px-3" style={{ maxWidth: '960px', margin: '0 auto' }}>
         <button
-          onClick={() => navigate(ROUTES.BATCHES)}
+          onClick={() => navigate(listPath)}
           className="d-flex align-items-center gap-1 mb-3 btn btn-link p-0 text-decoration-none"
           style={{ fontSize: "12px", color: "var(--color-text-tertiary)" }}
         >
           <ArrowLeft size={14} /> Back to batches
         </button>
-        <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>New batch</h1>
+        <div className="d-flex align-items-center gap-2 mb-1">
+          <h1 className="fw-bold mb-0" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>New batch</h1>
+          {product && <ProductBadge product={product} />}
+        </div>
         <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>Create a new investment batch manually or import from Excel</p>
       </div>
 
@@ -168,7 +184,7 @@ export default function BatchCreatePage() {
                 <input type="date" {...register("date_deployed")} className="form-control py-3 border-secondary" style={inputStyle} />
               </div>
               <div className="d-flex gap-3 pt-3">
-                <button type="button" onClick={() => navigate(ROUTES.BATCHES)} className="btn btn-outline-secondary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>Cancel</button>
+                <button type="button" onClick={() => navigate(listPath)} className="btn btn-outline-secondary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>Cancel</button>
                 <button type="submit" disabled={isSubmitting} className="btn btn-primary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>{isSubmitting ? "Creating..." : "Create batch"}</button>
               </div>
             </form>
@@ -231,7 +247,7 @@ export default function BatchCreatePage() {
               )}
 
               <div className="d-flex gap-3 pt-3">
-                <button onClick={() => navigate(ROUTES.BATCHES)} className="btn btn-outline-secondary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>Cancel</button>
+                <button onClick={() => navigate(listPath)} className="btn btn-outline-secondary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>Cancel</button>
                 <button onClick={onExcelUpload} disabled={!selectedFile || uploading} className="btn btn-primary w-50 fw-bold py-3 rounded-pill" style={{ fontSize: "14px" }}>{uploading ? "Uploading..." : "Upload"}</button>
               </div>
             </div>
@@ -244,7 +260,7 @@ export default function BatchCreatePage() {
         onClose={() => {
           setEmailConfirmModalOpen(false);
           // Navigate to batches once user has confirmed/cancelled emails out of the prompt
-          navigate(ROUTES.BATCHES);
+          navigate(listPath);
         }}
         batchId={createdBatch?.id}
       />

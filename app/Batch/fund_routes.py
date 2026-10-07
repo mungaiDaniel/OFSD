@@ -31,6 +31,7 @@ from app.Investments.model import Investment
 from app.Batch.model import Batch
 from app.Funds.share_class import ShareClass
 from app.Funds.investor_shares import InvestorShares
+from app.utils.statement_theme import resolve_product_type
 
 # Create blueprint
 fund_v1 = Blueprint("fund_v1", __name__, url_prefix='/')
@@ -75,6 +76,8 @@ def list_all_funds():
             data.append({
                 "id": f.id,
                 "fund_name": f.fund_name,
+                "fund_code": f.fund_code,
+                "product_type": resolve_product_type([f.fund_name], [f.fund_code]),
                 "is_active": f.is_active,
                 "total_aum": total_aum,
                 "investor_count": investor_count
@@ -183,6 +186,8 @@ def get_single_fund(fund_id: int):
         data = {
             "id": f.id,
             "fund_name": f.fund_name,
+            "fund_code": f.fund_code,
+            "product_type": resolve_product_type([f.fund_name], [f.fund_code]),
             "is_active": f.is_active,
             "total_aum": total_aum,
             "investor_count": investor_count,

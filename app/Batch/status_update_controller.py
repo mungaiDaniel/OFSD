@@ -2,6 +2,8 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from app.utils.email_service import EmailService
+from app.database.product_type import SHARES
+from app.logic.shares_transfer_service import SharesTransferService, SharesTransferError
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +26,33 @@ class StatusUpdateController:
         old_is_transferred = batch.is_transferred
         old_is_active = batch.is_active or batch.deployment_confirmed
 
+        # SHARES transfer-fee validation, before is_transferred (or anything else) is
+        # mutated below — a batch left half-transferred because of an invalid input
+        # here would otherwise be locked out of ever applying its real fees. FUNDS
+        # keeps its existing (unvalidated) behaviour.
+        is_transferring_shares_batch = (
+            batch.product_type == SHARES
+            and 'is_transferred' in data and data.get('is_transferred')
+            and not old_is_transferred
+        )
+        if is_transferring_shares_batch:
+            from app.Investments.model import Investment
+            entry_fee_percent_check = Decimal(str(
+                data.get('entry_fee_percentage', data.get('transfer_entry_fee_percent', 0)) or 0
+            ))
+            total_cost_check = Decimal(str(
+                data.get('transfer_transaction_cost', batch.transfer_transaction_cost or 0)
+            ))
+            investments_check = session.query(Investment).filter(Investment.batch_id == batch.id).all()
+            SharesTransferService.validate_inputs(investments_check, entry_fee_percent_check, total_cost_check)
+            # Raises SharesTransferError (a ValueError) on invalid input — the caller,
+            # BatchController.update_status, catches exceptions from this method and
+            # only logs them, so nothing below here has mutated the batch yet.
+
         # 1. Update fields from incoming data
         if 'is_transferred' in data:
             batch.is_transferred = bool(data['is_transferred'])
-        
+
         # 2. Handle transaction costs
         if 'transaction_cost' in data:
             batch.transaction_cost = Decimal(str(data['transaction_cost']))
@@ -53,34 +78,66 @@ class StatusUpdateController:
         if 'is_active' in data:
             batch.is_active = bool(data['is_active'])
 
-        # 3. Apply pro-rata transaction cost deductions
+        # 3. Apply pro-rata transaction cost deductions — FUNDS only. This legacy
+        # endpoint has no exchange_rate/price_per_share_ngn/shares_allocated inputs
+        # to run the real SHARES deployment allocation (see
+        # SharesDeploymentService), so a SHARES batch must be deployed through
+        # BatchController.patch_batch instead; applying the old NAV-style
+        # deduction/recalculation here would corrupt its data.
         new_is_active = batch.is_active or batch.deployment_confirmed
-        if new_is_active and not old_is_active and batch.date_deployed is not None:
+        if new_is_active and not old_is_active and batch.date_deployed is not None and batch.product_type != SHARES:
             cls._apply_transaction_cost_deduction(batch, session)
             from app.Batch.controllers import BatchController
             BatchController._recalculate_shares_on_deploy(batch, session)
         
         new_is_transferred = batch.is_transferred
         if new_is_transferred and not old_is_transferred:
-            deduction_summary = cls._apply_transfer_cost_deduction(
-                batch,
-                session,
-                transfer_cost_total=batch.transfer_transaction_cost,
-                entry_fee_percent=transfer_entry_fee_percent,
+            if batch.product_type == SHARES:
+                totals = SharesTransferService.apply_to_batch(
+                    batch,
+                    session,
+                    entry_fee_percent=transfer_entry_fee_percent,
+                    total_transaction_cost_usd=batch.transfer_transaction_cost,
+                )
+                batch.transfer_transaction_cost = totals["transaction_cost_usd"]
+            else:
+                deduction_summary = cls._apply_transfer_cost_deduction(
+                    batch,
+                    session,
+                    transfer_cost_total=batch.transfer_transaction_cost,
+                    entry_fee_percent=transfer_entry_fee_percent,
+                )
+                batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
+        elif batch.product_type == SHARES and not new_is_transferred and old_is_transferred:
+            # Admin "moved back" a SHARES batch — unlock and clear the per-investment
+            # fee fields (audited by the caller route, same as the patch_batch path).
+            from app.utils.audit_log import create_audit_log
+            old_totals, new_totals = SharesTransferService.revert_lock(batch, session)
+            create_audit_log(
+                action='SHARES_TRANSFER_REVERTED',
+                target_type='batch',
+                target_id=batch.id,
+                target_name=batch.batch_name,
+                description=f'Batch "{batch.batch_name}" moved back from Transferred — SHARES transfer fees unlocked and cleared.',
+                old_value=old_totals,
+                new_value=new_totals,
+                success=True
             )
-            batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
 
         # 4. Persist state
         session.commit()
 
         # 5. Trigger Stage-based Emails (Asynchronous)
         
+        from app.Batch.controllers import BatchController
+
         # Stage 2: Offshore Transfer
         if batch.is_transferred and not old_is_transferred:
             logger.info(f"Triggering Stage 2 Emails for Batch {batch.id}")
             EmailService.send_offshore_transfer_batch(batch, trigger_source="batch.update_status.stage_2_transfer")
             batch.stage = 2
             session.commit()
+            BatchController._on_batch_transferred(batch, session)
 
         # Stage 3: Investment Active
         if new_is_active and not old_is_active and batch.date_deployed is not None:
@@ -88,6 +145,7 @@ class StatusUpdateController:
             EmailService.send_investment_active_batch(batch, trigger_source="batch.update_status.stage_3_deploy")
             batch.stage = 3
             session.commit()
+            BatchController._on_batch_deployed(batch, session)
 
     @classmethod
     def _apply_transaction_cost_deduction(cls, batch, session):

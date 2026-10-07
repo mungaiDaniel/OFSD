@@ -1,7 +1,7 @@
 from app.Batch.model import Batch
 from app.Investments.model import (
     Investment, EpochLedger, Withdrawal, PendingEmail, EmailLog, FINAL_WITHDRAWAL_STATUSES,
-    WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND, WITHDRAWAL_STATUS_PENDING,
+    WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
 )
 from app.Valuation.model import Statement, ValuationRun, BatchValuation, InvestmentBatchValuation, DailyNAV
 from app.Performance.model import Performance
@@ -12,7 +12,11 @@ from app.Funds.investor_shares import InvestorShares
 from app.database.database import db
 from app.utils.email_service import EmailService
 from app.utils.audit_log import create_audit_log
-from app.utils.statement_theme import is_dangote_dprp_fund
+from app.utils.statement_theme import resolve_product_type
+from app.database.product_type import PRODUCT_TYPES, FUNDS, SHARES
+from app.logic.shares_transfer_service import SharesTransferService, SharesTransferError
+from app.logic.shares_deployment_service import SharesDeploymentService, SharesDeploymentError
+from app.Funds.share_class import ShareClass
 from flask import jsonify, make_response
 from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal
@@ -60,7 +64,47 @@ class BatchController:
             date_deployed_str = data.get('date_deployed')
             share_class_id = data.get('share_class_id')
             is_open = data.get('is_open')
-            
+
+            # Resolve product_type (FUNDS or SHARES). When a share_class_id is given,
+            # the share class's fund is the single source of truth (see
+            # resolve_product_type) — an explicit product_type must agree with it.
+            # Without a share_class_id yet (two-stage creation), fall back to an
+            # explicit product_type or default to FUNDS, the overwhelmingly common
+            # case; a SHARES batch created this way must have share_class_id set
+            # (and therefore its real product_type resolved) before it can accept
+            # deposits — see BatchManagementService.add_investor_to_batch.
+            requested_product_type = data.get('product_type')
+            if requested_product_type is not None:
+                requested_product_type = str(requested_product_type).strip().upper()
+                if requested_product_type not in PRODUCT_TYPES:
+                    return make_response(jsonify({
+                        "status": 400,
+                        "message": f"product_type must be one of {PRODUCT_TYPES}"
+                    }), 400)
+
+            product_type = requested_product_type or FUNDS
+            if share_class_id is not None:
+                share_class = session.query(ShareClass).filter(ShareClass.id == int(share_class_id)).first()
+                if not share_class:
+                    return make_response(jsonify({
+                        "status": 400,
+                        "message": f"Share class {share_class_id} not found"
+                    }), 400)
+                core_fund = session.query(CoreFund).filter(CoreFund.id == share_class.core_fund_id).first()
+                derived_product_type = resolve_product_type(
+                    [core_fund.fund_name if core_fund else None],
+                    [core_fund.fund_code if core_fund else None],
+                )
+                if requested_product_type and requested_product_type != derived_product_type:
+                    return make_response(jsonify({
+                        "status": 400,
+                        "message": (
+                            f"product_type '{requested_product_type}' does not match "
+                            f"the share class's fund ({derived_product_type})"
+                        )
+                    }), 400)
+                product_type = derived_product_type
+
             # Check if batch name already exists
             existing_batch = session.query(Batch).filter(
                 Batch.batch_name.ilike(batch_name.strip())
@@ -104,10 +148,21 @@ class BatchController:
                 share_class_id=int(share_class_id) if share_class_id is not None else None,
                 is_open=(bool(is_open) if is_open is not None else True),
                 deployment_confirmed=False,
-                stage=1
+                stage=1,
+                product_type=product_type,
             )
 
             batch.save(session)
+
+            create_audit_log(
+                action='BATCH_PRODUCT_TYPE_ASSIGNED',
+                target_type='batch',
+                target_id=batch.id,
+                target_name=batch.batch_name,
+                description=f'Batch "{batch.batch_name}" created as a {product_type} product.',
+                new_value={'product_type': product_type},
+                success=True,
+            )
 
             # Determine status
             status = 'Active' if batch.is_active else 'Deactivated'
@@ -125,6 +180,7 @@ class BatchController:
                     "is_active": batch.is_active,
                     "share_class_id": batch.share_class_id,
                     "is_open": batch.is_open,
+                    "product_type": batch.product_type,
                     "status": status
                 }
             }), 201)
@@ -151,15 +207,17 @@ class BatchController:
         return "Atomic Batch"
 
     @classmethod
-    def get_batch_by_id(cls, batch_id, session, page=1, per_page=200, search=None):
+    def get_batch_by_id(cls, batch_id, session, page=1, per_page=200, search=None, show_all=False):
         """
         Get a batch by ID with all details and investments.
 
         The investor-level detail lists (`investments` / `grouped_by_fund`) are only
-        populated when `search` is provided (matches client code / email / phone).
-        With no search term, those lists come back empty and the page shows only
-        batch-wide counts/totals — this is what keeps a 10,000-investor batch fast
-        to open, since neither the full investment row set nor the per-investment
+        populated when `search` is provided, or `show_all` is explicitly set (the
+        "Show all" toggle on the batch detail page — Task 6; the frontend then
+        chunk-loads/virtualizes rather than rendering all rows at once). With
+        neither, those lists come back empty and the page shows only batch-wide
+        counts/totals — this is what keeps a 10,000-investor batch fast to open,
+        since neither the full investment row set nor the per-investment
         valuation cascade is ever loaded just to render the batch header. All
         batch-wide totals (total_capital, investors_count, investment_rows_count,
         etc.) are computed via SQL aggregates, not by loading every row.
@@ -168,10 +226,13 @@ class BatchController:
             batch_id: ID of the batch
             session: database session
             page: 1-indexed page of investors to return in the detail lists (only
-                relevant when `search` is set)
+                relevant when `search` or `show_all` is set)
             per_page: investors per page (capped at 1000)
             search: optional text match against client code / email / phone —
-                when omitted, no investor rows are returned at all
+                when omitted (and show_all is False), no investor rows are returned
+            show_all: bypass the "no search -> empty list" gate and paginate
+                through every investor in the batch instead (still paginated —
+                this never loads more than one page's worth of rows per call)
 
         Returns:
             tuple: (json_response, status_code)
@@ -198,16 +259,17 @@ class BatchController:
                 Investment.batch_id == batch_id
             ).scalar()
 
-            if search:
-                like = f"%{search}%"
-                base_query = session.query(Investment).filter(
-                    Investment.batch_id == batch_id,
-                    or_(
-                        Investment.internal_client_code.ilike(like),
-                        Investment.investor_email.ilike(like),
-                        Investment.investor_phone.ilike(like),
-                    ),
-                )
+            if search or show_all:
+                base_query = session.query(Investment).filter(Investment.batch_id == batch_id)
+                if search:
+                    like = f"%{search}%"
+                    base_query = base_query.filter(
+                        or_(
+                            Investment.internal_client_code.ilike(like),
+                            Investment.investor_email.ilike(like),
+                            Investment.investor_phone.ilike(like),
+                        ),
+                    )
                 match_count = base_query.count()
                 total_pages = max((match_count + per_page - 1) // per_page, 1)
                 page = min(page, total_pages)
@@ -242,6 +304,14 @@ class BatchController:
                     "entry_fee_usd": float(inv.deployment_fee_deducted or 0),
                     "deployment_fee": float(inv.transfer_fee_deducted or 0),
                     "main_balance": float(inv.net_principal),
+                    # Task 6 — SHARES-only columns on the batch client list/export.
+                    # net_usd deliberately NOT net_principal (which also subtracts
+                    # any oversubscription refund — shown separately below).
+                    "net_usd": float(
+                        (inv.amount_deposited or 0) - (inv.deployment_fee_deducted or 0) - (inv.transfer_fee_deducted or 0)
+                    ),
+                    "net_ngn": float(inv.net_ngn) if inv.net_ngn is not None else None,
+                    "refund_usd": float(inv.oversubscription_refund_amount) if inv.oversubscription_refund_amount else None,
                     "status": "Active" if batch.is_transferred else "Pending",
                     # Prefer the FK relationship fund name, fall back to the legacy fund_name field
                     "fund_id": inv.fund_id,
@@ -285,6 +355,11 @@ class BatchController:
                     "entry_fee_usd": float(inv.deployment_fee_deducted or 0),
                     "deployment_fee": float(inv.transfer_fee_deducted or 0),
                     "main_balance": float(inv.net_principal),
+                    "net_usd": float(
+                        (inv.amount_deposited or 0) - (inv.deployment_fee_deducted or 0) - (inv.transfer_fee_deducted or 0)
+                    ),
+                    "net_ngn": float(inv.net_ngn) if inv.net_ngn is not None else None,
+                    "refund_usd": float(inv.oversubscription_refund_amount) if inv.oversubscription_refund_amount else None,
                     "status": "Active" if batch.is_transferred else "Pending",
                     "fund_id": inv.fund_id,
                     "fund_name": fund_name,
@@ -413,6 +488,7 @@ class BatchController:
                     "batch_name": batch.batch_name,
                     "certificate_number": batch.certificate_number,
                     "batch_type": batch_type,
+                    "product_type": batch.product_type,
                     "total_principal": float(fresh_total_principal),
                     "total_net_principal": float(total_net_principal),
                     "total_capital": float(total_current_standing),
@@ -441,11 +517,17 @@ class BatchController:
                     ),
                     "deployment_breakdown": json.loads(batch.deployment_breakdown) if getattr(batch, "deployment_breakdown", None) else None,
                     "latest_deposit_date": latest_deposit_date.isoformat() if latest_deposit_date else None,
-                    # DPRP oversubscription — is_dprp_fund tells the frontend whether the
-                    # deploy modal should even offer the oversubscription toggle.
+                    # is_dprp_fund tells the frontend whether to show the SHARES deployment
+                    # form (exchange rate / price per share / shares allocated) instead of
+                    # the FUNDS NAV deployment form — equivalent to product_type == SHARES.
                     "is_dprp_fund": cls.is_batch_dprp_fund(batch, session),
                     "is_oversubscribed": bool(getattr(batch, "is_oversubscribed", False)),
                     "allocation_rate": float(batch.allocation_rate) if getattr(batch, "allocation_rate", None) is not None else None,
+                    "shares_exchange_rate_ngn": float(batch.shares_exchange_rate_ngn) if getattr(batch, "shares_exchange_rate_ngn", None) is not None else None,
+                    "shares_price_per_share_ngn": float(batch.shares_price_per_share_ngn) if getattr(batch, "shares_price_per_share_ngn", None) is not None else None,
+                    "shares_allocated_total": batch.shares_allocated_total,
+                    "shares_demand_total": batch.shares_demand_total,
+                    "shares_unallocated_total": batch.shares_unallocated_total,
                     "investments": investments_data,  # Flat array — only populated when `search` is set
                     "grouped_by_fund": grouped_by_fund_response,  # Only populated when `search` is set
                     "investments_pagination": {
@@ -1023,165 +1105,54 @@ class BatchController:
             session.add(inv)
 
     @classmethod
-    def is_batch_dprp_fund(cls, batch, session) -> bool:
+    def is_batch_dprp_fund(cls, batch, session=None) -> bool:
         """
-        Resolve whether a batch's fund is DPRP (Dangote Petroleum Refinery and
-        Petrochemicals) — the only fund that is a direct share purchase with a hard
-        deployment cap, and therefore the only one oversubscription pro-rata applies to.
-        Reuses is_dangote_dprp_fund (the single source of truth for this fund
-        identity check, already used for statement/PDF theming) rather than
-        re-implementing the name/code match here.
+        Whether a batch is DPRP (Dangote Petroleum Refinery and Petrochemicals) —
+        the only SHARES product today. Used to be a query joining through
+        investments/core_funds and re-running is_dangote_dprp_fund per call;
+        product_type (set once at batch creation — see
+        BatchManagementService._create_new_batch) already IS that same
+        classification, so this is now just a field check. `session` is accepted
+        and ignored for backward compatibility with existing callers.
         """
-        if batch is None:
-            return False
-        fund_names = [
-            name for (name,) in
-            session.query(func.coalesce(CoreFund.fund_name, Investment.fund_name))
-            .select_from(Investment)
-            .outerjoin(CoreFund, Investment.fund_id == CoreFund.id)
-            .filter(Investment.batch_id == batch.id)
-            .distinct()
-            .all()
-            if name
-        ]
-        return is_dangote_dprp_fund(fund_names)
+        return batch is not None and batch.product_type == SHARES
 
     @classmethod
-    def apply_oversubscription_allocation(cls, batch, session, allocation_rate):
+    def _on_batch_transferred(cls, batch, session):
         """
-        Apply a uniform pro-rata allocation rate to every investment in a DPRP batch at
-        deployment time. `allocation_rate` is a percentage (0-100], e.g. 60 means each
-        investor gets 60% of their own net principal deployed into shares and 40% queued
-        for refund.
+        Product-specific hook fired once a batch transitions to Stage 2
+        (Transferred) — see patch_batch. Shares batches use the exact same
+        stage-transition code as Funds batches (no separate state machine);
+        this hook is where behaviour that differs by product_type branches off.
 
-        For each investment:
-          - oversubscription_refund_amount is set to the un-deployed slice of net principal
-            (computed from the pre-existing fee-deducted columns, NOT from a possibly
-            already-adjusted net_principal, so re-running this with the same rate is
-            idempotent rather than compounding).
-          - a Withdrawal row (source=oversubscription_refund, status=Pending) is created or
-            updated for that slice — reusing the existing withdrawal approval flow rather
-            than a parallel refund pipeline.
-
-        Does not compute shares itself — the caller (_deploy_shares_for_batch) runs right
-        after this and reads the now-reduced Investment.net_principal, so the normal
-        share-purchase math automatically operates on the deployed amount only.
-
-        Returns a summary dict for the audit log / API response.
+        Empty for now — Task 2 (FUNDS) and Task 3 (SHARES) fill these in.
         """
-        if allocation_rate is None:
-            raise ValueError("allocation_rate is required")
-        allocation_rate = Decimal(str(allocation_rate))
-        if allocation_rate <= 0 or allocation_rate > 100:
-            raise ValueError("allocation_rate must be greater than 0 and at most 100")
+        if batch.product_type == SHARES:
+            pass
+        else:
+            pass
 
-        rate_fraction = allocation_rate / Decimal("100")
-        cent = Decimal("0.01")
+    @classmethod
+    def _on_batch_deployed(cls, batch, session):
+        """
+        Product-specific hook fired once a batch transitions to Stage 3
+        (Deployed) — see patch_batch. Mirrors _on_batch_transferred above.
 
-        # Eager-load .fund (used for Withdrawal.fund_name below) and pre-fetch any refund
-        # rows from a prior run of this same allocation in ONE query each — a batch can have
-        # thousands of investments (DPRP bulk-upload batches have), so per-investment lazy
-        # loads / existence queries here would be a real N+1.
-        investments = (
-            session.query(Investment)
-            .options(joinedload(Investment.fund))
-            .filter(Investment.batch_id == batch.id)
-            .all()
-        )
-        existing_refunds_by_code = {
-            w.internal_client_code: w
-            for w in session.query(Withdrawal).filter(
-                Withdrawal.batch_id == batch.id,
-                Withdrawal.source == WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
-            ).all()
-        }
-
-        total_pre_allocation_net = Decimal("0.00")
-        total_deployed = Decimal("0.00")
-        total_refunded = Decimal("0.00")
-        affected_investor_ids = []
-        note = (
-            f"DPRP oversubscription refund — {batch.batch_name} "
-            f"(allocation rate {allocation_rate.normalize()}%)"
-        )
-
-        # Per-row math stays a Python loop, but persistence is batched — a
-        # heavily-oversubscribed 100k-investor batch means up to 100k
-        # Investment updates AND up to 100k new Withdrawal rows; session.add()
-        # per row for both would hit the same wall Transfer-stage did.
-        investment_mappings = []
-        withdrawal_updates = []
-        withdrawal_inserts = []
-        now = datetime.now(timezone.utc)
-
-        for inv in investments:
-            pre_refund_net = (
-                Decimal(str(inv.amount_deposited or 0))
-                - Decimal(str(inv.transfer_fee_deducted or 0))
-                - Decimal(str(inv.deployment_fee_deducted or 0))
-            )
-            if pre_refund_net <= 0:
-                investment_mappings.append({"id": inv.id, "oversubscription_refund_amount": Decimal("0.00")})
-                continue
-
-            refund_amount = (pre_refund_net * (Decimal("1") - rate_fraction)).quantize(cent)
-            deployed_amount = pre_refund_net - refund_amount
-
-            investment_mappings.append({"id": inv.id, "oversubscription_refund_amount": refund_amount})
-
-            total_pre_allocation_net += pre_refund_net
-            total_deployed += deployed_amount
-            total_refunded += refund_amount
-
-            if refund_amount > 0:
-                affected_investor_ids.append(inv.id)
-                existing_refund = existing_refunds_by_code.get(inv.internal_client_code)
-                if existing_refund:
-                    withdrawal_updates.append({
-                        "id": existing_refund.id,
-                        "gross_amount": refund_amount,
-                        "amount": refund_amount,
-                        "note": note,
-                        "status": WITHDRAWAL_STATUS_PENDING,
-                    })
-                else:
-                    withdrawal_inserts.append({
-                        "internal_client_code": inv.internal_client_code,
-                        "fund_id": inv.fund_id,
-                        "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
-                        "gross_amount": refund_amount,
-                        "exit_fee_deducted": Decimal("0.00"),
-                        "amount": refund_amount,
-                        "date_withdrawn": now,
-                        "status": WITHDRAWAL_STATUS_PENDING,
-                        "note": note,
-                        "batch_id": batch.id,
-                        "source": WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
-                    })
-
-        if investment_mappings:
-            session.bulk_update_mappings(Investment, investment_mappings)
-        if withdrawal_updates:
-            session.bulk_update_mappings(Withdrawal, withdrawal_updates)
-        if withdrawal_inserts:
-            session.execute(insert(Withdrawal), withdrawal_inserts)
-
-        batch.is_oversubscribed = True
-        batch.allocation_rate = allocation_rate
-        session.add(batch)
-
-        return {
-            "allocation_rate": float(allocation_rate),
-            "total_pre_allocation_net": float(total_pre_allocation_net),
-            "total_deployed": float(total_deployed),
-            "total_refunded": float(total_refunded),
-            "affected_investor_count": len(affected_investor_ids),
-            "_affected_investor_ids": affected_investor_ids,
-        }
+        Empty for now — Task 2 (FUNDS) and Task 3 (SHARES) fill these in.
+        """
+        if batch.product_type == SHARES:
+            pass
+        else:
+            pass
 
     @classmethod
     def _deploy_shares_for_batch(cls, batch, session):
-        """Create or update InvestorShares for deployed batch investments."""
+        """
+        Create or update InvestorShares for deployed batch investments —
+        FUNDS (NAV-based) only. SHARES batches are deployed by
+        SharesDeploymentService (Task 3), which computes whole shares from a
+        price-per-share/exchange-rate, not a NAV.
+        """
         if batch is None or batch.date_deployed is None:
             return
 
@@ -1773,18 +1744,23 @@ class BatchController:
         return results
 
     @classmethod
-    def get_all_batches(cls, session):
+    def get_all_batches(cls, session, product=None):
         """
         Get all batches with calculated fields.
-        
+
         Args:
             session: database session
-        
+            product: optional 'FUNDS' or 'SHARES' filter (see app.database.product_type).
+                     Omitted/None keeps today's default behaviour (all products).
+
         Returns:
             tuple: (json_response, status_code)
         """
         try:
-            batches = session.query(Batch).all()
+            batches_query = session.query(Batch)
+            if product:
+                batches_query = batches_query.filter(Batch.product_type == product)
+            batches = batches_query.all()
             
             batch_list = []
             for batch in batches:
@@ -1886,6 +1862,7 @@ class BatchController:
                     "class_code": batch.share_class.class_code if batch.share_class is not None else None,
                     "class_currency": batch.share_class.currency if batch.share_class is not None else None,
                     "deployment_total_nav": float(batch.deployment_total_nav) if getattr(batch, "deployment_total_nav", None) is not None else None,
+                    "product_type": batch.product_type,
                 })
 
             return make_response(jsonify({
@@ -2049,34 +2026,56 @@ class BatchController:
                     "message": "Batch not found"
                 }), 404)
 
-            # DPRP oversubscription validation MUST happen before any field below is
-            # mutated. A previous version of this check lived inside the stage-3 branch
-            # further down, after date_deployed/deployment_confirmed/is_active were
-            # already written and committed — an admin request that failed this check
-            # still left the batch half-deployed. Validating here means a 400 response
-            # is guaranteed to mean zero mutation, no matter what else is in `data`.
-            if data.get('is_oversubscribed'):
-                if not cls.is_batch_dprp_fund(batch, session):
-                    return make_response(jsonify({
-                        "status": 400,
-                        "message": "Oversubscription pro-rata allocation only applies to DPRP batches."
-                    }), 400)
-                try:
-                    rate_check = Decimal(str(data.get('allocation_rate')))
-                except Exception:
-                    return make_response(jsonify({"status": 400, "message": "allocation_rate is required"}), 400)
-                if rate_check <= 0 or rate_check > 100:
-                    return make_response(jsonify({
-                        "status": 400,
-                        "message": "allocation_rate must be greater than 0 and at most 100"
-                    }), 400)
-
             # Save old stage states for transition detection
             old_is_transferred = batch.is_transferred
             old_deployment_confirmed = batch.deployment_confirmed
             old_is_active = batch.is_active
             transfer_entry_fee_percent = Decimal("0")
             transfer_settings_changed = False
+
+            # SHARES deployment validation MUST happen before any field below is
+            # mutated (same reasoning as the transfer-fee check below it) — a 400
+            # here is guaranteed to mean zero mutation, no matter what else is in
+            # `data`. Replaces the old flat-rate DPRP oversubscription validation
+            # (is_oversubscribed/allocation_rate) with Task 3's NGN-based allocation.
+            incoming_date_deployed = data.get('date_deployed') or batch.date_deployed
+            if (
+                batch.product_type == SHARES
+                and 'deployment_confirmed' in data and data.get('deployment_confirmed')
+                and not old_deployment_confirmed and incoming_date_deployed is not None
+            ):
+                investments_for_deploy_check = session.query(Investment).filter(Investment.batch_id == batch.id).all()
+                try:
+                    SharesDeploymentService.validate_inputs(
+                        investments_for_deploy_check,
+                        data.get('exchange_rate'),
+                        data.get('price_per_share_ngn'),
+                        data.get('shares_allocated'),
+                    )
+                except SharesDeploymentError as e:
+                    return make_response(jsonify({"status": 400, "message": str(e)}), 400)
+
+            # SHARES transfer-fee validation — same reasoning as the deployment
+            # check above: must happen before any field below is mutated, so a 400
+            # here is guaranteed to mean zero mutation. Only applies when this request
+            # is the one flipping is_transferred False -> True for a SHARES batch;
+            # FUNDS keeps its existing (unvalidated) transfer-stage behaviour.
+            if (
+                batch.product_type == SHARES
+                and 'is_transferred' in data and data.get('is_transferred')
+                and not old_is_transferred
+            ):
+                entry_fee_percent_check = Decimal(str(
+                    data.get('entry_fee_percentage', data.get('transfer_entry_fee_percent', 0)) or 0
+                ))
+                total_cost_check = Decimal(str(
+                    data.get('transfer_transaction_cost', batch.transfer_transaction_cost or 0)
+                ))
+                investments_check = session.query(Investment).filter(Investment.batch_id == batch.id).all()
+                try:
+                    SharesTransferService.validate_inputs(investments_check, entry_fee_percent_check, total_cost_check)
+                except SharesTransferError as e:
+                    return make_response(jsonify({"status": 400, "message": str(e)}), 400)
 
             # Update allowed fields for PATCH with uniqueness checks
             if 'batch_name' in data:
@@ -2158,7 +2157,13 @@ class BatchController:
                 # we must recompute per-investor deductions so the UI and statements reflect
                 # the latest rules (transaction cost + entry fee on gross deposit).
                 # This MUST NOT retrigger investor emails.
-                if batch.is_transferred and transfer_settings_changed and not ('is_transferred' in data and data.get('is_transferred') and not old_is_transferred):
+                # FUNDS only — SHARES fees are locked once Transferred (see Task 2):
+                # recomputing here would silently violate that lock.
+                if (
+                    batch.product_type != SHARES
+                    and batch.is_transferred and transfer_settings_changed
+                    and not ('is_transferred' in data and data.get('is_transferred') and not old_is_transferred)
+                ):
                     try:
                         deduction_summary = StatusUpdateController._apply_transfer_cost_deduction(
                             batch,
@@ -2171,15 +2176,43 @@ class BatchController:
                     except Exception as recompute_err:
                         logger.warning(f"Failed to recompute transfer deductions for batch {batch.id}: {recompute_err}")
 
+                # Admin "moved back" a SHARES batch (is_transferred True -> False):
+                # unlock and clear the per-investment fee fields, audited with old/new
+                # values — the next Transferred run recalculates from scratch.
+                if (
+                    batch.product_type == SHARES
+                    and 'is_transferred' in data and not data.get('is_transferred') and old_is_transferred
+                ):
+                    old_totals, new_totals = SharesTransferService.revert_lock(batch, session)
+                    create_audit_log(
+                        action='SHARES_TRANSFER_REVERTED',
+                        target_type='batch',
+                        target_id=batch.id,
+                        target_name=batch.batch_name,
+                        description=f'Batch "{batch.batch_name}" moved back from Transferred — SHARES transfer fees unlocked and cleared.',
+                        old_value=old_totals,
+                        new_value=new_totals,
+                        success=True
+                    )
+
                 # Stage 2: When is_transferred changes to True
                 if 'is_transferred' in data and data['is_transferred'] and not old_is_transferred:
-                    deduction_summary = StatusUpdateController._apply_transfer_cost_deduction(
-                        batch,
-                        session,
-                        transfer_cost_total=batch.transfer_transaction_cost,
-                        entry_fee_percent=transfer_entry_fee_percent,
-                    )
-                    batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
+                    if batch.product_type == SHARES:
+                        totals = SharesTransferService.apply_to_batch(
+                            batch,
+                            session,
+                            entry_fee_percent=transfer_entry_fee_percent,
+                            total_transaction_cost_usd=batch.transfer_transaction_cost,
+                        )
+                        batch.transfer_transaction_cost = totals["transaction_cost_usd"]
+                    else:
+                        deduction_summary = StatusUpdateController._apply_transfer_cost_deduction(
+                            batch,
+                            session,
+                            transfer_cost_total=batch.transfer_transaction_cost,
+                            entry_fee_percent=transfer_entry_fee_percent,
+                        )
+                        batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
                     session.commit()
                     EmailService.send_offshore_transfer_batch(batch, trigger_source="batch.patch.stage_2_transfer")
                     create_audit_log(
@@ -2191,56 +2224,77 @@ class BatchController:
                         new_value={'stage': 2, 'is_transferred': True},
                         success=True
                     )
+                    cls._on_batch_transferred(batch, session)
+
+                # Admin "moved back" a SHARES batch (deployment_confirmed True -> False):
+                # unlock, clear the per-investment allocation fields, and reject any
+                # still-Pending refund Withdrawals — audited with old/new values.
+                if (
+                    batch.product_type == SHARES
+                    and 'deployment_confirmed' in data and not data.get('deployment_confirmed')
+                    and old_deployment_confirmed
+                ):
+                    old_values, new_values = SharesDeploymentService.revert_lock(batch, session)
+                    create_audit_log(
+                        action='SHARES_DEPLOYMENT_REVERTED',
+                        target_type='batch',
+                        target_id=batch.id,
+                        target_name=batch.batch_name,
+                        description=f'Batch "{batch.batch_name}" moved back from Deployed — SHARES allocation unlocked and cleared.',
+                        old_value=old_values,
+                        new_value=new_values,
+                        success=True
+                    )
 
                 # Stage 3: When deployment_confirmed changes to True and date_deployed is set
                 if ('deployment_confirmed' in data and data['deployment_confirmed'] and
                     not old_deployment_confirmed and batch.date_deployed is not None):
                     batch.is_active = True
 
-                    # DPRP oversubscription pro-rata allocation — validated up-front (before
-                    # any field on this batch was touched), so by this point it's known-good;
-                    # only ever applied as part of this same deploy action, never as a
-                    # standalone PATCH, so it can't be toggled on for a batch that's already
-                    # deployed without shares being recomputed alongside it.
-                    oversubscription_summary = None
-                    if data.get('is_oversubscribed'):
-                        oversubscription_summary = cls.apply_oversubscription_allocation(
-                            batch, session, data.get('allocation_rate')
+                    if batch.product_type == SHARES:
+                        # Validated up-front (before any field on this batch was touched),
+                        # so by this point it's known-good. Replaces the old flat-rate DPRP
+                        # oversubscription allocation with Task 3's NGN-based allocation —
+                        # ONE implementation, run unconditionally (not just "if
+                        # oversubscribed"): even a fully-subscribed batch can have small
+                        # per-investor refunds from floor-rounding leftover shares.
+                        deployment_summary = SharesDeploymentService.apply_to_batch(
+                            batch, session,
+                            exchange_rate=data.get('exchange_rate'),
+                            price_per_share_ngn=data.get('price_per_share_ngn'),
+                            shares_allocated=data.get('shares_allocated'),
                         )
+                        session.commit()
+                        cls.refresh_cached_total_capital(batch, session)
 
-                    cls._deploy_shares_for_batch(batch, session)
-                    session.commit()
-                    cls.refresh_cached_total_capital(batch, session)
-
-                    if oversubscription_summary:
-                        EmailService.send_investment_active_batch(
-                            batch, trigger_source="batch.patch.stage_3_deploy_oversubscribed",
-                        )
-                        EmailService.send_oversubscription_refund_notices(
-                            batch,
-                            oversubscription_summary.get("_affected_investor_ids"),
-                            trigger_source="batch.patch.stage_3_deploy_oversubscribed",
-                        )
-                        create_audit_log(
-                            action='DPRP_OVERSUBSCRIPTION_ALLOCATION',
-                            target_type='batch',
-                            target_id=batch.id,
-                            target_name=batch.batch_name,
-                            description=(
-                                f'Batch "{batch.batch_name}" deployed with DPRP oversubscription pro-rata '
-                                f'allocation at {oversubscription_summary["allocation_rate"]}% — '
-                                f'{oversubscription_summary["affected_investor_count"]} investor(s) affected.'
-                            ),
-                            new_value={
-                                'allocation_rate': oversubscription_summary["allocation_rate"],
-                                'total_deposited_net': oversubscription_summary["total_pre_allocation_net"],
-                                'total_deployed': oversubscription_summary["total_deployed"],
-                                'total_refunded': oversubscription_summary["total_refunded"],
-                                'affected_investor_count': oversubscription_summary["affected_investor_count"],
-                            },
-                            success=True
-                        )
+                        refunded_investor_ids = deployment_summary.get("_refunded_investor_ids") or []
+                        if refunded_investor_ids:
+                            EmailService.send_investment_active_batch(
+                                batch, trigger_source="batch.patch.stage_3_deploy_shares",
+                            )
+                            EmailService.send_oversubscription_refund_notices(
+                                batch, refunded_investor_ids,
+                                trigger_source="batch.patch.stage_3_deploy_shares",
+                            )
+                            create_audit_log(
+                                action='SHARES_DEPLOYMENT_ALLOCATION',
+                                target_type='batch',
+                                target_id=batch.id,
+                                target_name=batch.batch_name,
+                                description=(
+                                    f'Batch "{batch.batch_name}" deployed — '
+                                    f'{"Oversubscribed" if deployment_summary["is_oversubscribed"] else "Fully subscribed"}, '
+                                    f'{len(refunded_investor_ids)} investor(s) refunded.'
+                                ),
+                                new_value={k: v for k, v in deployment_summary.items() if not k.startswith("_")},
+                                success=True
+                            )
+                        else:
+                            EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy_shares")
                     else:
+                        cls._deploy_shares_for_batch(batch, session)
+                        session.commit()
+                        cls.refresh_cached_total_capital(batch, session)
                         EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy")
 
                     create_audit_log(
@@ -2252,6 +2306,7 @@ class BatchController:
                         new_value={'stage': 3, 'deployment_confirmed': True, 'date_deployed': batch.date_deployed.isoformat() if batch.date_deployed else None},
                         success=True
                     )
+                    cls._on_batch_deployed(batch, session)
 
                 # Stage 4: no investor email trigger (restricted to explicit big-four events).
                 if 'is_active' in data and data['is_active'] and not old_is_active:

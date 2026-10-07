@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { batchService } from "@/services/batchService";
 import { formatDate } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
-import type { Batch, BatchStage } from "@/lib/types";
+import type { Batch, BatchStage, ProductType } from "@/lib/types";
+import { ProductBadge } from "@/components/ui/ProductBadge";
 import { Plus, Search } from "lucide-react";
 
 // ── Filter options matching production ──────────────────────────────────────
@@ -349,20 +350,44 @@ function BatchCard({ batch, onClick }: { batch: Batch; onClick: () => void }) {
 }
 
 // ── Main Page ────────────────────────────────────────────────────────────────
-export default function BatchListPage() {
+interface BatchListPageProps {
+  /** Scopes the list and the "New batch" button to one product. Omit for the
+   * (legacy) combined view across both products. */
+  product?: ProductType;
+  /** Where "New batch" navigates to — defaults to the shared /batches/new. */
+  createPath?: string;
+  /** Default filter pill — e.g. the Shares > Deployment & allocation page opens
+   * straight to "Transferred" (batches ready to deploy) instead of "All". */
+  initialFilter?: FilterKey;
+  /** Hides the "New batch" button — used where this list isn't for creating
+   * batches (e.g. the Deployment & allocation view). */
+  hideCreateButton?: boolean;
+  title?: string;
+  description?: string;
+}
+
+export default function BatchListPage({
+  product,
+  createPath,
+  initialFilter = "All",
+  hideCreateButton = false,
+  title,
+  description,
+}: BatchListPageProps) {
   const navigate = useNavigate();
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterKey>("All");
+  const [filter, setFilter] = useState<FilterKey>(initialFilter);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
+    setLoading(true);
     batchService
-      .getAll()
+      .getAll(product ? { product } : undefined)
       .then(setBatches)
       .catch(() => setBatches([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [product]);
 
   const openCount = batches.filter((b) => b.is_open).length;
 
@@ -398,24 +423,28 @@ export default function BatchListPage() {
         }}
       >
         <div>
-          <h1
-            style={{
-              fontSize: "22px",
-              fontWeight: 700,
-              color: "var(--color-text-primary)",
-              letterSpacing: "-0.02em",
-              marginBottom: "4px",
-            }}
-          >
-            Batches
-          </h1>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+            <h1
+              style={{
+                fontSize: "22px",
+                fontWeight: 700,
+                color: "var(--color-text-primary)",
+                letterSpacing: "-0.02em",
+                margin: 0,
+              }}
+            >
+              {title ?? "Batches"}
+            </h1>
+            {product && <ProductBadge product={product} />}
+          </div>
           <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            {batches.length} batch{batches.length !== 1 ? "es" : ""} — Weekly investment groups sent to AXYS
+            {description ?? `${batches.length} batch${batches.length !== 1 ? "es" : ""} — Weekly investment groups sent to AXYS`}
           </p>
         </div>
 
+        {!hideCreateButton && (
         <button
-          onClick={() => navigate(ROUTES.BATCH_CREATE)}
+          onClick={() => navigate(createPath ?? ROUTES.BATCH_CREATE)}
           style={{
             display: "flex",
             alignItems: "center",
@@ -434,6 +463,7 @@ export default function BatchListPage() {
         >
           <Plus size={14} /> New batch
         </button>
+        )}
       </div>
 
       {/* ── Filter + Search bar ── */}

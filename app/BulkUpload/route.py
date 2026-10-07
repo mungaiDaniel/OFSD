@@ -24,6 +24,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import insert
 
 from app.database.database import db
+from app.database.product_type import SHARES
+from app.logic.shares_transfer_service import get_min_deposit_usd
 from app.Admin.model import User
 from app.Investments.model import Investment, PendingEmail
 from app.Investments.controllers import InvestmentController
@@ -629,6 +631,15 @@ def _commit_bulk_upload_chunk(session, chunk, filename, actor_kwargs, existing_i
 
             batch = BatchManagementService.find_or_create_batch(share_class_id)
 
+            if batch.product_type == SHARES:
+                min_deposit = get_min_deposit_usd()
+                if amount < min_deposit:
+                    failed.append({
+                        "client_code": client_code,
+                        "message": f"Deposit of {amount} USD is below the {min_deposit} USD minimum (before fees) for a SHARES batch",
+                    })
+                    continue
+
             if status in ("existing_new_fund", "existing_same_fund"):
                 existing = existing_identity_by_code.get((client_code or "").strip().lower())
                 name = existing["investor_name"] if existing else r.get("investor_name")
@@ -652,6 +663,12 @@ def _commit_bulk_upload_chunk(session, chunk, filename, actor_kwargs, existing_i
                 "fund_id": fund_id,
                 "fund_name": fund.fund_name,
                 "share_class_id": share_class_id,
+                # Inherited from the resolved batch — this raw Core insert() bypasses
+                # the Investment before_insert event that does this for every other
+                # creation path (see app/Investments/model.py), so it's set explicitly
+                # here. Can't mismatch batch.product_type: find_or_create_batch above
+                # was resolved from this same share_class_id.
+                "product_type": batch.product_type,
                 "deposit_date": deposit_dt.date(),
                 "original_deposit_amount": amount,
                 "current_market_value": Decimal("0.00"),

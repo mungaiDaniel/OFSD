@@ -36,6 +36,10 @@ export interface RegisterRequest {
   role?: string;
 }
 
+// ── Product (Funds vs Shares — see app/database/product_type.py on the backend) ──
+
+export type ProductType = "FUNDS" | "SHARES";
+
 // ── Batches ──
 
 export interface Batch {
@@ -79,11 +83,74 @@ export interface Batch {
   // needing to load any investment rows client-side to compute it.
   latest_deposit_date?: string | null;
   investments_pagination?: { page: number; per_page: number; total: number; total_pages: number };
-  // DPRP oversubscription pro-rata allocation (see is_dangote_dprp_fund on the backend).
-  // is_dprp_fund gates whether the deploy modal offers the oversubscription toggle at all.
+  // FUNDS vs SHARES (see app/database/product_type.py) — set once at batch creation.
+  product_type?: ProductType;
+  // is_dprp_fund is equivalent to product_type === "SHARES"; gates whether the batch
+  // detail page shows the SHARES Transfer/Deployment forms instead of the FUNDS ones.
   is_dprp_fund?: boolean;
   is_oversubscribed?: boolean;
   allocation_rate?: number | null;
+  // SHARES-only deployment allocation (see app.logic.shares_deployment_service) —
+  // set once, at the Deployed step, for a SHARES batch.
+  shares_exchange_rate_ngn?: number | null;
+  shares_price_per_share_ngn?: number | null;
+  shares_allocated_total?: number | null;
+  shares_demand_total?: number | null;
+  shares_unallocated_total?: number | null;
+}
+
+// ── SHARES Transferred-stage fee preview (Task 2) ──
+
+export interface SharesTransferPreviewRow {
+  investment_id: number;
+  internal_client_code: string;
+  deposit_usd: number;
+  entry_fee_usd: number;
+  balance_after_entry: number;
+  transaction_cost_usd: number;
+  net_usd: number;
+}
+
+export interface SharesTransferPreview {
+  rows: SharesTransferPreviewRow[];
+  totals: {
+    deposit_usd: number;
+    entry_fee_usd: number;
+    balance_after_entry: number;
+    transaction_cost_usd: number;
+    net_usd: number;
+  };
+}
+
+// ── SHARES Deployed-stage allocation preview (Task 3) ──
+
+export interface SharesDeploymentPreviewRow {
+  investment_id: number;
+  internal_client_code: string;
+  net_usd: number;
+  net_ngn: number;
+  max_shares: number;
+  tier1_shares: number;
+  round2_shares: number;
+  allocated_shares: number;
+  refund_usd: number;
+}
+
+export interface SharesDeploymentPreview {
+  rows: SharesDeploymentPreviewRow[];
+  totals: {
+    net_usd: number;
+    net_ngn: number;
+    total_demand_shares: number;
+    shares_allocated: number;
+    total_allocated_shares: number;
+    unallocated_shares: number;
+    total_refund_usd: number;
+    is_oversubscribed: boolean;
+    exchange_rate: number;
+    price_per_share_ngn: number;
+  };
+  banner: "Oversubscribed" | "Fully subscribed";
 }
 
 /** Cheap-fields-only investor row from GET /batches/:id/investments-light. */
@@ -145,6 +212,10 @@ export interface CreateBatchRequest {
   date_deployed?: string;
   certificate_number?: string;
   duration_days?: number;
+  share_class_id?: number;
+  /** Required when share_class_id isn't known yet (two-stage creation) — the
+   * "New batch" button on /funds/batches or /shares/batches sends this. */
+  product_type?: ProductType;
 }
 
 export interface PatchBatchRequest {
@@ -156,6 +227,10 @@ export interface PatchBatchRequest {
   transfer_transaction_cost?: number;
   transfer_entry_fee_percent?: number;
   entry_fee_percentage?: number;
+  // SHARES Deployed-stage inputs (Task 3)
+  exchange_rate?: number;
+  price_per_share_ngn?: number;
+  shares_allocated?: number;
 }
 
 // ── Investments ──
@@ -179,6 +254,7 @@ export interface Investment {
   transaction_fee_usd?: number | null;
   entry_fee_usd?: number | null;
   main_balance?: number | null;
+  product_type?: ProductType;
 }
 
 export interface CreateInvestmentRequest {
@@ -238,6 +314,9 @@ export interface InvestorPosition {
   // it's surfaced here rather than silently vanishing from the deposit total.
   refund_amount?: number | null;
   refund_status?: string | null;
+  // FUNDS vs SHARES (see app/database/product_type.py) — drives which of the
+  // two holdings tabs on the investor detail page this position appears in.
+  product_type?: ProductType;
 }
 
 // ── Client Activity Report ──
@@ -375,6 +454,9 @@ export interface CoreFund {
   id: number;
   fund_name: string;
   fund_code?: string;
+  // FUNDS vs SHARES (see app/database/product_type.py) — computed server-side from
+  // fund identity (resolve_product_type); SHARES today means DPRP specifically.
+  product_type?: ProductType;
   is_active: boolean;
   total_aum?: number;
   investor_count?: number;
@@ -415,6 +497,7 @@ export interface FundSummaryItem {
   id?: number;
   fund_name: string;
   fund_code?: string;
+  product_type?: ProductType;
   is_active?: boolean;
   investors_count?: number;
   classes?: FundClassSummary[];

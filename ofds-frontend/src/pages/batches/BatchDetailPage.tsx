@@ -7,11 +7,52 @@ import { ROUTES, STAGE_LABELS } from "@/lib/constants";
 import type { Batch, BatchStage } from "@/lib/types";
 import { toast } from "sonner";
 import { useBatchReconciliation } from "@/hooks/useBatchReconciliation";
-import { ArrowLeft, Pencil, Upload, Download, Trash2, Search, ChevronLeft, ChevronRight, Users2 } from "lucide-react";
+import { ArrowLeft, Pencil, Upload, Download, Trash2, Search, ChevronLeft, ChevronRight, Users2, Rows3 } from "lucide-react";
 import type { BatchInvestorLight } from "@/lib/types";
 import { EmailConfirmationModal } from "@/components/ui/EmailConfirmationModal";
 import { DeploymentDateModal, type DeploymentConfirmPayload } from "@/components/ui/DeploymentDateModal";
 import { TransferCostModal } from "@/components/ui/TransferCostModal";
+import { SharesTransferModal } from "@/components/ui/SharesTransferModal";
+import { SharesDeploymentModal, type SharesDeploymentConfirmPayload } from "@/components/ui/SharesDeploymentModal";
+import { ProductBadge } from "@/components/ui/ProductBadge";
+import { VirtualizedList } from "@/components/ui/VirtualizedList";
+
+// Task 6: product-relevant columns for the batch client list/export — SHARES
+// is priced per-share and tracks net USD/NGN + oversubscription refund;
+// FUNDS is NAV-based and tracks shares/NAV/market value. Shared by the
+// default table, the "Show all" virtualized view, and the column widths
+// used to line both up.
+function getInvestorColumns(isShares: boolean) {
+  const base = [
+    {
+      key: "investor", label: "Investor", align: "left" as const, grid: "2fr",
+      render: (inv: any) => (
+        <div>
+          <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--color-brand-400)" }}>{inv.investor_name}</div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>{inv.investor_email || ""}</div>
+        </div>
+      ),
+    },
+    {
+      key: "code", label: "Client Code", align: "left" as const, grid: "1.1fr",
+      render: (inv: any) => <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--color-text-secondary)" }}>{inv.internal_client_code || "—"}</span>,
+    },
+    { key: "deposit", label: "Deposit", align: "right" as const, grid: "1fr", render: (inv: any) => fmtMoney(inv.amount_deposited) },
+  ];
+  const sharesCols = [
+    { key: "net_usd", label: "Net (USD)", align: "right" as const, grid: "1fr", render: (inv: any) => fmtMoney(inv.net_usd) },
+    { key: "net_ngn", label: "Net (NGN)", align: "right" as const, grid: "1.1fr", render: (inv: any) => (inv.net_ngn != null ? `₦${Number(inv.net_ngn).toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—") },
+    { key: "shares_allocated", label: "Shares Allocated", align: "right" as const, grid: "1fr", render: (inv: any) => (inv.shares_owned != null ? Number(inv.shares_owned).toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—") },
+    { key: "refund_usd", label: "Refund (USD)", align: "right" as const, grid: "1fr", render: (inv: any) => (inv.refund_usd != null ? fmtMoney(inv.refund_usd) : "—") },
+  ];
+  const fundsCols = [
+    { key: "net_amount", label: "Net Amount", align: "right" as const, grid: "1fr", render: (inv: any) => fmtMoney(inv.main_balance) },
+    { key: "shares", label: "Shares", align: "right" as const, grid: "0.9fr", render: (inv: any) => (inv.shares_owned != null ? Number(inv.shares_owned).toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—") },
+    { key: "market_value", label: "Market Value", align: "right" as const, grid: "1.1fr", render: (inv: any) => fmtMoney(inv.market_value ?? inv.current_balance) },
+    { key: "perf", label: "Perf %", align: "right" as const, grid: "0.8fr", render: (inv: any) => (inv.performance_pct != null ? `${inv.performance_pct >= 0 ? "+" : ""}${Number(inv.performance_pct).toFixed(2)}%` : "—") },
+  ];
+  return [...base, ...(isShares ? sharesCols : fundsCols)];
+}
 
 const glassCard: React.CSSProperties = {
   background: "rgba(16, 24, 45, 0.72)",
@@ -126,6 +167,16 @@ export default function BatchDetailPage() {
   const [investorPage, setInvestorPage] = useState(1);
   const [investorTotalPages, setInvestorTotalPages] = useState(1);
   const [investorSearchLoading, setInvestorSearchLoading] = useState(false);
+  // "Show all" — chunk-loaded + virtualized, bypassing the search-first gate
+  // above (never fetches the whole batch in one request; see SHOW_ALL_CHUNK).
+  const [showAllInvestors, setShowAllInvestors] = useState(false);
+  const [allBatchRows, setAllBatchRows] = useState<any[]>([]);
+  const [allBatchRowsLoading, setAllBatchRowsLoading] = useState(false);
+  const [allBatchRowsLoadingMore, setAllBatchRowsLoadingMore] = useState(false);
+  const [allBatchRowsHasMore, setAllBatchRowsHasMore] = useState(true);
+  const allBatchRowsPageRef = useRef(1);
+  const allBatchRowsFetchingRef = useRef(false);
+  const [exportingBatch, setExportingBatch] = useState(false);
   // Full per-investor list (cheap fields only) fetched on-demand right before
   // the Transfer/Deploy modals open — those need every investor in the batch
   // to group by share class, but that only happens once per stage change.
@@ -136,8 +187,12 @@ export default function BatchDetailPage() {
   const [emailConfirmModalOpen, setEmailConfirmModalOpen] = useState(false);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [sharesTransferModalOpen, setSharesTransferModalOpen] = useState(false);
+  const [sharesDeployModalOpen, setSharesDeployModalOpen] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [isSharesTransferring, setIsSharesTransferring] = useState(false);
+  const [isSharesDeploying, setIsSharesDeploying] = useState(false);
   const [editBatchName, setEditBatchName] = useState("");
   const [editCertificateNumber, setEditCertificateNumber] = useState("");
   const [editDurationDays, setEditDurationDays] = useState<number>(30);
@@ -178,6 +233,70 @@ export default function BatchDetailPage() {
     return () => { alive = false; };
   }, [batchId, trimmedInvestorSearch, investorPage]);
 
+  const SHOW_ALL_CHUNK = 200;
+
+  // Reset and reload the first chunk whenever "Show all" turns on, or the
+  // search filter changes while it's already on.
+  useEffect(() => {
+    if (!showAllInvestors || !batchId || isNaN(batchId)) return;
+    let alive = true;
+    allBatchRowsPageRef.current = 1;
+    allBatchRowsFetchingRef.current = true;
+    setAllBatchRows([]);
+    setAllBatchRowsHasMore(true);
+    setAllBatchRowsLoading(true);
+    (async () => {
+      try {
+        const data = await batchService.getById(batchId, {
+          show_all: true, page: 1, per_page: SHOW_ALL_CHUNK, search: trimmedInvestorSearch || undefined,
+        });
+        if (!alive) return;
+        const rows = (data as any).investments || [];
+        setAllBatchRows(rows);
+        setAllBatchRowsHasMore((data.investments_pagination?.total_pages ?? 1) > 1);
+      } catch {
+        if (alive) toast.error("Failed to load investors");
+      } finally {
+        if (alive) {
+          setAllBatchRowsLoading(false);
+          allBatchRowsFetchingRef.current = false;
+        }
+      }
+    })();
+    return () => { alive = false; };
+  }, [showAllInvestors, batchId, trimmedInvestorSearch]);
+
+  const loadMoreBatchRows = () => {
+    if (!showAllInvestors || !allBatchRowsHasMore || allBatchRowsFetchingRef.current) return;
+    allBatchRowsFetchingRef.current = true;
+    const nextPage = allBatchRowsPageRef.current + 1;
+    setAllBatchRowsLoadingMore(true);
+    batchService
+      .getById(batchId, { show_all: true, page: nextPage, per_page: SHOW_ALL_CHUNK, search: trimmedInvestorSearch || undefined })
+      .then((data) => {
+        const rows = (data as any).investments || [];
+        allBatchRowsPageRef.current = nextPage;
+        setAllBatchRows((prev) => [...prev, ...rows]);
+        setAllBatchRowsHasMore(nextPage < (data.investments_pagination?.total_pages ?? 1));
+      })
+      .catch(() => toast.error("Failed to load more investors"))
+      .finally(() => {
+        setAllBatchRowsLoadingMore(false);
+        allBatchRowsFetchingRef.current = false;
+      });
+  };
+
+  async function handleExportBatchInvestments() {
+    setExportingBatch(true);
+    try {
+      await batchService.exportInvestments(batchId, { search: trimmedInvestorSearch || undefined });
+    } catch {
+      toast.error("Failed to export clients to Excel");
+    } finally {
+      setExportingBatch(false);
+    }
+  }
+
   useEffect(() => {
     async function load() {
       if (!batchId || isNaN(batchId)) return;
@@ -199,12 +318,24 @@ export default function BatchDetailPage() {
     load();
   }, [batchId, navigate]);
 
+  const isShares = batch?.product_type === "SHARES";
+  const investorColumns = getInvestorColumns(isShares);
+
   const advanceStage = async () => {
     if (!batch) return;
     const nextStage = (batch.stage + 1) as BatchStage;
     if (nextStage > 4) return;
 
     if (nextStage === 3 || nextStage === 2) {
+      // SHARES batches use their own modals, which fetch a live preview
+      // straight from the backend (Tasks 2/3) — no need to preload the
+      // cheap-fields investor list the FUNDS modals use for client-side math.
+      if (isShares) {
+        if (nextStage === 3) setSharesDeployModalOpen(true);
+        else setSharesTransferModalOpen(true);
+        return;
+      }
+
       setLoadingFullInvestments(true);
       try {
         const full = await batchService.getInvestmentsLight(batchId);
@@ -292,6 +423,50 @@ export default function BatchDetailPage() {
       toast.error(msg);
     } finally {
       setIsTransferring(false);
+    }
+  };
+
+  const handleSharesTransferConfirm = async (entryFeePercent: number, totalTransactionCostUsd: number) => {
+    setIsSharesTransferring(true);
+    try {
+      await batchService.patch(batchId, {
+        is_transferred: true,
+        entry_fee_percentage: entryFeePercent,
+        transfer_transaction_cost: totalTransactionCostUsd,
+      });
+      toast.success("Batch advanced to Transferred");
+      const data = await batchService.getById(batchId);
+      setBatch(data);
+      setSharesTransferModalOpen(false);
+      setEmailConfirmModalOpen(true);
+    } catch (err: unknown) {
+      const msg = (err as any)?.response?.data?.message || "Failed to advance stage";
+      toast.error(msg);
+    } finally {
+      setIsSharesTransferring(false);
+    }
+  };
+
+  const handleSharesDeployConfirm = async ({ dateString, exchangeRate, pricePerShareNgn, sharesAllocated }: SharesDeploymentConfirmPayload) => {
+    setIsSharesDeploying(true);
+    try {
+      await batchService.patch(batchId, {
+        deployment_confirmed: true,
+        date_deployed: dateString,
+        exchange_rate: exchangeRate,
+        price_per_share_ngn: pricePerShareNgn,
+        shares_allocated: sharesAllocated,
+      });
+      toast.success("Batch deployed");
+      const data = await batchService.getById(batchId);
+      setBatch(data);
+      setSharesDeployModalOpen(false);
+      setEmailConfirmModalOpen(true);
+    } catch (err: unknown) {
+      const msg = (err as any)?.response?.data?.message || "Failed to advance stage";
+      toast.error(msg);
+    } finally {
+      setIsSharesDeploying(false);
     }
   };
 
@@ -428,9 +603,12 @@ export default function BatchDetailPage() {
       <div style={{ ...glassCard, padding: "22px 24px", marginBottom: "16px" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
-            <h1 style={{ fontFamily: "var(--font-mono)", fontSize: "18px", fontWeight: 700, color: "var(--color-text-primary)", marginBottom: "6px" }}>
-              {batch.batch_name}
-            </h1>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
+              <h1 style={{ fontFamily: "var(--font-mono)", fontSize: "18px", fontWeight: 700, color: "var(--color-text-primary)", margin: 0 }}>
+                {batch.batch_name}
+              </h1>
+              {batch.product_type && <ProductBadge product={batch.product_type} />}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               {reconciliation && (
                 <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>
@@ -574,6 +752,23 @@ export default function BatchDetailPage() {
         <StatCard label="Total Shares" value={batch.total_shares != null ? batch.total_shares.toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—"} />
       </div>
 
+      {/* SHARES-only allocation stats (Task 3) — kept in their own row, never
+          blended into the NAV-labeled cards above, since the two products are
+          valued completely differently (price per share vs. NAV). */}
+      {isShares && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "12px", marginBottom: "16px" }}>
+          <StatCard label="Exchange Rate" value={batch.shares_exchange_rate_ngn != null ? batch.shares_exchange_rate_ngn.toLocaleString("en-US", { maximumFractionDigits: 6 }) : "—"} sub="NGN / USD" />
+          <StatCard label="Price Per Share" value={batch.shares_price_per_share_ngn != null ? batch.shares_price_per_share_ngn.toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—"} sub="NGN" />
+          <StatCard label="Shares Allocated" value={batch.shares_allocated_total != null ? batch.shares_allocated_total.toLocaleString() : "—"} />
+          <StatCard label="Shares Demand" value={batch.shares_demand_total != null ? batch.shares_demand_total.toLocaleString() : "—"} />
+          <StatCard
+            label="Unallocated"
+            value={batch.shares_unallocated_total != null ? batch.shares_unallocated_total.toLocaleString() : "—"}
+            sub={batch.is_oversubscribed ? "Oversubscribed" : (batch.shares_allocated_total != null ? "Fully subscribed" : undefined)}
+          />
+        </div>
+      )}
+
       {/* Investors table */}
       <div style={{ ...glassCard, overflow: "hidden" }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(255, 255, 255, 0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
@@ -603,6 +798,32 @@ export default function BatchDetailPage() {
               />
             </div>
             <button
+              onClick={() => setShowAllInvestors((v) => !v)}
+              title={showAllInvestors ? "Back to search mode" : "Show every client in this batch (virtualized list)"}
+              style={{
+                display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "8px",
+                background: showAllInvestors ? "rgba(26, 69, 255, 0.15)" : "transparent",
+                border: `1px solid ${showAllInvestors ? "rgba(26, 69, 255, 0.4)" : "rgba(255, 255, 255, 0.1)"}`,
+                color: showAllInvestors ? "rgb(96, 148, 255)" : "var(--color-text-secondary)",
+                fontSize: "12px", fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap",
+              }}
+            >
+              <Rows3 size={13} /> {showAllInvestors ? "Showing all" : "Show all"}
+            </button>
+            <button
+              onClick={handleExportBatchInvestments}
+              disabled={exportingBatch}
+              title="Export every matching client to Excel"
+              style={{
+                display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "8px",
+                background: "transparent", border: "1px solid rgba(255, 255, 255, 0.1)",
+                color: "var(--color-text-secondary)", fontSize: "12px", fontWeight: 500,
+                cursor: exportingBatch ? "not-allowed" : "pointer", opacity: exportingBatch ? 0.6 : 1, whiteSpace: "nowrap",
+              }}
+            >
+              <Download size={13} /> {exportingBatch ? "Exporting…" : "Export to Excel"}
+            </button>
+            <button
               onClick={() => navigate(ROUTES.BATCH_PERFORMANCE(batchId))}
               style={{ fontSize: "11px", fontWeight: 500, color: "var(--color-brand-400)", background: "none", border: "none", cursor: "pointer", padding: 0, whiteSpace: "nowrap" }}
             >
@@ -610,21 +831,80 @@ export default function BatchDetailPage() {
             </button>
           </div>
         </div>
+        {showAllInvestors ? (
+          <div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: investorColumns.map((c) => c.grid).join(" "),
+                gap: "12px",
+                borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
+                padding: "10px 16px",
+                background: "rgba(255, 255, 255, 0.02)",
+              }}
+            >
+              {investorColumns.map((c) => (
+                <span
+                  key={c.key}
+                  style={{
+                    fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase",
+                    color: "var(--color-text-tertiary)", textAlign: c.align, whiteSpace: "nowrap",
+                  }}
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
+            {allBatchRowsLoading ? (
+              <div style={{ padding: "32px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
+                Loading…
+              </div>
+            ) : (
+              <VirtualizedList
+                items={allBatchRows}
+                rowHeight={52}
+                height={520}
+                onEndReached={loadMoreBatchRows}
+                loadingMore={allBatchRowsLoadingMore}
+                emptyState={
+                  <div style={{ padding: "24px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
+                    No investments in this batch yet.
+                  </div>
+                }
+                renderRow={(inv: any) => (
+                  <div
+                    onClick={() => inv.internal_client_code && navigate(ROUTES.INVESTOR_OVERVIEW(inv.internal_client_code))}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: investorColumns.map((c) => c.grid).join(" "),
+                gap: "12px",
+                      alignItems: "center",
+                      height: "100%",
+                      padding: "0 16px",
+                      borderBottom: "1px solid rgba(255, 255, 255, 0.04)",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {investorColumns.map((c) => (
+                      <div key={c.key} style={{ textAlign: c.align, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {c.render(inv)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              />
+            )}
+          </div>
+        ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {[
-                  { label: "Investor", align: "left" as const },
-                  { label: "Client Code", align: "left" as const },
-                  { label: "Deposit", align: "right" as const },
-                  { label: "Net Amount", align: "right" as const },
-                  { label: "Shares", align: "right" as const },
-                  { label: "Market Value", align: "right" as const },
-                  { label: "Perf %", align: "right" as const },
-                ].map((h) => (
+                {investorColumns.map((h) => (
                   <th
-                    key={h.label}
+                    key={h.key}
                     style={{
                       fontSize: "9px",
                       fontWeight: 600,
@@ -645,7 +925,7 @@ export default function BatchDetailPage() {
             <tbody>
               {!trimmedInvestorSearch ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "40px 16px", textAlign: "center" }}>
+                  <td colSpan={investorColumns.length} style={{ padding: "40px 16px", textAlign: "center" }}>
                     <Users2 size={24} style={{ color: "var(--color-text-tertiary)", marginBottom: "8px" }} />
                     <div style={{ fontSize: "13px", color: "var(--color-text-secondary)", marginBottom: "4px" }}>
                       {batch.investors_count} investor{batch.investors_count === 1 ? "" : "s"} in this batch
@@ -659,13 +939,13 @@ export default function BatchDetailPage() {
                 </tr>
               ) : investorSearchLoading ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "24px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
+                  <td colSpan={investorColumns.length} style={{ padding: "24px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
                     Searching…
                   </td>
                 </tr>
               ) : investments.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "24px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
+                  <td colSpan={investorColumns.length} style={{ padding: "24px 16px", textAlign: "center", fontSize: "13px", color: "var(--color-text-tertiary)" }}>
                     No investors found for "{trimmedInvestorSearch}".
                   </td>
                 </tr>
@@ -676,39 +956,27 @@ export default function BatchDetailPage() {
                     style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.04)", cursor: "pointer", transition: "background 0.12s" }}
                     onClick={() => inv.internal_client_code && navigate(ROUTES.INVESTOR_OVERVIEW(inv.internal_client_code))}
                   >
-                    <td style={{ padding: "10px 16px" }}>
-                      <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--color-brand-400)" }}>{inv.investor_name}</div>
-                      <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>{inv.investor_email || ""}</div>
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--color-text-secondary)" }}>
-                      {inv.internal_client_code || "—"}
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-primary)", textAlign: "right" }}>
-                      {fmtMoney(inv.amount_deposited)}
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-secondary)", textAlign: "right" }}>
-                      {fmtMoney(inv.main_balance)}
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", textAlign: "right" }}>
-                      <span style={{ color: "var(--color-text-primary)" }}>
-                        {inv.shares_owned != null ? Number(inv.shares_owned).toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—"}
-                      </span>
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", textAlign: "right" }}>
-                      <span style={{ color: "var(--color-text-primary)" }}>{fmtMoney(inv.market_value ?? inv.current_balance)}</span>
-                    </td>
-                    <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 600, textAlign: "right" }}>
-                      <span style={{ color: (inv.performance_pct ?? 0) >= 0 ? "rgb(34, 197, 94)" : "var(--color-destructive)" }}>
-                        {inv.performance_pct != null ? `${inv.performance_pct >= 0 ? "+" : ""}${Number(inv.performance_pct).toFixed(2)}%` : "—"}
-                      </span>
-                    </td>
+                    {investorColumns.map((c) => (
+                      <td
+                        key={c.key}
+                        style={{
+                          padding: "10px 16px",
+                          fontFamily: c.key === "investor" ? undefined : "var(--font-mono)",
+                          fontSize: c.key === "investor" ? undefined : "12px",
+                          textAlign: c.align,
+                        }}
+                      >
+                        {c.render(inv)}
+                      </td>
+                    ))}
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-        {trimmedInvestorSearch && investorTotalPages > 1 && (
+        )}
+        {!showAllInvestors && trimmedInvestorSearch && investorTotalPages > 1 && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "8px", padding: "12px 20px", borderTop: "1px solid rgba(255, 255, 255, 0.06)" }}>
             <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginRight: "4px" }}>
               Page {investorPage} of {investorTotalPages}
@@ -747,6 +1015,8 @@ export default function BatchDetailPage() {
       <EmailConfirmationModal open={emailConfirmModalOpen} onClose={() => setEmailConfirmModalOpen(false)} batchId={batchId} />
       <DeploymentDateModal open={deployModalOpen} onClose={() => setDeployModalOpen(false)} onConfirm={handleDeployDateConfirm} isLoading={isDeploying} investments={fullInvestments} isDprpFund={batch.is_dprp_fund} />
       <TransferCostModal open={transferModalOpen} onClose={() => setTransferModalOpen(false)} totalBatchDeposit={totalBatchDeposit} onConfirm={handleTransferCostConfirm} isLoading={isTransferring} />
+      <SharesTransferModal open={sharesTransferModalOpen} onClose={() => setSharesTransferModalOpen(false)} batchId={batchId} onConfirm={handleSharesTransferConfirm} isLoading={isSharesTransferring} />
+      <SharesDeploymentModal open={sharesDeployModalOpen} onClose={() => setSharesDeployModalOpen(false)} batchId={batchId} onConfirm={handleSharesDeployConfirm} isLoading={isSharesDeploying} />
     </div>
   );
 }

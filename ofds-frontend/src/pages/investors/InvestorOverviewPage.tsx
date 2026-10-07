@@ -115,8 +115,15 @@ function statementTypeLabel(stmt: StatementRow): string {
   return stmt.type || "Statement";
 }
 
-// ── Current + Previous Holdings — per-position market value & gain ──
+// ── Current + Previous Holdings — Funds / Shares tabs, each with its own records ──
 function CurrentHoldingsCard({ positions }: { positions: InvestorPosition[] }) {
+  const [tab, setTab] = useState<"FUNDS" | "SHARES">(() => {
+    const hasFunds = positions.some((p) => (p.product_type ?? "FUNDS") === "FUNDS");
+    const hasShares = positions.some((p) => p.product_type === "SHARES");
+    return hasFunds || !hasShares ? "FUNDS" : "SHARES";
+  });
+  const tabPositions = positions.filter((p) => (p.product_type ?? "FUNDS") === tab);
+
   return (
     <div>
       <div
@@ -126,11 +133,50 @@ function CurrentHoldingsCard({ positions }: { positions: InvestorPosition[] }) {
           letterSpacing: "0.1em",
           textTransform: "uppercase",
           color: "var(--color-text-tertiary)",
-          marginBottom: "14px",
+          marginBottom: "10px",
         }}
       >
         Current + Previous Holdings
       </div>
+
+      <div role="tablist" aria-label="Holdings" style={{ display: "flex", gap: "4px", marginBottom: "14px" }}>
+        {(["FUNDS", "SHARES"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => setTab(t)}
+            style={{
+              padding: "5px 12px",
+              borderRadius: "7px",
+              border: "none",
+              fontSize: "11px",
+              fontWeight: 600,
+              cursor: "pointer",
+              background: tab === t ? "rgba(59,130,246,0.15)" : "transparent",
+              color: tab === t ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+            }}
+          >
+            {t === "FUNDS" ? "Funds holdings" : "Shares holdings"}
+          </button>
+        ))}
+      </div>
+
+      {tabPositions.length === 0 ? (
+        <div style={{ fontSize: "12px", color: "var(--color-text-tertiary)" }}>
+          No {tab === "FUNDS" ? "Funds" : "Shares"} holdings yet
+        </div>
+      ) : (
+        <CurrentHoldingsList positions={tabPositions} />
+      )}
+    </div>
+  );
+}
+
+function CurrentHoldingsList({ positions }: { positions: InvestorPosition[] }) {
+  return (
+    <>
       {positions.length === 0 ? (
         <div style={{ fontSize: "12px", color: "var(--color-text-tertiary)" }}>No holdings yet</div>
       ) : (
@@ -188,7 +234,7 @@ function CurrentHoldingsCard({ positions }: { positions: InvestorPosition[] }) {
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }
 

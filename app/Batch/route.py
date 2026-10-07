@@ -1,10 +1,12 @@
 from flask import request, Blueprint, jsonify, make_response, send_file
 from flask_jwt_extended import jwt_required
 from flask_cors import cross_origin
+from sqlalchemy import or_
 from app.database.database import db
 from app.Batch.controllers import BatchController
 from app.Batch.model import Batch
 from app.utils.audit_log import audit_log_file_upload
+from app.database.product_type import SHARES
 from app.Investments.model import EmailLog, Investment
 from datetime import datetime
 from decimal import Decimal
@@ -49,10 +51,13 @@ def create_batch():
 @batch_v1.route('/api/v1/batches', methods=['GET'])
 @jwt_required()
 def get_all_batches():
-    """Get all batches"""
+    """Get all batches. Optional ?product=FUNDS|SHARES filters by product type."""
     try:
         session = db.session
-        return BatchController.get_all_batches(session)
+        product = request.args.get("product", default=None, type=str)
+        if product:
+            product = product.strip().upper()
+        return BatchController.get_all_batches(session, product=product)
     except Exception as e:
         return make_response(jsonify({
             "status": 500,
@@ -69,7 +74,8 @@ def get_batch(batch_id):
         page = request.args.get("page", default=1, type=int)
         per_page = request.args.get("per_page", default=200, type=int)
         search = request.args.get("search", default=None, type=str)
-        return BatchController.get_batch_by_id(batch_id, session, page=page, per_page=per_page, search=search)
+        show_all = (request.args.get("show_all", default="") or "").strip().lower() in ("1", "true", "yes")
+        return BatchController.get_batch_by_id(batch_id, session, page=page, per_page=per_page, search=search, show_all=show_all)
     except Exception as e:
         return make_response(jsonify({
             "status": 500,
@@ -88,6 +94,75 @@ def get_batch_investments_light(batch_id):
             "status": 500,
             "message": f"Error: {str(e)}"
         }), 500)
+
+
+@batch_v1.route('/api/v1/batches/<int:batch_id>/shares-transfer-preview', methods=['GET'])
+@jwt_required()
+def preview_shares_transfer(batch_id):
+    """
+    Dry-run fee preview for the Transferred step of a SHARES (DPRP) batch — no
+    DB writes. Query params: entry_fee_percent, total_transaction_cost_usd.
+    Returns per-deposit deposit/entry_fee/balance_after_entry/transaction_cost/net,
+    plus totals, for the batch UI's fee-preview table.
+    """
+    from app.database.product_type import SHARES
+    from app.logic.shares_transfer_service import SharesTransferService, SharesTransferError
+    try:
+        batch = db.session.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
+        if batch.product_type != SHARES:
+            return make_response(jsonify({
+                "status": 400,
+                "message": "The transfer-fee preview only applies to SHARES batches."
+            }), 400)
+
+        entry_fee_percent = request.args.get("entry_fee_percent", default="0")
+        total_transaction_cost_usd = request.args.get("total_transaction_cost_usd", default="0")
+
+        preview = SharesTransferService.preview(
+            batch, db.session, entry_fee_percent, total_transaction_cost_usd
+        )
+        return make_response(jsonify({"status": 200, "data": preview}), 200)
+    except SharesTransferError as e:
+        return make_response(jsonify({"status": 400, "message": str(e)}), 400)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@batch_v1.route('/api/v1/batches/<int:batch_id>/shares-deployment-preview', methods=['GET'])
+@jwt_required()
+def preview_shares_deployment(batch_id):
+    """
+    Dry-run deployment preview for a SHARES (DPRP) batch — no DB writes. Query
+    params: exchange_rate, price_per_share_ngn, shares_allocated. Returns per-
+    deposit net_usd/net_ngn/tier1/round2/total shares/refund, plus batch
+    totals and an "Oversubscribed"/"Fully subscribed" banner.
+    """
+    from app.database.product_type import SHARES
+    from app.logic.shares_deployment_service import SharesDeploymentService, SharesDeploymentError
+    try:
+        batch = db.session.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
+        if batch.product_type != SHARES:
+            return make_response(jsonify({
+                "status": 400,
+                "message": "The deployment preview only applies to SHARES batches."
+            }), 400)
+
+        exchange_rate = request.args.get("exchange_rate", default="0")
+        price_per_share_ngn = request.args.get("price_per_share_ngn", default="0")
+        shares_allocated = request.args.get("shares_allocated", default="0")
+
+        preview = SharesDeploymentService.preview(
+            batch, db.session, exchange_rate, price_per_share_ngn, shares_allocated
+        )
+        return make_response(jsonify({"status": 200, "data": preview}), 200)
+    except SharesDeploymentError as e:
+        return make_response(jsonify({"status": 400, "message": str(e)}), 400)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>', methods=['PUT'])
@@ -665,6 +740,7 @@ def deploy_batch_nav(batch_id):
 
         db.session.commit()
         BatchController.refresh_cached_total_capital(batch, db.session)
+        BatchController._on_batch_deployed(batch, db.session)
 
         return make_response(jsonify({
             "status": 200,
@@ -732,6 +808,111 @@ def export_batch(batch_id):
             mimetype='text/csv',
             as_attachment=True,
             download_name=filename
+        )
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error generating export: {str(e)}"}), 500)
+
+
+@batch_v1.route('/api/v1/batches/<int:batch_id>/investments/export', methods=['GET'])
+@jwt_required()
+def export_batch_investments(batch_id):
+    """
+    Task 6: "Export to Excel" for a batch's client list — ALL investments in
+    this batch matching the current `search` filter (not just the visible
+    page), with the product-relevant columns the batch detail page shows
+    (SHARES: net USD, net NGN, allocated shares, refund USD; FUNDS: shares,
+    NAV, value). Chunked LIMIT/OFFSET reads + a write-only (streaming)
+    worksheet keep this responsive regardless of batch size — unlike
+    export_batch's CSV above, this isn't gated on the batch being closed,
+    since the batch detail page's client list is viewable at any stage.
+    """
+    import openpyxl
+    from app.utils.audit_log import create_audit_log
+
+    CHUNK_SIZE = 1000
+    try:
+        batch = db.session.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
+
+        search = (request.args.get("search") or "").strip()
+        is_shares = batch.product_type == SHARES
+
+        base_query = db.session.query(Investment).filter(Investment.batch_id == batch_id)
+        if search:
+            like = f"%{search}%"
+            base_query = base_query.filter(
+                or_(
+                    Investment.internal_client_code.ilike(like),
+                    Investment.investor_email.ilike(like),
+                    Investment.investor_phone.ilike(like),
+                )
+            )
+        total = base_query.count()
+
+        wb = openpyxl.Workbook(write_only=True)
+        ws = wb.create_sheet(f"{'Shares' if is_shares else 'Funds'} Clients")
+        if is_shares:
+            headers = [
+                "Investor Name", "Client Code", "Deposit (USD)", "Net (USD)", "Net (NGN)",
+                "Shares Allocated", "Refund (USD)",
+            ]
+        else:
+            headers = [
+                "Investor Name", "Client Code", "Deposit (USD)", "Shares", "NAV / Share", "Value (Market)",
+            ]
+        ws.append(headers)
+
+        row_count = 0
+        for offset in range(0, total, CHUNK_SIZE):
+            chunk = base_query.order_by(Investment.id.asc()).offset(offset).limit(CHUNK_SIZE).all()
+            if is_shares:
+                for inv in chunk:
+                    net_usd = float(
+                        (inv.amount_deposited or 0) - (inv.deployment_fee_deducted or 0) - (inv.transfer_fee_deducted or 0)
+                    )
+                    ws.append([
+                        inv.investor_name, inv.internal_client_code, float(inv.amount_deposited or 0),
+                        net_usd, float(inv.net_ngn) if inv.net_ngn is not None else None,
+                        float(inv.shares_owned) if inv.shares_owned is not None else None,
+                        float(inv.oversubscription_refund_amount) if inv.oversubscription_refund_amount else None,
+                    ])
+                    row_count += 1
+            else:
+                prefetch = BatchController._prefetch_valuation_cascade(db.session, chunk)
+                for inv in chunk:
+                    try:
+                        values = BatchController._calculate_batch_investment_values(inv, batch, db.session, **prefetch)
+                        market_value = values["current_balance"]
+                    except Exception:
+                        market_value = float(inv.net_principal or 0)
+                    ws.append([
+                        inv.investor_name, inv.internal_client_code, float(inv.amount_deposited or 0),
+                        float(inv.shares_owned) if inv.shares_owned is not None else None,
+                        float(inv.previous_nav_price) if inv.previous_nav_price is not None else None,
+                        market_value,
+                    ])
+                    row_count += 1
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        create_audit_log(
+            action="EXCEL_EXPORT",
+            target_type="batch",
+            target_id=batch_id,
+            target_name=batch.batch_name,
+            description=f"Exported batch client list to Excel (batch: {batch.batch_name}, search: {search or '—'})",
+            new_value={"scope": f"batch:{batch_id}", "search": search or None, "row_count": row_count},
+        )
+
+        filename = f"Batch_{batch_id}_Clients_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        return send_file(
+            output,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename,
         )
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error generating export: {str(e)}"}), 500)

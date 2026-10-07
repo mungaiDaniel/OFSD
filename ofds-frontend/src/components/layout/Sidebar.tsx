@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
 import { RoleGate } from "./RoleGate";
@@ -7,9 +8,11 @@ import {
   LayoutDashboard,
   Layers,
   Landmark,
+  Coins,
   TrendingUp,
   FileBarChart,
   ArrowDownUp,
+  Undo2,
   Users,
   BookUser,
   ShieldCheck,
@@ -19,6 +22,7 @@ import {
   Mail,
   X,
   DatabaseBackup,
+  ChevronDown,
 } from "lucide-react";
 
 interface NavItem {
@@ -27,14 +31,44 @@ interface NavItem {
   icon: React.ReactNode;
 }
 
+interface NavGroup {
+  key: string;
+  label: string;
+  icon: React.ReactNode;
+  items: NavItem[];
+}
+
+// ── Shared top-level items (unchanged) ──
 const mainNav: NavItem[] = [
   { label: "Overview", path: ROUTES.OVERVIEW, icon: <LayoutDashboard size={17} /> },
-  { label: "Batches", path: ROUTES.BATCHES, icon: <Layers size={17} /> },
-  { label: "Funds", path: ROUTES.FUNDS, icon: <Landmark size={17} /> },
-  { label: "Valuations", path: ROUTES.VALUATIONS, icon: <TrendingUp size={17} /> },
   { label: "Reports", path: ROUTES.REPORTS, icon: <FileBarChart size={17} /> },
   { label: "Withdrawals", path: ROUTES.WITHDRAWALS, icon: <ArrowDownUp size={17} /> },
-  { label: "Investors", path: ROUTES.INVESTORS, icon: <BookUser size={17} /> },
+];
+
+// ── Funds / Shares collapsible groups ──
+const navGroups: NavGroup[] = [
+  {
+    key: "funds",
+    label: "Funds",
+    icon: <Landmark size={17} />,
+    items: [
+      { label: "Batches", path: ROUTES.FUNDS_BATCHES, icon: <Layers size={15} /> },
+      { label: "Investors", path: ROUTES.FUNDS_INVESTORS, icon: <BookUser size={15} /> },
+      { label: "Funds & share classes", path: ROUTES.FUND_MANAGE, icon: <Landmark size={15} /> },
+      { label: "Valuations", path: ROUTES.VALUATIONS, icon: <TrendingUp size={15} /> },
+    ],
+  },
+  {
+    key: "shares",
+    label: "Shares",
+    icon: <Coins size={17} />,
+    items: [
+      { label: "Batches", path: ROUTES.SHARES_BATCHES, icon: <Layers size={15} /> },
+      { label: "Investors", path: ROUTES.SHARES_INVESTORS, icon: <BookUser size={15} /> },
+      { label: "Deployment & allocation", path: ROUTES.SHARES_DEPLOYMENT, icon: <TrendingUp size={15} /> },
+      { label: "Refunds", path: ROUTES.SHARES_REFUNDS, icon: <Undo2 size={15} /> },
+    ],
+  },
 ];
 
 const emailNav: NavItem[] = [
@@ -55,6 +89,7 @@ export function Sidebar() {
     setSidebarMobileOpen,
     isMobile,
   } = useUI();
+  const location = useLocation();
 
   /** Desktop: icon rail vs full labels. Mobile drawer always shows labels when open. */
   const showLabels = isMobile || !sidebarCollapsed;
@@ -68,6 +103,15 @@ export function Sidebar() {
       : sidebarCollapsed
         ? { title: label }
         : {};
+
+  // A group is "active" when the current route is inside it — drives both the
+  // highlighted group header and which groups start expanded.
+  const isGroupActive = (group: NavGroup) => group.items.some((item) => location.pathname.startsWith(item.path));
+
+  const [manuallyToggled, setManuallyToggled] = useState<Record<string, boolean>>({});
+  const isGroupExpanded = (group: NavGroup) => manuallyToggled[group.key] ?? isGroupActive(group);
+  const toggleGroup = (key: string, currentlyExpanded: boolean) =>
+    setManuallyToggled((prev) => ({ ...prev, [key]: !currentlyExpanded }));
 
   return (
     <aside
@@ -178,6 +222,70 @@ export function Sidebar() {
               </NavLink>
             </li>
           ))}
+        </ul>
+
+        <hr style={{ borderColor: "rgba(255,255,255,0.07)", margin: "0.75rem 0.5rem" }} />
+
+        {/* Funds / Shares collapsible groups */}
+        <ul className="nav flex-column mb-0" role="tree">
+          {navGroups.map((group) => {
+            const active = isGroupActive(group);
+            const expanded = isGroupExpanded(group);
+            return (
+              <li className="nav-item" key={group.key}>
+                <button
+                  type="button"
+                  onClick={() => (sidebarCollapsed && !isMobile ? toggleSidebar() : toggleGroup(group.key, expanded))}
+                  aria-expanded={expanded}
+                  data-testid={`nav-group-${group.key}`}
+                  className="nav-link w-100 d-flex align-items-center"
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
+                    fontWeight: active ? 600 : 500,
+                    justifyContent: sidebarCollapsed && !isMobile ? "center" : "flex-start",
+                  }}
+                  title={group.label}
+                >
+                  <span style={{ flexShrink: 0 }}>{group.icon}</span>
+                  {showLabels && (
+                    <>
+                      <span className="text-truncate flex-grow-1 text-start">{group.label}</span>
+                      <ChevronDown
+                        size={14}
+                        style={{
+                          flexShrink: 0,
+                          transition: "transform 0.15s",
+                          transform: expanded ? "rotate(0deg)" : "rotate(-90deg)",
+                          opacity: 0.6,
+                        }}
+                      />
+                    </>
+                  )}
+                </button>
+
+                {showLabels && expanded && (
+                  <ul className="nav flex-column mb-0" role="group" style={{ paddingLeft: "22px" }}>
+                    {group.items.map((item) => (
+                      <li className="nav-item" key={item.path}>
+                        <NavLink
+                          to={item.path}
+                          className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+                          style={{ fontSize: "13px" }}
+                          {...navLinkProps(item.label)}
+                        >
+                          <span style={{ flexShrink: 0 }}>{item.icon}</span>
+                          <span className="text-truncate">{item.label}</span>
+                        </NavLink>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ul>
 
         <hr style={{ borderColor: "rgba(255,255,255,0.07)", margin: "0.75rem 0.5rem" }} />

@@ -9,24 +9,30 @@ import { SuperAdminRoute } from "./SuperAdminRoute";
 import { AppShell } from "@/components/layout/AppShell";
 import LoginPage from "@/pages/auth/LoginPage";
 import RegisterPage from "@/pages/auth/RegisterPage";
+import { ROUTES } from "@/lib/constants";
 
 // ── Lazy-loaded pages (code splitting for bundle size) ──
 
 const LandingPage = lazy(() => import("@/pages/LandingPage"));
 const OverviewPage = lazy(() => import("@/pages/dashboard/OverviewPage"));
-const BatchListPage = lazy(() => import("@/pages/batches/BatchListPage"));
-const BatchCreatePage = lazy(() => import("@/pages/batches/BatchCreatePage"));
 const BatchDetailPage = lazy(() => import("@/pages/batches/BatchDetailPage"));
 const BatchPerformancePage = lazy(() => import("@/pages/batches/BatchPerformancePage"));
 const FundListPage = lazy(() => import("@/pages/funds/FundListPage"));
 const FundDetailPage = lazy(() => import("@/pages/funds/FundDetailPage"));
+const FundsBatchListPage = lazy(() => import("@/pages/funds/FundsBatchListPage"));
+const FundsBatchCreatePage = lazy(() => import("@/pages/funds/FundsBatchCreatePage"));
+const FundsInvestorListPage = lazy(() => import("@/pages/funds/FundsInvestorListPage"));
+const SharesBatchListPage = lazy(() => import("@/pages/shares/SharesBatchListPage"));
+const SharesBatchCreatePage = lazy(() => import("@/pages/shares/SharesBatchCreatePage"));
+const SharesInvestorListPage = lazy(() => import("@/pages/shares/SharesInvestorListPage"));
+const SharesDeploymentListPage = lazy(() => import("@/pages/shares/SharesDeploymentListPage"));
+const SharesRefundsPage = lazy(() => import("@/pages/shares/SharesRefundsPage"));
 const ValuationListPage = lazy(() => import("@/pages/valuations/ValuationListPage"));
 const ValuationCreatePage = lazy(() => import("@/pages/valuations/ValuationCreatePage"));
 const ReportListPage = lazy(() => import("@/pages/reports/ReportListPage"));
 const ReportDetailPage = lazy(() => import("@/pages/reports/ReportDetailPage"));
 const PortfolioPage = lazy(() => import("@/pages/reports/PortfolioPage"));
 const WithdrawalListPage = lazy(() => import("@/pages/withdrawals/WithdrawalListPage"));
-const InvestorDirectoryPage = lazy(() => import("../pages/investors/InvestorDirectoryPage"));
 const AddInvestorPage = lazy(() => import("../pages/investors/AddInvestorPage"));
 const BulkUploadPage = lazy(() => import("../pages/investors/BulkUploadPage"));
 const PendingEmailsPage = lazy(() => import("../pages/email/PendingEmailsPage"));
@@ -102,17 +108,28 @@ const routes: RouteObject[] = [
     children: [
       { path: "/overview", element: withSuspense(OverviewPage) },
 
-      // Batches
-      { path: "/batches", element: withSuspense(BatchListPage) },
-      { path: "/batches/new", element: withSuspense(BatchCreatePage) },
+      // Batches — old combined URLs stay working, redirected into the Funds area
+      // (the overwhelmingly common product) so existing bookmarks don't break.
+      { path: "/batches", element: <Navigate to={ROUTES.FUNDS_BATCHES} replace /> },
+      { path: "/batches/new", element: <Navigate to={ROUTES.FUNDS_BATCH_CREATE} replace /> },
       { path: "/batches/:id", element: withSuspense(BatchDetailPage) },
       { path: "/batches/:id/performance", element: withSuspense(BatchPerformancePage) },
 
-      // Funds
+      // Funds area
       { path: "/funds", element: withSuspense(FundListPage) },
       { path: "/funds/:id", element: withSuspense(FundDetailPage) },
+      { path: "/funds/batches", element: withSuspense(FundsBatchListPage) },
+      { path: "/funds/batches/new", element: withSuspense(FundsBatchCreatePage) },
+      { path: "/funds/investors", element: withSuspense(FundsInvestorListPage) },
 
-      // Valuations
+      // Shares area (DPRP)
+      { path: "/shares/batches", element: withSuspense(SharesBatchListPage) },
+      { path: "/shares/batches/new", element: withSuspense(SharesBatchCreatePage) },
+      { path: "/shares/investors", element: withSuspense(SharesInvestorListPage) },
+      { path: "/shares/deployment", element: withSuspense(SharesDeploymentListPage) },
+      { path: "/shares/refunds", element: withSuspense(SharesRefundsPage) },
+
+      // Valuations (Funds-only — see Task 3: Shares are valued at price per share, not NAV)
       { path: "/valuations", element: withSuspense(ValuationListPage) },
       { path: "/valuations/new", element: withSuspense(ValuationCreatePage) },
 
@@ -127,8 +144,10 @@ const routes: RouteObject[] = [
       // Email
       { path: "/email", element: withSuspense(PendingEmailsPage) },
 
-      // Investor management
-      { path: "/investors", element: withSuspense(InvestorDirectoryPage) },
+      // Investor management — old combined directory redirects into Funds, same
+      // reasoning as /batches above; add/bulk-upload/detail/statement are shared
+      // across both products (see AddInvestorPage's own Product selector).
+      { path: "/investors", element: <Navigate to={ROUTES.FUNDS_INVESTORS} replace /> },
       { path: "/investors/add", element: withSuspense(AddInvestorPage) },
       { path: "/investors/bulk-upload", element: withSuspense(BulkUploadPage) },
       { path: "/investors/:clientCode", element: withSuspense(InvestorOverviewPage) },

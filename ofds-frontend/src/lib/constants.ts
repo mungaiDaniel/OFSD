@@ -43,10 +43,20 @@ export const ROUTES = {
   BATCH_DETAIL: (id: number | string) => `/batches/${id}`,
   BATCH_PERFORMANCE: (id: number | string) => `/batches/${id}/performance`,
 
-  // Funds
+  // Funds area (product_type = FUNDS)
   FUNDS: "/funds",
   FUND_MANAGE: "/funds",
   FUND_DETAIL: (id: number | string) => `/funds/${id}`,
+  FUNDS_BATCHES: "/funds/batches",
+  FUNDS_BATCH_CREATE: "/funds/batches/new",
+  FUNDS_INVESTORS: "/funds/investors",
+
+  // Shares area (product_type = SHARES, i.e. DPRP)
+  SHARES_BATCHES: "/shares/batches",
+  SHARES_BATCH_CREATE: "/shares/batches/new",
+  SHARES_INVESTORS: "/shares/investors",
+  SHARES_DEPLOYMENT: "/shares/deployment",
+  SHARES_REFUNDS: "/shares/refunds",
 
   // Valuations
   VALUATIONS: "/valuations",
@@ -102,10 +112,14 @@ export const API = {
   BATCH_UPLOAD_EXCEL: (id: number) => `/batches/${id}/upload-excel`,
   BATCH_TOGGLE_ACTIVE: (id: number) => `/batches/${id}/toggle-active`,
   BATCH_EMAIL_LOGS: (id: number) => `/batches/${id}/email-logs`,
+  SHARES_TRANSFER_PREVIEW: (id: number) => `/batches/${id}/shares-transfer-preview`,
+  SHARES_DEPLOYMENT_PREVIEW: (id: number) => `/batches/${id}/shares-deployment-preview`,
+  BATCH_INVESTMENTS_EXPORT: (id: number) => `/batches/${id}/investments/export`,
 
   // Investments
   INVESTMENTS: "/investments",
   INVESTOR_DIRECTORY: "/investors",
+  INVESTOR_DIRECTORY_EXPORT: "/investors/export",
   INVESTOR_CREATE: "/investors",
   INVESTOR_EXISTING_DEPOSIT: "/investors/existing",
   BULK_UPLOAD_TEMPLATE: "/bulk-upload/template",
@@ -114,6 +128,7 @@ export const API = {
   BULK_UPLOAD_COMMIT: "/bulk-upload/commit",
   BULK_UPLOAD_JOBS: "/bulk-upload/jobs",
   INVESTOR_EMAIL_LOGS: (clientCode: string) => `/investors/${encodeURIComponent(clientCode)}/email-logs`,
+  INVESTOR_DEPOSITS: (clientCode: string) => `/investors/${encodeURIComponent(clientCode)}/deposits`,
 
   // Withdrawals
   WITHDRAWALS: "/withdrawals",
