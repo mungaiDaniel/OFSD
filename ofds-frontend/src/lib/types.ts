@@ -482,6 +482,10 @@ export interface FundClassSummary {
   total_shares?: number;
   prev_nav?: number | null;
   current_nav?: number | null;
+  /** Task 10: true once a real valuation has been committed for this class —
+   * false means current_nav (if any) is only the deployment-NAV fallback,
+   * i.e. "Not valued yet" rather than a priced position. */
+  is_valued?: boolean;
   total_nav?: number;
   total_invested?: number;
   gross_deposited?: number;
@@ -776,8 +780,10 @@ export type WithdrawalSource = "investor_request" | "oversubscription_refund";
 export interface Withdrawal {
   id: number;
   client_id: string;
+  investor_name?: string | null;
   fund_id: number;
   fund_name: string;
+  product_type?: ProductType;
   amount: number;
   status: "Pending" | "Approved" | "Rejected" | "Processed" | "Completed";
   date_withdrawn: string;
@@ -786,6 +792,9 @@ export interface Withdrawal {
   source?: WithdrawalSource;
   batch_id?: number | null;
   batch_name?: string | null;
+  // Only meaningful when source === "oversubscription_refund" — the NGN/1 USD
+  // rate used at SHARES deployment (Task 11).
+  rate_used?: number | null;
   // Only meaningful when source === "oversubscription_refund".
   oversubscription_notice_sent?: boolean;
 }

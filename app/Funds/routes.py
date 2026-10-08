@@ -8,7 +8,8 @@ from flask import Blueprint, request, jsonify, make_response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from types import SimpleNamespace
 from app.database.database import db
-from app.Batch.core_fund import CoreFund
+from app.database.product_type import FUNDS, SHARES
+from app.Batch.core_fund import CoreFund, get_fund_scoped_or_404
 from app.Batch.model import Batch
 from app.Funds.share_class import ShareClass
 from app.Funds.investor_shares import InvestorShares
@@ -22,7 +23,12 @@ from app.Investments.model import (
 )
 from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError
-from app.utils.statement_theme import resolve_product_type
+
+# Task 8: currencies a share class may use, by product — Funds keep KES/USD
+# (unchanged); Shares/DPRP is NGN-valued (Task 7). The DB-level CHECK
+# constraint (app/Funds/share_class.py) allows all three regardless of
+# product; this is the narrower, per-product allow-list these routes enforce.
+CURRENCIES_BY_PRODUCT = {FUNDS: ("KES", "USD"), SHARES: ("NGN",)}
 
 funds_v1 = Blueprint("funds_v1", __name__, url_prefix='/')
 
@@ -54,13 +60,11 @@ def _require_super_admin():
 
 # ==================== FUND MANAGEMENT ====================
 
-@funds_v1.route('/api/v1/funds', methods=['POST'])
-@jwt_required()
-def create_fund():
+def _create_fund_impl(product):
     """
-    Create a new fund (SUPER ADMIN ONLY).
-    Request: { "fund_name": "Axiom", "fund_code": "AXM" }
-    Response: { "status": 201, "data": { "id": 1, "fund_name": "Axiom", "fund_code": "AXM", "is_active": true } }
+    Create a new fund, assigned to `product` automatically (never taken from
+    the request body — Task 8 point 4) — shared by POST /api/v1/funds
+    (FUNDS) and POST /api/v1/shares (SHARES).
     """
     user, error_response = _require_super_admin()
     if error_response:
@@ -81,7 +85,7 @@ def create_fund():
         if existing:
             return make_response(jsonify({"status": 409, "message": "Fund already exists"}), 409)
 
-        fund = CoreFund(fund_name=fund_name, fund_code=fund_code, is_active=True)
+        fund = CoreFund(fund_name=fund_name, fund_code=fund_code, is_active=True, product_type=product)
         db.session.add(fund)
         db.session.commit()
 
@@ -91,6 +95,7 @@ def create_fund():
                 "id": fund.id,
                 "fund_name": fund.fund_name,
                 "fund_code": fund.fund_code,
+                "product_type": fund.product_type,
                 "is_active": fund.is_active
             }
         }), 201)
@@ -103,152 +108,46 @@ def create_fund():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>', methods=['PATCH'])
+@funds_v1.route('/api/v1/funds', methods=['POST'])
 @jwt_required()
-def update_fund(fund_id):
+def create_fund():
     """
-    Update fund details (SUPER ADMIN ONLY).
-    Request: { "fund_name": "Axiom Updated", "fund_code": "AXM2", "is_active": true }
-    Response: { "status": 200, "data": { "id": 1, "fund_name": "...", "fund_code": "...", "is_active": true } }
+    Create a new FUNDS fund (SUPER ADMIN ONLY).
+    Request: { "fund_name": "Axiom", "fund_code": "AXM" }
+    Response: { "status": 201, "data": { "id": 1, "fund_name": "Axiom", "fund_code": "AXM", "product_type": "FUNDS", "is_active": true } }
     """
-    user, error_response = _require_super_admin()
-    if error_response:
-        return error_response
-
-    try:
-        data = request.get_json() or {}
-        if not data:
-            return make_response(jsonify({"status": 400, "message": "Request body is required"}), 400)
-
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
-
-        changed = False
-
-        if "fund_name" in data and data["fund_name"] is not None:
-            fund_name = str(data["fund_name"]).strip()
-            if not fund_name:
-                return make_response(jsonify({"status": 400, "message": "fund_name cannot be empty"}), 400)
-
-            # Check if new name conflicts with existing fund
-            existing = db.session.query(CoreFund).filter(
-                db.func.lower(CoreFund.fund_name) == fund_name.lower(),
-                CoreFund.id != fund_id
-            ).first()
-            if existing:
-                return make_response(jsonify({"status": 409, "message": "Fund name already exists"}), 409)
-
-            fund.fund_name = fund_name
-            changed = True
-
-        if "fund_code" in data and data["fund_code"] is not None:
-            fund_code = str(data["fund_code"]).strip().upper()
-            if not fund_code:
-                return make_response(jsonify({"status": 400, "message": "fund_code cannot be empty"}), 400)
-
-            # Check if new code conflicts with existing fund
-            existing = db.session.query(CoreFund).filter(
-                CoreFund.fund_code == fund_code,
-                CoreFund.id != fund_id
-            ).first()
-            if existing:
-                return make_response(jsonify({"status": 409, "message": "Fund code already exists"}), 409)
-
-            fund.fund_code = fund_code
-            changed = True
-
-        if "is_active" in data and data["is_active"] is not None:
-            fund.is_active = bool(data["is_active"])
-            changed = True
-
-        if not changed:
-            return make_response(jsonify({"status": 400, "message": "No updatable fields provided"}), 400)
-
-        db.session.add(fund)
-        db.session.commit()
-
-        return make_response(jsonify({
-            "status": 200,
-            "message": "Fund updated successfully",
-            "data": {
-                "id": fund.id,
-                "fund_name": fund.fund_name,
-                "fund_code": fund.fund_code,
-                "is_active": fund.is_active
-            }
-        }), 200)
-
-    except IntegrityError:
-        db.session.rollback()
-        return make_response(jsonify({"status": 409, "message": "Fund code already exists"}), 409)
-    except Exception as e:
-        db.session.rollback()
-        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+    return _create_fund_impl(FUNDS)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>', methods=['DELETE'])
+@funds_v1.route('/api/v1/shares', methods=['POST'])
 @jwt_required()
-def delete_fund(fund_id):
+def create_share_fund():
     """
-    Delete/deactivate a fund (SUPER ADMIN ONLY).
-    Soft deletes by setting is_active=False.
-    Response: { "status": 200, "message": "Fund deactivated" }
+    Create a new SHARES fund (SUPER ADMIN ONLY) — Task 8 alias of
+    POST /api/v1/funds, with the same payload, scoped to product=SHARES.
     """
-    user, error_response = _require_super_admin()
-    if error_response:
-        return error_response
-
-    try:
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
-
-        # Check if fund has any active batches
-        active_batches = db.session.query(Batch).filter(
-            Batch.share_class_id.in_(
-                db.session.query(ShareClass.id).filter(ShareClass.core_fund_id == fund_id)
-            ),
-            Batch.is_active == True
-        ).count()
-
-        if active_batches > 0:
-            return make_response(jsonify({
-                "status": 409,
-                "message": f"Cannot delete fund with {active_batches} active batch(es). Please deactivate all batches first."
-            }), 409)
-
-        # Soft delete: deactivate the fund
-        fund.is_active = False
-        db.session.add(fund)
-
-        # Also deactivate all share classes in this fund
-        share_classes = db.session.query(ShareClass).filter(
-            ShareClass.core_fund_id == fund_id
-        ).all()
-        for share_class in share_classes:
-            share_class.is_active = False
-            db.session.add(share_class)
-
-        db.session.commit()
-
-        return make_response(jsonify({
-            "status": 200,
-            "message": f"Fund '{fund.fund_name}' and its {len(share_classes)} share class(es) deactivated successfully"
-        }), 200)
-
-    except Exception as e:
-        db.session.rollback()
-        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+    return _create_fund_impl(SHARES)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>/classes', methods=['POST'])
-@jwt_required()
-def add_share_class(fund_id):
+#
+# NOTE (Task 8): PATCH/DELETE /api/v1/funds/<id> are NOT handled here.
+# app/Batch/fund_routes.py's fund_v1 blueprint registers its own
+# update_core_fund/delete_core_fund at the identical path+method and is
+# registered before funds_v1 in main.py, so those are the ones Werkzeug
+# actually routes to — equivalents used to live here too (dead/unreachable
+# code) and were removed to stop the two from silently diverging. See
+# app/Batch/fund_routes.py for the live implementation (now product-scoped,
+# with a /api/v1/shares/<id> alias).
+#
+
+
+def _add_share_class_impl(fund_id, product):
     """
-    Add a share class to a fund (SUPER ADMIN ONLY).
-    Request: { "class_name": "Class I Participating Shares", "class_code": "KES_I", "currency": "KES" }
-    Response: { "status": 201, "data": { "id": 1, "core_fund_id": 1, "class_name": "...", "class_code": "KES_I", "currency": "KES" } }
+    Add a share class to a fund, scoped to one product — shared by
+    POST /api/v1/funds/<id>/classes (FUNDS) and
+    POST /api/v1/shares/<id>/classes (SHARES), Task 8. The share class's own
+    product_type is set automatically from its fund (ShareClass's
+    before_insert event) — never taken from the request body.
     """
     user, error_response = _require_super_admin()
     if error_response:
@@ -259,15 +158,22 @@ def add_share_class(fund_id):
         if not data or not all(k in data for k in ['class_name', 'class_code', 'currency']):
             return make_response(jsonify({"status": 400, "message": "class_name, class_code, and currency are required"}), 400)
 
-        # Validate fund exists
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        # Validate fund exists and belongs to this product (Task 8: block
+        # cross-product references — a SHARES class can never be added under
+        # a FUNDS fund_id via /funds/.../classes, or vice versa via /shares/...).
+        fund, error_response = get_fund_scoped_or_404(fund_id, product)
+        if error_response:
+            return error_response
 
-        # Validate currency
+        # Validate currency — allow-list is per-product (Funds: KES/USD,
+        # Shares: NGN — see CURRENCIES_BY_PRODUCT).
         currency = data['currency'].upper()
-        if currency not in ['KES', 'USD']:
-            return make_response(jsonify({"status": 400, "message": "Currency must be KES or USD"}), 400)
+        allowed_currencies = CURRENCIES_BY_PRODUCT[product]
+        if currency not in allowed_currencies:
+            return make_response(jsonify({
+                "status": 400,
+                "message": f"Currency must be one of: {', '.join(allowed_currencies)}",
+            }), 400)
 
         class_name = data['class_name'].strip()
         class_code = data['class_code'].strip()
@@ -297,7 +203,8 @@ def add_share_class(fund_id):
                 "core_fund_id": share_class.core_fund_id,
                 "class_name": share_class.class_name,
                 "class_code": share_class.class_code,
-                "currency": share_class.currency
+                "currency": share_class.currency,
+                "product_type": share_class.product_type,
             }
         }), 201)
 
@@ -309,18 +216,34 @@ def add_share_class(fund_id):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>/classes', methods=['GET'])
+@funds_v1.route('/api/v1/funds/<int:fund_id>/classes', methods=['POST'])
 @jwt_required()
-def list_share_classes(fund_id):
+def add_share_class(fund_id):
     """
-    List all share classes for a fund.
-    Response: { "status": 200, "data": [{ "id": 1, "class_name": "...", "class_code": "KES_I", "currency": "KES" }, ...] }
+    Add a share class to a FUNDS fund (SUPER ADMIN ONLY).
+    Request: { "class_name": "Class I Participating Shares", "class_code": "KES_I", "currency": "KES" }
+    Response: { "status": 201, "data": { "id": 1, "core_fund_id": 1, "class_name": "...", "class_code": "KES_I", "currency": "KES" } }
     """
+    return _add_share_class_impl(fund_id, FUNDS)
+
+
+@funds_v1.route('/api/v1/shares/<int:fund_id>/classes', methods=['POST'])
+@jwt_required()
+def add_share_class_for_shares(fund_id):
+    """
+    Add a share class to a SHARES fund (SUPER ADMIN ONLY) — Task 8 alias of
+    POST /api/v1/funds/<id>/classes, with the same payload shape, scoped to
+    product=SHARES (currency must be NGN).
+    """
+    return _add_share_class_impl(fund_id, SHARES)
+
+
+def _list_share_classes_impl(fund_id, product):
+    """List a fund's share classes, scoped to one product (Task 8)."""
     try:
-        # Validate fund exists
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        fund, error_response = get_fund_scoped_or_404(fund_id, product)
+        if error_response:
+            return error_response
 
         classes = db.session.query(ShareClass).filter(
             ShareClass.core_fund_id == fund_id,
@@ -331,7 +254,8 @@ def list_share_classes(fund_id):
             "id": cls.id,
             "class_name": cls.class_name,
             "class_code": cls.class_code,
-            "currency": cls.currency
+            "currency": cls.currency,
+            "product_type": cls.product_type,
         } for cls in classes]
 
         return make_response(jsonify({"status": 200, "data": data}), 200)
@@ -340,15 +264,33 @@ def list_share_classes(fund_id):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>', methods=['PATCH'])
+@funds_v1.route('/api/v1/funds/<int:fund_id>/classes', methods=['GET'])
 @jwt_required()
-def update_share_class(fund_id, class_id):
+def list_share_classes(fund_id):
     """
-    Update share class metadata (SUPER ADMIN ONLY).
+    List all share classes for a FUNDS fund.
+    Response: { "status": 200, "data": [{ "id": 1, "class_name": "...", "class_code": "KES_I", "currency": "KES" }, ...] }
+    """
+    return _list_share_classes_impl(fund_id, FUNDS)
+
+
+@funds_v1.route('/api/v1/shares/<int:fund_id>/classes', methods=['GET'])
+@jwt_required()
+def list_share_classes_for_shares(fund_id):
+    """List all share classes for a SHARES fund — Task 8 alias of /funds/<id>/classes."""
+    return _list_share_classes_impl(fund_id, SHARES)
+
+
+def _update_share_class_impl(fund_id, class_id, product):
+    """
+    Update share class metadata, scoped to one product — shared by
+    PATCH /api/v1/funds/<id>/classes/<id> (FUNDS) and
+    PATCH /api/v1/shares/<id>/classes/<id> (SHARES), Task 8.
     Body supports:
       - class_name
       - class_code
-      - currency ("KES" | "USD")
+      - currency (allow-list from CURRENCIES_BY_PRODUCT[product])
+    product_type itself is not updatable (immutable after creation).
     """
     user, error_response = _require_super_admin()
     if error_response:
@@ -359,10 +301,9 @@ def update_share_class(fund_id, class_id):
         if not data:
             return make_response(jsonify({"status": 400, "message": "Request body is required"}), 400)
 
-        # Validate fund exists
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        fund, error_response = get_fund_scoped_or_404(fund_id, product)
+        if error_response:
+            return error_response
 
         share_class = db.session.query(ShareClass).filter(
             ShareClass.id == class_id,
@@ -407,30 +348,38 @@ def update_share_class(fund_id, class_id):
 
         if "currency" in data and data["currency"] is not None:
             currency = str(data["currency"]).upper().strip()
-            if currency not in ["KES", "USD"]:
-                return make_response(jsonify({"status": 400, "message": "Currency must be KES or USD"}), 400)
+            allowed_currencies = CURRENCIES_BY_PRODUCT[product]
+            if currency not in allowed_currencies:
+                return make_response(jsonify({
+                    "status": 400,
+                    "message": f"Currency must be one of: {', '.join(allowed_currencies)}",
+                }), 400)
             share_class.currency = currency
             changed = True
 
-            # Keep linked investment + pending-email currency aligned with class currency.
+            # Keep linked investment + pending-email currency aligned with class
+            # currency — Investment.currency_type is a USD/KES-only DB enum (a
+            # FUNDS-only field; SHARES deposits don't use it), so only propagate
+            # there when the new currency is one it can actually hold.
             if currency != old_currency:
                 inv_ids = [row[0] for row in db.session.query(Investment.id).filter(
                     Investment.share_class_id == share_class.id
                 ).all()]
-                db.session.query(Investment).filter(
-                    Investment.share_class_id == share_class.id
-                ).update(
-                    {Investment.currency_type: currency},
-                    synchronize_session=False
-                )
-                if inv_ids:
-                    db.session.query(PendingEmail).filter(
-                        PendingEmail.investor_id.in_(inv_ids),
-                        PendingEmail.status.in_(("Pending_Confirmation", "Suppressed"))
+                if currency in ("USD", "KES"):
+                    db.session.query(Investment).filter(
+                        Investment.share_class_id == share_class.id
                     ).update(
-                        {PendingEmail.currency_type: currency},
+                        {Investment.currency_type: currency},
                         synchronize_session=False
                     )
+                    if inv_ids:
+                        db.session.query(PendingEmail).filter(
+                            PendingEmail.investor_id.in_(inv_ids),
+                            PendingEmail.status.in_(("Pending_Confirmation", "Suppressed"))
+                        ).update(
+                            {PendingEmail.currency_type: currency},
+                            synchronize_session=False
+                        )
 
         if not changed:
             return make_response(jsonify({"status": 400, "message": "No updatable fields provided"}), 400)
@@ -447,11 +396,26 @@ def update_share_class(fund_id, class_id):
                 "class_name": share_class.class_name,
                 "class_code": share_class.class_code,
                 "currency": share_class.currency,
+                "product_type": share_class.product_type,
             }
         }), 200)
     except Exception as e:
         db.session.rollback()
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>', methods=['PATCH'])
+@jwt_required()
+def update_share_class(fund_id, class_id):
+    """Update a FUNDS share class's metadata (SUPER ADMIN ONLY). See _update_share_class_impl."""
+    return _update_share_class_impl(fund_id, class_id, FUNDS)
+
+
+@funds_v1.route('/api/v1/shares/<int:fund_id>/classes/<int:class_id>', methods=['PATCH'])
+@jwt_required()
+def update_share_class_for_shares(fund_id, class_id):
+    """Update a SHARES share class's metadata (SUPER ADMIN ONLY) — Task 8 alias."""
+    return _update_share_class_impl(fund_id, class_id, SHARES)
 
 
 @funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>/force-update-code', methods=['PATCH'])
@@ -490,11 +454,14 @@ def force_update_share_class_code(fund_id, class_id):
             return make_response(jsonify({"status": 400, "message": "new_class_code is required"}), 400)
 
         new_code = str(data["new_class_code"]).strip().upper()
-        
-        # Validate fund exists
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+
+        # Task 8: FUNDS-only (this path isn't mirrored under /shares/... — it's
+        # a niche admin workaround, not part of the core create/edit/add-class
+        # surface) — still scoped so a SHARES fund_id 404s here rather than
+        # being silently reachable through the wrong product's URL.
+        fund, error_response = get_fund_scoped_or_404(fund_id, FUNDS)
+        if error_response:
+            return error_response
 
         share_class = db.session.query(ShareClass).filter(
             ShareClass.id == class_id,
@@ -548,18 +515,19 @@ def force_update_share_class_code(fund_id, class_id):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>/details', methods=['GET'])
-@jwt_required()
-def get_share_class_details(fund_id, class_id):
+def _get_share_class_details_impl(fund_id, class_id, product):
     """
-    Return full investor share breakdown and linked batches for a share class.
+    Return full investor share breakdown and linked batches for a share
+    class, scoped to one product — shared by
+    GET /api/v1/funds/<id>/classes/<id>/details (FUNDS) and
+    GET /api/v1/shares/<id>/classes/<id>/details (SHARES), Task 8.
     Response includes investors list (shares, deploy NAV, cost basis, current value)
     and a batches list showing which batches belong to this class.
     """
     try:
-        fund = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not fund:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        fund, error_response = get_fund_scoped_or_404(fund_id, product)
+        if error_response:
+            return error_response
 
         share_class = db.session.query(ShareClass).filter(
             ShareClass.id == class_id,
@@ -683,14 +651,31 @@ def get_share_class_details(fund_id, class_id):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
+@funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>/details', methods=['GET'])
+@jwt_required()
+def get_share_class_details(fund_id, class_id):
+    """Share class details for a FUNDS fund. See _get_share_class_details_impl."""
+    return _get_share_class_details_impl(fund_id, class_id, FUNDS)
+
+
+@funds_v1.route('/api/v1/shares/<int:fund_id>/classes/<int:class_id>/details', methods=['GET'])
+@jwt_required()
+def get_share_class_details_for_shares(fund_id, class_id):
+    """Share class details for a SHARES fund — Task 8 alias."""
+    return _get_share_class_details_impl(fund_id, class_id, SHARES)
+
+
 # ============================================================================
 # #1: Fund Summary Endpoint - For Dashboard & Landing Page
 # ============================================================================
 
-def compute_funds_summary_data(session=None):
+def compute_funds_summary_data(session=None, product=FUNDS):
     """
-    Compute fund performance summary across all classes.
-    Used by both GET /api/v1/funds/summary and GET /api/v1/stats/overview.
+    Compute fund performance summary across all classes, scoped to one
+    product (default FUNDS, matching every existing caller's expectation —
+    GET /api/v1/stats/overview and GET /api/v1/funds/summary both only ever
+    wanted FUNDS funds here; Task 8 adds GET /api/v1/shares/summary passing
+    product=SHARES explicitly).
     """
     if session is None:
         session = db.session
@@ -710,8 +695,8 @@ def compute_funds_summary_data(session=None):
     inspector = inspect(db.engine)
     has_valuation_snapshots = inspector.has_table("valuation_snapshots")
     
-    # Get all active funds
-    funds = session.query(CoreFund).filter(CoreFund.is_active == True).all()
+    # Get all active funds for this product
+    funds = session.query(CoreFund).filter(CoreFund.is_active == True, CoreFund.product_type == product).all()
     
     if not funds:
         return {"as_of_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "funds": []}
@@ -962,6 +947,13 @@ def compute_funds_summary_data(session=None):
                 valuation_date = None
                 unrealized_gain = None
             
+            # Task 10: "Not valued yet" (has a price only via the deployment-NAV
+            # fallback, see resolve_current_price's docstring) vs "Not deployed
+            # yet" (current_nav is None entirely) — the Overview NGN card needs
+            # to tell these two apart, mirroring _resolve_shares_nav_for_investment's
+            # is_valued flag used elsewhere for the same distinction.
+            is_valued = bool(latest_nav) and not _is_fallback
+
             classes_data.append({
                 "id": cls.id,
                 "class_name": cls.class_name,
@@ -971,6 +963,7 @@ def compute_funds_summary_data(session=None):
                 "total_shares": float_2dp(total_shares),
                 "prev_nav": prev_nav,
                 "current_nav": current_nav,
+                "is_valued": is_valued,
                 "total_nav": total_nav,
                 "total_invested": cost_basis,
                 "gross_deposited": gross_deposited,
@@ -1056,7 +1049,7 @@ def compute_funds_summary_data(session=None):
             "id": fund.id,
             "fund_name": fund.fund_name,
             "fund_code": fund.fund_code,
-            "product_type": resolve_product_type([fund.fund_name], [fund.fund_code]),
+            "product_type": fund.product_type,
             "is_active": fund.is_active,
             "investors_count": int(investors_count),
             "classes": classes_data,
@@ -1089,12 +1082,12 @@ def compute_funds_summary_data(session=None):
 @funds_v1.route('/api/v1/funds/summary', methods=['GET'])
 def get_funds_summary():
     """
-    #1: Get fund performance summary across all classes.
-    
+    #1: Get fund performance summary across all FUNDS classes.
+
     Returns per-class NAV, total NAV, and performance data.
     """
     try:
-        data = compute_funds_summary_data(db.session)
+        data = compute_funds_summary_data(db.session, product=FUNDS)
         return make_response(jsonify({
             "status": 200,
             "data": data
@@ -1102,4 +1095,22 @@ def get_funds_summary():
     except Exception as e:
         import traceback
         print(f"ERROR in get_funds_summary: {traceback.format_exc()}")
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@funds_v1.route('/api/v1/shares/summary', methods=['GET'])
+def get_shares_summary():
+    """
+    Get fund performance summary across all SHARES classes — Task 8 alias of
+    /api/v1/funds/summary, scoped to product=SHARES.
+    """
+    try:
+        data = compute_funds_summary_data(db.session, product=SHARES)
+        return make_response(jsonify({
+            "status": 200,
+            "data": data
+        }), 200)
+    except Exception as e:
+        import traceback
+        print(f"ERROR in get_shares_summary: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)

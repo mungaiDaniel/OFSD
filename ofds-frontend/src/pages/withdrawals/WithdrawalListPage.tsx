@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from "react";
 import { StatusBadge } from "@/components/data/StatusBadge";
 import { ProductBadge } from "@/components/ui/ProductBadge";
+import { ProductToggle, OVERVIEW_PRODUCT_OPTIONS, type ProductFilterValue } from "@/components/ui/ProductToggle";
 import { withdrawalService } from "@/services/withdrawalService";
 import { fundService } from "@/services/fundService";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import type { Withdrawal, WithdrawalSource, CoreFund } from "@/lib/types";
+import type { Withdrawal, WithdrawalSource, CoreFund, ProductType } from "@/lib/types";
 import { toast } from "sonner";
 import { Upload, Check, X, Download } from "lucide-react";
 
@@ -13,24 +14,19 @@ const FILTER_LABELS: Record<string, string> = { "": "All", Pending: "Pending", A
 
 const SOURCE_FILTERS = ["", "investor_request", "oversubscription_refund"] as const;
 const SOURCE_FILTER_LABELS: Record<string, string> = {
-  "": "All sources",
+  "": "All types",
   investor_request: "Investor Requests",
-  oversubscription_refund: "DPRP Oversubscription Refunds",
+  oversubscription_refund: "Oversubscription Refunds",
 };
 
-interface WithdrawalListPageProps {
-  /** Locks the source filter to one value and hides the source pills — used
-   * by the Shares > Refunds page, a scoped view of this same list/table. */
-  lockedSource?: WithdrawalSource;
-  title?: string;
-  description?: string;
-}
-
-export default function WithdrawalListPage({ lockedSource, title, description }: WithdrawalListPageProps) {
+export default function WithdrawalListPage() {
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("");
-  const [sourceFilter, setSourceFilter] = useState<string>(lockedSource ?? "");
+  const [sourceFilter, setSourceFilter] = useState<string>("");
+  // Task 11: Product filter (All | Funds | Shares) — refunds only ever occur
+  // under Shares (DPRP), but this also scopes normal investor-request rows.
+  const [productFilter, setProductFilter] = useState<ProductFilterValue>("ALL");
   const [uploading, setUploading] = useState(false);
   const [processing, setProcessing] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -42,7 +38,8 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState<{ total: number; total_pages: number }>({ total: 0, total_pages: 1 });
   const PER_PAGE = 200;
-  const effectiveSource = lockedSource ?? sourceFilter;
+  const effectiveSource = sourceFilter;
+  const effectiveProduct = productFilter === "ALL" ? undefined : (productFilter as ProductType);
 
   const load = async () => {
     setLoading(true);
@@ -50,6 +47,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
       const { data, pagination: p } = await withdrawalService.getAll({
         status: filter || undefined,
         source: (effectiveSource || undefined) as WithdrawalSource | undefined,
+        product: effectiveProduct,
         fundId: fundFilter ? Number(fundFilter) : undefined,
         search: search.trim() || undefined,
         page,
@@ -62,8 +60,8 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
     }
   };
 
-  useEffect(() => { load(); }, [filter, effectiveSource, fundFilter, search, page]);
-  useEffect(() => { setPage(1); }, [filter, effectiveSource, fundFilter, search]);
+  useEffect(() => { load(); }, [filter, effectiveSource, effectiveProduct, fundFilter, search, page]);
+  useEffect(() => { setPage(1); }, [filter, effectiveSource, effectiveProduct, fundFilter, search]);
   useEffect(() => { fundService.getAll().then(setFunds).catch(() => {}); }, []);
 
   // Pending count for the "Approve All"/"Reject All" preview — deliberately
@@ -78,6 +76,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
       const count = await withdrawalService.getCount({
         status: "Pending",
         source: (effectiveSource || undefined) as WithdrawalSource | undefined,
+        product: effectiveProduct,
         fundId: fundFilter ? Number(fundFilter) : undefined,
       });
       setPendingCount(count);
@@ -85,7 +84,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
       setPendingCount(0);
     }
   };
-  useEffect(() => { refreshPendingCount(); }, [effectiveSource, fundFilter]);
+  useEffect(() => { refreshPendingCount(); }, [effectiveSource, effectiveProduct, fundFilter]);
 
   const onExport = async (format: "excel" | "pdf") => {
     setExporting(format);
@@ -94,6 +93,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
         fundId: fundFilter ? Number(fundFilter) : undefined,
         status: filter || undefined,
         source: (effectiveSource || undefined) as WithdrawalSource | undefined,
+        product: effectiveProduct,
       });
     } catch (err: any) {
       toast.error(err.response?.data?.message || "Export failed");
@@ -156,8 +156,9 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
     if (pendingCount === 0) return;
     const scopeLabel = [
       effectiveSource ? SOURCE_FILTER_LABELS[effectiveSource] : null,
+      effectiveProduct ? (effectiveProduct === "SHARES" ? "Shares" : "Funds") : null,
       fundFilter ? funds.find((f) => String(f.id) === fundFilter)?.fund_name : null,
-    ].filter(Boolean).join(" · ") || "all funds/sources";
+    ].filter(Boolean).join(" · ") || "all funds/types";
     const confirmed = window.confirm(
       `${action === "approve" ? "Approve" : "Reject"} ALL ${pendingCount} pending withdrawal(s) matching "${scopeLabel}"?\n\nThis cannot be undone in bulk — you'd have to fix each one individually.`
     );
@@ -167,6 +168,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
     try {
       const res = await withdrawalService.bulkAction(action, {
         source: (effectiveSource || undefined) as WithdrawalSource | undefined,
+        product: effectiveProduct,
         fundId: fundFilter ? Number(fundFilter) : undefined,
       });
       const { processed } = res.data || { processed: 0 };
@@ -199,17 +201,16 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
       {/* Header */}
       <div className="page-header-row mb-4">
         <div>
-          <div className="d-flex align-items-center gap-2 mb-1">
-            <h1 className="fw-bold mb-0" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>
-              {title ?? "Withdrawals"}
-            </h1>
-            {lockedSource === "oversubscription_refund" && <ProductBadge product="SHARES" />}
-          </div>
+          <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>
+            Withdrawals
+          </h1>
           <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            {description ?? "Track and manage investor withdrawal requests"}
+            Track and manage investor withdrawal requests and oversubscription refunds
           </p>
         </div>
-        <div className="d-flex align-items-center gap-2">
+        <div className="d-flex align-items-end gap-3">
+          <ProductToggle value={productFilter} onChange={setProductFilter} options={OVERVIEW_PRODUCT_OPTIONS} label="Product" />
+          <div className="d-flex align-items-center gap-2">
           <button
             onClick={() => onExport("excel")}
             disabled={exporting !== null}
@@ -253,6 +254,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
           >
             <Upload size={14} /> {uploading ? "Uploading..." : "Upload Excel"}
           </button>
+          </div>
         </div>
       </div>
 
@@ -268,16 +270,12 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
               {FILTER_LABELS[f]}
             </button>
           ))}
-          {!lockedSource && (
-            <>
-              <span style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
-              {SOURCE_FILTERS.map((s) => (
-                <button key={s || "all-sources"} onClick={() => setSourceFilter(s)} style={pillStyle(sourceFilter === s)}>
-                  {SOURCE_FILTER_LABELS[s]}
-                </button>
-              ))}
-            </>
-          )}
+          <span style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
+          {SOURCE_FILTERS.map((s) => (
+            <button key={s || "all-types"} onClick={() => setSourceFilter(s)} style={pillStyle(sourceFilter === s)}>
+              {SOURCE_FILTER_LABELS[s]}
+            </button>
+          ))}
           <span style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
           <select
             value={fundFilter}
@@ -367,10 +365,13 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
               <thead>
                 <tr>
                   {[
-                    { label: "Client Code", align: "left"  },
+                    { label: "Investor",    align: "left"  },
                     { label: "Fund",        align: "left"  },
-                    { label: "Source",      align: "left"  },
-                    { label: "Amount",      align: "right" },
+                    { label: "Product",     align: "left"  },
+                    { label: "Type",        align: "left"  },
+                    { label: "Batch",       align: "left"  },
+                    { label: "Amount (USD)", align: "right" },
+                    { label: "Rate Used",   align: "right" },
                     { label: "Status",      align: "left"  },
                     { label: "Date",        align: "left"  },
                     { label: "Approved",    align: "left"  },
@@ -383,20 +384,29 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
               <tbody>
                 {withdrawals.map((w) => (
                   <tr key={w.id}>
-                    <td style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>{w.client_id}</td>
+                    <td>
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--color-text-primary)" }}>
+                        {w.investor_name || w.client_id}
+                      </div>
+                      {w.investor_name && (
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--color-text-tertiary)" }}>
+                          {w.client_id}
+                        </div>
+                      )}
+                    </td>
                     <td className="fw-bold" style={{ fontSize: "13px" }}>{w.fund_name}</td>
+                    <td><ProductBadge product={w.product_type ?? "FUNDS"} /></td>
                     <td style={{ fontSize: "11px" }}>
                       {w.source === "oversubscription_refund" ? (
                         <div className="d-flex align-items-center gap-1 flex-wrap">
                           <span
-                            title={w.batch_name ? `Batch: ${w.batch_name}` : undefined}
                             style={{
                               display: "inline-flex", alignItems: "center", padding: "3px 8px", borderRadius: "999px",
                               background: "rgba(212, 148, 11, 0.12)", border: "1px solid rgba(212, 148, 11, 0.3)",
                               color: "#D4940B", fontWeight: 600, fontSize: "10px", whiteSpace: "nowrap",
                             }}
                           >
-                            DPRP Oversubscription Refund
+                            Oversubscription Refund
                           </span>
                           <span
                             title={
@@ -419,8 +429,12 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
                         <span style={{ color: "var(--color-text-tertiary)" }}>Investor Request</span>
                       )}
                     </td>
+                    <td style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>{w.batch_name || "—"}</td>
                     <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-destructive)" }}>
                       {formatCurrency(w.amount)}
+                    </td>
+                    <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                      {w.rate_used != null ? `₦${w.rate_used.toLocaleString("en-US", { maximumFractionDigits: 4 })}` : "—"}
                     </td>
                     <td><StatusBadge status={w.status} /></td>
                     <td style={{ color: "var(--color-text-secondary)", fontSize: "12px" }}>{formatDate(w.date_withdrawn)}</td>
@@ -473,7 +487,7 @@ export default function WithdrawalListPage({ lockedSource, title, description }:
                 ))}
                 {withdrawals.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="text-center py-5" style={{ color: "var(--color-text-tertiary)" }}>
+                    <td colSpan={11} className="text-center py-5" style={{ color: "var(--color-text-tertiary)" }}>
                       No withdrawals found.
                     </td>
                   </tr>

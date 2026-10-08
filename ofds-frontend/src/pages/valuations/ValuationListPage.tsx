@@ -3,12 +3,20 @@ import { useNavigate } from "react-router-dom";
 import { valuationService } from "@/services/valuationService";
 import { formatDate, formatCurrency, formatPercent } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
-import type { NavValuationRunItem } from "@/lib/types";
+import type { NavValuationRunItem, ProductType } from "@/lib/types";
 import { Plus, Download, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
-export default function ValuationListPage() {
+interface ValuationListPageProps {
+  product?: ProductType;
+}
+
+/** Task 9: same screen for Funds and Shares, scoped by `product` so the two
+ * valuation histories never mix (see app/Valuation/route.py's product filter). */
+export default function ValuationListPage({ product = "FUNDS" }: ValuationListPageProps) {
   const navigate = useNavigate();
+  const isShares = product === "SHARES";
+  const createPath = isShares ? ROUTES.SHARES_VALUATION_CREATE : ROUTES.FUNDS_VALUATION_CREATE;
   const [runs, setRuns] = useState<NavValuationRunItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -18,7 +26,7 @@ export default function ValuationListPage() {
       try {
         setLoading(true);
         setErrorMessage(null);
-        const data = await valuationService.listNavRuns(100);
+        const data = await valuationService.listNavRuns(100, product);
         setRuns(data);
       } catch (err: any) {
         const message =
@@ -29,11 +37,11 @@ export default function ValuationListPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [product]);
 
   const handleDownloadClick = async () => {
     try {
-      await valuationService.listNavRuns(1);
+      await valuationService.listNavRuns(1, product);
       toast.success("Valuation run loaded");
     } catch {
       toast.error("Failed to load valuation run");
@@ -45,11 +53,11 @@ export default function ValuationListPage() {
       {/* Header */}
       <div className="page-header-row" style={{ marginBottom: "24px" }}>
         <div>
-          <h1 className="ofds-page-title">Valuation Statements</h1>
+          <h1 className="ofds-page-title">{isShares ? "Shares" : "Funds"} Valuation Statements</h1>
           <p className="ofds-page-subtitle">Committed valuation reports by period</p>
         </div>
         <button
-          onClick={() => navigate(ROUTES.VALUATION_CREATE)}
+          onClick={() => navigate(createPath)}
           className="btn btn-primary btn-sm rounded-pill d-flex align-items-center gap-2 fw-bold"
           style={{ padding: "8px 18px" }}
         >
@@ -80,11 +88,11 @@ export default function ValuationListPage() {
               <thead>
                 <tr>
                   {[
-                    { label: "Fund", align: "left" },
+                    { label: isShares ? "Share" : "Fund", align: "left" },
                     { label: "Valuation Date", align: "left" },
                     { label: "NAV", align: "right" },
                     { label: "Opening", align: "right" },
-                    { label: "Closing AUM", align: "right" },
+                    { label: "Closing Total", align: "right" },
                     { label: "Profit", align: "right" },
                     { label: "Investors", align: "right" },
                     { label: "Perf %", align: "right" },

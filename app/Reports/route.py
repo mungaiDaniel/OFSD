@@ -462,7 +462,7 @@ def portfolio_view():
         return jsonify(
             {
                 "status": 200,
-                "message": "Portfolio AUM retrieved",
+                "message": "Portfolio total retrieved",
                 "as_of": as_of.isoformat(),
                 "total_global_aum": total_global,
                 "funds": data,
@@ -1150,7 +1150,7 @@ def get_report_pdf(valuation_run_id):
             ['Total Deposits', format_currency(total_deposits)],
             ['Total Withdrawals', f'({format_currency(total_withdrawals)})'],
             ['Total Profit', format_currency(total_profit)],
-            ['Closing AUM', format_currency(total_end_balance)],
+            ['Closing Total', format_currency(total_end_balance)],
             ['Head Office Total', format_currency(vr.head_office_total)],
         ]
         summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
@@ -2949,7 +2949,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
                 "Total Deposits (+)": Decimal("0.00"),
                 "Total Withdrawals (-)": Decimal("0.00"),
                 "Total Profit Distributed (+)": Decimal("0.00"),
-                "Closing AUM (=)": Decimal("0.00"),
+                "Closing Total (=)": Decimal("0.00"),
                 "investor_count": 0,
             }
         g = groups[gkey]
@@ -2957,12 +2957,12 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
         g["Total Deposits (+)"] += Decimal(str(r.get("Deposits (+)") or 0))
         g["Total Withdrawals (-)"] += Decimal(str(r.get("Withdrawals (-)") or 0))
         g["Total Profit Distributed (+)"] += Decimal(str(r.get("Profit (+)") or 0))
-        g["Closing AUM (=)"] += Decimal(str(r.get("Closing Balance") or 0))
+        g["Closing Total (=)"] += Decimal(str(r.get("Closing Balance") or 0))
         g["investor_count"] += 1
 
     summary_rows = []
     for g in groups.values():
-        total_end = round(float(g["Closing AUM (=)"]), 2)
+        total_end = round(float(g["Closing Total (=)"]), 2)
         summary_rows.append({
             "Run ID": g["Run ID"],
             "Fund Name": g["Fund Name"],
@@ -2973,7 +2973,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
             "Total Deposits (+)": round(float(g["Total Deposits (+)"]), 2),
             "Total Withdrawals (-)": round(float(g["Total Withdrawals (-)"]), 2),
             "Total Profit Distributed (+)": round(float(g["Total Profit Distributed (+)"]), 2),
-            "Closing AUM (=)": total_end,
+            "Closing Total (=)": total_end,
             "Head Office Target": total_end,
             "Reconciliation Variance": 0.00,
             "Reconciliation Status": "VERIFIED",
@@ -4025,7 +4025,7 @@ def daily_activity_pdf():
 WITHDRAWALS_PDF_ROW_LIMIT = 2000
 
 
-def _gather_withdrawals_export(fund_id=None, status=None, source=None, date_from=None, date_to=None):
+def _gather_withdrawals_export(fund_id=None, status=None, source=None, date_from=None, date_to=None, product=None):
     from app.Investments.model import Withdrawal, normalize_withdrawal_status
 
     q = db.session.query(Withdrawal).order_by(Withdrawal.date_withdrawn.asc())
@@ -4035,6 +4035,8 @@ def _gather_withdrawals_export(fund_id=None, status=None, source=None, date_from
         q = q.filter(Withdrawal.status == normalize_withdrawal_status(status))
     if source:
         q = q.filter(Withdrawal.source == source)
+    if product:
+        q = q.join(CoreFund, CoreFund.id == Withdrawal.fund_id).filter(CoreFund.product_type == product)
     if date_from:
         q = q.filter(Withdrawal.date_withdrawn >= date_from)
     if date_to:
@@ -4059,6 +4061,7 @@ def _gather_withdrawals_export(fund_id=None, status=None, source=None, date_from
             "client_code": wd.internal_client_code,
             "investor_name": investor_name or wd.internal_client_code,
             "fund_name": wd.fund.fund_name if wd.fund else wd.fund_name,
+            "product": "Shares" if (wd.fund.product_type if wd.fund else None) == "SHARES" else "Funds",
             "source": "Oversubscription Refund" if wd.source == "oversubscription_refund" else "Investor Request",
             "status": normalize_withdrawal_status(wd.status),
             "date_withdrawn": wd.date_withdrawn.strftime("%Y-%m-%d") if wd.date_withdrawn else None,
@@ -4086,11 +4089,12 @@ def _withdrawals_export_args():
     fund_id = request.args.get("fund_id", type=int)
     status = request.args.get("status")
     source = request.args.get("source")
+    product = (request.args.get("product") or "").strip().upper() or None
     date_from = _parse_date_param(request.args.get("date_from"))
     date_to = _parse_date_param(request.args.get("date_to"))
     if date_from and date_to and date_from > date_to:
         date_from, date_to = date_to, date_from
-    return fund_id, status, source, date_from, date_to
+    return fund_id, status, source, date_from, date_to, product
 
 
 @reports_v1.route("/api/v1/reports/withdrawals/excel", methods=["GET"])
@@ -4099,13 +4103,13 @@ def withdrawals_export_excel():
     try:
         from openpyxl.styles import Font, Alignment, PatternFill
 
-        fund_id, status, source, date_from, date_to = _withdrawals_export_args()
-        data = _gather_withdrawals_export(fund_id, status, source, date_from, date_to)
+        fund_id, status, source, date_from, date_to, product = _withdrawals_export_args()
+        data = _gather_withdrawals_export(fund_id, status, source, date_from, date_to, product)
 
         df = pd.DataFrame(
             data["rows"] or [],
             columns=[
-                "client_code", "investor_name", "fund_name", "source", "status",
+                "client_code", "investor_name", "fund_name", "product", "source", "status",
                 "date_withdrawn", "approved_at", "batch_name",
                 "gross_amount", "exit_fee_deducted", "net_amount", "note",
             ],
@@ -4146,8 +4150,8 @@ def withdrawals_export_excel():
 @jwt_required()
 def withdrawals_export_pdf():
     try:
-        fund_id, status, source, date_from, date_to = _withdrawals_export_args()
-        data = _gather_withdrawals_export(fund_id, status, source, date_from, date_to)
+        fund_id, status, source, date_from, date_to, product = _withdrawals_export_args()
+        data = _gather_withdrawals_export(fund_id, status, source, date_from, date_to, product)
 
         body_font, body_font_bold = _get_standard_statement_fonts()
         fund_names = [data["fund_name"]] if data["fund_name"] != "All Funds" else []

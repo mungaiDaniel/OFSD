@@ -262,8 +262,12 @@ def list_nav_valuation_runs():
         limit = request.args.get("limit", default=50, type=int)
         if limit > 200:
             limit = 200
+        # Task 9: Funds and Shares valuations must never mix — product scopes
+        # every valuation run the same way it scopes the fund/share-class
+        # lists themselves (Task 8's CoreFund.product_type).
+        product = (request.args.get("product") or "").strip().upper() or None
 
-        rows = (
+        query = (
             db.session.query(
                 InvestorShares.share_class_id.label("share_class_id"),
                 ShareClass.class_code.label("share_class_code"),
@@ -278,6 +282,11 @@ def list_nav_valuation_runs():
             .join(InvestorShares, InvestorShares.id == ValuationSnapshot.investor_shares_id)
             .join(ShareClass, ShareClass.id == InvestorShares.share_class_id)
             .join(CoreFund, CoreFund.id == ShareClass.core_fund_id)
+        )
+        if product:
+            query = query.filter(CoreFund.product_type == product)
+        rows = (
+            query
             .group_by(
                 InvestorShares.share_class_id,
                 ShareClass.class_code,
@@ -330,15 +339,14 @@ def list_nav_valuation_runs():
 @valuation_v1.route("/api/v1/valuation/funds", methods=["GET"])
 @jwt_required()
 def valuation_funds():
-    """Return all active core funds."""
+    """Return all active core funds, optionally scoped to one product (Task 9)."""
     try:
-        funds = (
-            db.session.query(CoreFund)
-            .filter(CoreFund.is_active == True)  # noqa: E712
-            .order_by(CoreFund.fund_name.asc(), CoreFund.id.asc())
-            .all()
-        )
-        data = [{"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active} for f in funds]
+        product = (request.args.get("product") or "").strip().upper() or None
+        query = db.session.query(CoreFund).filter(CoreFund.is_active == True)  # noqa: E712
+        if product:
+            query = query.filter(CoreFund.product_type == product)
+        funds = query.order_by(CoreFund.fund_name.asc(), CoreFund.id.asc()).all()
+        data = [{"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active, "product_type": f.product_type} for f in funds]
         return make_response(jsonify({"status": 200, "message": "Active funds retrieved", "data": data}), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
@@ -1406,8 +1414,17 @@ def nav_valuation():
         # immediately instead of after a job's already been queued.
         try:
             datetime.fromisoformat(data["valuation_date"])
+            # Task 9: a single valuation run must never mix Funds and Shares
+            # classes — each is a completely separate NAV universe.
+            seen_products = set()
             for cls in data["classes"]:
-                _reconcile_class_totals(cls)
+                share_class, *_rest = _reconcile_class_totals(cls)
+                seen_products.add(share_class.product_type)
+            if len(seen_products) > 1:
+                return make_response(jsonify({
+                    "status": 400,
+                    "message": "Cannot mix FUNDS and SHARES share classes in one valuation run",
+                }), 400)
         except ValueError as ve:
             return make_response(jsonify({"status": 400, "message": str(ve)}), 400)
 
@@ -1752,6 +1769,7 @@ def nav_valuation_preview():
         tolerance = Decimal("10.00")
 
         preview_classes = []
+        seen_products = set()
         for cls in data["classes"]:
             if not all(k in cls for k in ["share_class_id", "nav_per_share"]):
                 return make_response(
@@ -1774,6 +1792,15 @@ def nav_valuation_preview():
             share_class = db.session.query(ShareClass).filter(ShareClass.id == share_class_id).first()
             if not share_class:
                 return make_response(jsonify({"status": 404, "message": f"Share class {share_class_id} not found"}), 404)
+
+            # Task 9: a single valuation run must never mix Funds and Shares
+            # classes — each is a completely separate NAV universe.
+            seen_products.add(share_class.product_type)
+            if len(seen_products) > 1:
+                return make_response(jsonify({
+                    "status": 400,
+                    "message": "Cannot mix FUNDS and SHARES share classes in one valuation run",
+                }), 400)
 
             total_shares = db.session.query(
                 func.coalesce(func.sum(InvestorShares.shares_owned), 0)

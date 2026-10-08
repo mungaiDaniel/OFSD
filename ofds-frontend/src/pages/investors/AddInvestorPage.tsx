@@ -569,7 +569,7 @@ export default function AddInvestorPage() {
           <ProductToggle value={product} onChange={(v) => setProduct(v as ProductType)} />
           <div style={{ fontSize: "10px", color: "rgb(71, 85, 105)", marginTop: "8px" }}>
             {product === "SHARES"
-              ? "Shares (DPRP) deposits are valued at price per share, not NAV."
+              ? "Shares (DPRP) deposits are converted to whole shares at deployment, then valued at NAV per share — same as Funds."
               : "Funds deposits are valued at NAV per share."}
           </div>
         </div>

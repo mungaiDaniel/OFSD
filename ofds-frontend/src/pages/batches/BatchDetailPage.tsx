@@ -13,7 +13,7 @@ import { EmailConfirmationModal } from "@/components/ui/EmailConfirmationModal";
 import { DeploymentDateModal, type DeploymentConfirmPayload } from "@/components/ui/DeploymentDateModal";
 import { TransferCostModal } from "@/components/ui/TransferCostModal";
 import { SharesTransferModal } from "@/components/ui/SharesTransferModal";
-import { SharesDeploymentModal, type SharesDeploymentConfirmPayload } from "@/components/ui/SharesDeploymentModal";
+import { SharesDeploymentPanel, type SharesDeploymentConfirmPayload } from "@/components/ui/SharesDeploymentPanel";
 import { ProductBadge } from "@/components/ui/ProductBadge";
 import { VirtualizedList } from "@/components/ui/VirtualizedList";
 
@@ -188,7 +188,6 @@ export default function BatchDetailPage() {
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [sharesTransferModalOpen, setSharesTransferModalOpen] = useState(false);
-  const [sharesDeployModalOpen, setSharesDeployModalOpen] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const [isSharesTransferring, setIsSharesTransferring] = useState(false);
@@ -327,12 +326,14 @@ export default function BatchDetailPage() {
     if (nextStage > 4) return;
 
     if (nextStage === 3 || nextStage === 2) {
-      // SHARES batches use their own modals, which fetch a live preview
-      // straight from the backend (Tasks 2/3) — no need to preload the
-      // cheap-fields investor list the FUNDS modals use for client-side math.
+      // SHARES batches use their own modals/panels, which fetch a live
+      // preview straight from the backend (Tasks 2/3) — no need to preload
+      // the cheap-fields investor list the FUNDS modals use for client-side
+      // math. Deploying (nextStage === 3) is Task 9's inline panel below,
+      // shown once the batch is Transferred — not a click-to-open modal.
       if (isShares) {
-        if (nextStage === 3) setSharesDeployModalOpen(true);
-        else setSharesTransferModalOpen(true);
+        if (nextStage === 3) return;
+        setSharesTransferModalOpen(true);
         return;
       }
 
@@ -460,7 +461,6 @@ export default function BatchDetailPage() {
       toast.success("Batch deployed");
       const data = await batchService.getById(batchId);
       setBatch(data);
-      setSharesDeployModalOpen(false);
       setEmailConfirmModalOpen(true);
     } catch (err: unknown) {
       const msg = (err as any)?.response?.data?.message || "Failed to advance stage";
@@ -612,7 +612,7 @@ export default function BatchDetailPage() {
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               {reconciliation && (
                 <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>
-                  Recon AUM:{" "}
+                  Recon Total:{" "}
                   <span style={{ color: reconciliation.reconciled === false ? "rgb(239, 68, 68)" : "rgb(34, 197, 94)", fontFamily: "var(--font-mono)" }}>
                     {fmtMoney(reconciliation.total_closing_aum)}
                   </span>
@@ -677,7 +677,7 @@ export default function BatchDetailPage() {
           <p style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-text-tertiary)", margin: 0 }}>
             Deployment Progress
           </p>
-          {batch.stage < 4 && (
+          {batch.stage < 4 && !(isShares && batch.stage === 2) && (
             <button
               onClick={advanceStage}
               disabled={loadingFullInvestments}
@@ -734,6 +734,15 @@ export default function BatchDetailPage() {
           </p>
         )}
       </div>
+
+      {/* Task 9: Shares deployment form + allocation preview/confirm, shown
+          inline once the batch is Transferred and awaiting deployment —
+          replaces the old SharesDeploymentModal dialog. */}
+      {isShares && batch.stage === 2 && (
+        <div style={{ marginBottom: "16px" }}>
+          <SharesDeploymentPanel batchId={batchId} onConfirm={handleSharesDeployConfirm} isLoading={isSharesDeploying} />
+        </div>
+      )}
 
       {/* Stat grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "12px", marginBottom: "16px" }}>
@@ -1016,7 +1025,6 @@ export default function BatchDetailPage() {
       <DeploymentDateModal open={deployModalOpen} onClose={() => setDeployModalOpen(false)} onConfirm={handleDeployDateConfirm} isLoading={isDeploying} investments={fullInvestments} isDprpFund={batch.is_dprp_fund} />
       <TransferCostModal open={transferModalOpen} onClose={() => setTransferModalOpen(false)} totalBatchDeposit={totalBatchDeposit} onConfirm={handleTransferCostConfirm} isLoading={isTransferring} />
       <SharesTransferModal open={sharesTransferModalOpen} onClose={() => setSharesTransferModalOpen(false)} batchId={batchId} onConfirm={handleSharesTransferConfirm} isLoading={isSharesTransferring} />
-      <SharesDeploymentModal open={sharesDeployModalOpen} onClose={() => setSharesDeployModalOpen(false)} batchId={batchId} onConfirm={handleSharesDeployConfirm} isLoading={isSharesDeploying} />
     </div>
   );
 }

@@ -11,8 +11,29 @@ import type {
   NavClassPreview,
   NavValuationCommitResults,
   ValuationJobStatus,
+  ProductType,
 } from "@/lib/types";
 import { toast } from "sonner";
+
+// Task 9: Shares (DPRP) are NGN-only; Funds carry KES + USD. Mirrors
+// FundDetailPage's own copy of this product -> currency mapping.
+const CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
+  FUNDS: ["KES", "USD"],
+  SHARES: ["NGN"],
+};
+const CURRENCY_COLOR_VAR: Record<string, string> = {
+  KES: "--color-kes",
+  USD: "--color-usd",
+  NGN: "--color-ngn",
+};
+const CURRENCY_LABEL: Record<string, string> = {
+  KES: "Kenyan Shilling classes",
+  USD: "US Dollar classes",
+  NGN: "Nigerian Naira classes",
+};
+function currencyColorVar(currency: string | undefined) {
+  return `var(${(currency && CURRENCY_COLOR_VAR[currency]) ?? "--color-usd"})`;
+}
 
 function formatNumberDecimals(val: number | null | undefined, digits = 4) {
   if (val == null) return "—";
@@ -49,7 +70,7 @@ function handleBlur(e: React.FocusEvent<HTMLInputElement>) {
 }
 
 function CurrencyBadge({ currency }: { currency: string }) {
-  const isKES = currency === "KES";
+  const colorVar = CURRENCY_COLOR_VAR[currency] ?? "--color-usd";
   return (
     <span
       style={{
@@ -61,9 +82,9 @@ function CurrencyBadge({ currency }: { currency: string }) {
         fontSize: "10px",
         fontWeight: 600,
         letterSpacing: "0.04em",
-        background: isKES ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
-        color: isKES ? "var(--color-kes)" : "var(--color-usd)",
-        border: isKES ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+        background: `var(${colorVar}-bg)`,
+        color: `var(${colorVar})`,
+        border: `1px solid var(${colorVar}-border)`,
       }}
     >
       {currency}
@@ -135,8 +156,18 @@ function extractClassRows(funds: any[], activeShareClassIds: Set<number>): Class
   return list;
 }
 
-export default function ValuationCreatePage() {
+interface ValuationCreatePageProps {
+  product?: ProductType;
+}
+
+/** Task 9: same entry/preview/commit flow for Funds and Shares, scoped by
+ * `product` so the two valuation histories never mix. */
+export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCreatePageProps) {
   const navigate = useNavigate();
+  const isShares = product === "SHARES";
+  const currencies = CURRENCIES_BY_PRODUCT[product];
+  const listPath = isShares ? ROUTES.SHARES_VALUATIONS : ROUTES.FUNDS_VALUATIONS;
+  const managePath = isShares ? ROUTES.SHARES : ROUTES.FUNDS;
   const [loading, setLoading] = useState(true);
   const [classRows, setClassRows] = useState<ClassRowState[]>([]);
   const [valuationDate, setValuationDate] = useState(new Date().toISOString().slice(0, 10));
@@ -155,7 +186,7 @@ export default function ValuationCreatePage() {
       setLoading(true);
       try {
         const [summary, batches] = await Promise.all([
-          fundService.getSummary().catch(() => null),
+          fundService.getSummary(product).catch(() => null),
           batchService.getAll().catch(() => []),
         ]);
         const activeBatches = batches.filter((b: any) => b.is_active);
@@ -168,10 +199,10 @@ export default function ValuationCreatePage() {
         if (summary?.funds && summary.funds.length > 0) {
           setClassRows(extractClassRows(summary.funds, activeShareClassIds));
         } else {
-          const funds = await fundService.getAll();
+          const funds = await fundService.getAll(product);
           const fundsWithClasses = await Promise.all(
             funds.map(async (f: any) => {
-              const classes = await fundService.getClasses(f.id).catch(() => []);
+              const classes = await fundService.getClasses(f.id, product).catch(() => []);
               return {
                 ...f,
                 classes: classes.map((c: any) => ({
@@ -190,7 +221,7 @@ export default function ValuationCreatePage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [product]);
 
   const updateRow = (classId: number, field: "navPerShare" | "totalFundNav", val: string) => {
     setClassRows((rows) =>
@@ -418,7 +449,6 @@ export default function ValuationCreatePage() {
           >
             {successData.classes.map((cls, idx) => {
               const row = classRows.find((r) => r.classCode === cls.class_code);
-              const isKES = row?.currency === "KES";
               return (
                 <div
                   key={cls.class_code}
@@ -439,7 +469,7 @@ export default function ValuationCreatePage() {
                       style={{
                         fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
                         fontSize: "12px",
-                        color: isKES ? "var(--color-kes)" : "var(--color-usd)",
+                        color: currencyColorVar(row?.currency),
                         fontWeight: 600,
                       }}
                     >
@@ -628,7 +658,6 @@ export default function ValuationCreatePage() {
 
         {previewData.classes.map((cls: NavClassPreview, idx: number) => {
           const row = classRows.find((r) => r.classCode === cls.class_code);
-          const isKES = row?.currency === "KES";
           const isPass = cls.status === "PASS";
 
           return (
@@ -658,7 +687,7 @@ export default function ValuationCreatePage() {
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <CurrencyBadge currency={row?.currency ?? (isKES ? "KES" : "USD")} />
+                  <CurrencyBadge currency={row?.currency ?? currencies[0] ?? "USD"} />
                   <div>
                     <div
                       style={{
@@ -826,7 +855,7 @@ export default function ValuationCreatePage() {
                               padding: "8px 18px",
                               textAlign: "right",
                               fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
-                              color: isKES ? "var(--color-kes)" : "var(--color-usd)",
+                              color: currencyColorVar(row?.currency),
                               fontSize: "11px",
                             }}
                           >
@@ -1008,10 +1037,11 @@ export default function ValuationCreatePage() {
             No active share classes
           </div>
           <div style={{ fontSize: "13px", color: "#94A3B8", marginBottom: "20px" }}>
-            Set up at least one fund with an active share class before running a valuation.
+            Set up at least one {isShares ? "share" : "fund"} with an active share class before
+            running a valuation.
           </div>
           <button
-            onClick={() => navigate(ROUTES.FUNDS)}
+            onClick={() => navigate(managePath)}
             style={{
               padding: "9px 16px",
               borderRadius: "8px",
@@ -1024,7 +1054,7 @@ export default function ValuationCreatePage() {
               fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
             }}
           >
-            Go to Fund Management
+            Go to {isShares ? "Shares" : "Fund"} Management
           </button>
         </div>
       </div>
@@ -1032,12 +1062,9 @@ export default function ValuationCreatePage() {
   }
 
   // ── STEP 1: ENTRY ──
-  const kesRows = classRows.filter((r) => r.currency === "KES");
-  const usdRows = classRows.filter((r) => r.currency === "USD");
-
   const renderCurrencyGroup = (rows: ClassRowState[], currency: string) => {
     if (rows.length === 0) return null;
-    const currencyColor = currency === "KES" ? "var(--color-kes)" : "var(--color-usd)";
+    const currencyColor = currencyColorVar(currency);
 
     return (
       <div style={{ marginBottom: "20px" }} key={currency}>
@@ -1055,7 +1082,7 @@ export default function ValuationCreatePage() {
         >
           <CurrencyBadge currency={currency} />
           <span style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 500 }}>
-            {currency === "KES" ? "Kenyan Shilling classes" : "US Dollar classes"}
+            {CURRENCY_LABEL[currency] ?? `${currency} classes`}
           </span>
           <span
             style={{
@@ -1220,7 +1247,7 @@ export default function ValuationCreatePage() {
               marginBottom: "4px",
             }}
           >
-            Monthly Valuation
+            Monthly {isShares ? "Shares" : "Fund"} Valuation
           </h1>
           <div style={{ fontSize: "12px", color: "#94A3B8" }}>
             Enter NAV per share and total fund NAV from the AXYS statement. System will reconcile
@@ -1306,8 +1333,12 @@ export default function ValuationCreatePage() {
         </span>
       </div>
 
-      {renderCurrencyGroup(kesRows, "KES")}
-      {renderCurrencyGroup(usdRows, "USD")}
+      {currencies.map((currency) =>
+        renderCurrencyGroup(
+          classRows.filter((r) => r.currency === currency),
+          currency
+        )
+      )}
 
       <div
         style={{
@@ -1338,7 +1369,7 @@ export default function ValuationCreatePage() {
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button
-            onClick={() => navigate(ROUTES.VALUATIONS)}
+            onClick={() => navigate(listPath)}
             style={{
               background: "transparent",
               border: "none",

@@ -13,7 +13,7 @@ sheet set, since both read from the same combined-statement machinery.
 Run with: pytest tests/test_statement_sections.py -v
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from decimal import Decimal
 from io import BytesIO
 
@@ -105,9 +105,12 @@ def _make_dprp_fund_and_batch():
 def _make_shares_holding(client_code, investor_name="Shares Investor", deposit="2000.00", shares_allocated="100000"):
     """
     One SHARES (DPRP) holding, fully transferred and deployed via the real
-    Task 2/3 services (no EpochLedger/NAV involved — SHARES is priced at
-    price-per-share, not NAV). shares_allocated controls whether this single
-    investor is fully or over-subscribed:
+    Task 2/3 services. Task 7: price_per_share_ngn only determines how many
+    whole shares get bought here — the holding is then valued shares x NAV
+    per share (NGN) exactly like a FUNDS holding (see
+    app.Investments.route._resolve_shares_nav_for_investment), via the
+    InvestorShares row apply_to_batch creates. shares_allocated controls
+    whether this single investor is fully or over-subscribed:
       "100000" (>> demand) -> fully subscribed, refund_usd == 0.
       "3000" (< demand ~5542) -> oversubscribed, nonzero refund + a Pending
       oversubscription-refund Withdrawal auto-created by apply_to_batch.
@@ -131,6 +134,8 @@ def _make_shares_holding(client_code, investor_name="Shares Investor", deposit="
     SharesTransferService.apply_to_batch(batch, db.session, entry_fee_percent="2", total_transaction_cost_usd="20")
     db.session.expire_all()
     batch = db.session.get(Batch, batch.id)
+    batch.date_deployed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    db.session.commit()
     SharesDeploymentService.apply_to_batch(
         batch, db.session, exchange_rate="1500", price_per_share_ngn="525", shares_allocated=shares_allocated,
     )
@@ -159,10 +164,13 @@ class TestCombinedStatementPdf:
             # and a single-product statement never shows a redundant top-level
             # "FUNDS" heading (both_sections_present is False).
             assert "SHARES (DANGOTE PETROLEUM REFINERY IPO)" not in text
-            assert "Price Per Share" not in text
+            assert "NAV / Share" not in text
             assert "Shares Allocated" not in text
 
-    def test_shares_only_investor_statement_shows_only_shares_section(self, app):
+    def test_shares_only_investor_statement_not_valued_yet(self, app):
+        """Task 7: before any NAV valuation is committed for the share class,
+        the Shares section shows "Not valued yet" rather than a stale
+        deployment-price "value" (the old, wrong price-per-share model)."""
         with app.app_context():
             client_code = "SHARES-ONLY-1"
             # Under-subscribed on purpose to also exercise the refund fields.
@@ -173,9 +181,13 @@ class TestCombinedStatementPdf:
             text = _pdf_text(result)
 
             assert "SHARES (DANGOTE PETROLEUM REFINERY IPO)" in text
-            assert "Price Per Share (NGN)" in text
+            assert "NAV / Share (NGN)" in text
+            assert "Market Value (NGN)" in text
+            assert "Gain / Loss (NGN)" in text
             assert "Shares Allocated" in text
             assert "Exchange Rate Used" in text
+            assert "Not valued yet" in text
+            assert "Price Per Share" not in text
             # Oversubscribed -> a nonzero refund with an auto-created Pending withdrawal.
             assert "Refund (USD)" in text
             assert "Pending" in text
@@ -184,6 +196,31 @@ class TestCombinedStatementPdf:
             # omitted, and never a bare "FUNDS" heading either.
             assert "Account Summary" not in text
             assert "\nFUNDS\n" not in text
+
+    def test_shares_only_investor_statement_after_valuation(self, app):
+        """Task 7: once a NAV valuation is committed for the share class,
+        market value = shares x NAV/share, cost basis = net NGN deployed,
+        gain/loss = market value - cost basis."""
+        with app.app_context():
+            from app.Funds.nav_history import NavHistory
+
+            client_code = "SHARES-VALUED-1"
+            fund, batch, inv = _make_shares_holding(client_code, shares_allocated="100000")
+
+            db.session.add(NavHistory(
+                share_class_id=inv.share_class_id, nav_date=date(2026, 7, 1),
+                nav_per_share=Decimal("600.00"), source="valuation",
+            ))
+            db.session.commit()
+
+            result = _generate_investor_statement_pdf_bytes(client_code)
+            text = _pdf_text(result)
+
+            assert "Not valued yet" not in text
+            assert "NGN 600.0000" in text  # NAV / Share
+            # shares_owned (5,542) x 600 = 3,325,200.00; cost basis (net NGN) 2,910,000.00
+            assert "NGN 3,325,200.00" in text  # Market Value
+            assert "NGN 415,200.00" in text  # Gain/Loss
 
     def test_investor_with_both_shows_both_sections_never_mixed(self, app):
         with app.app_context():
@@ -199,7 +236,8 @@ class TestCombinedStatementPdf:
             assert "FUNDS" in text
             assert "SHARES (DANGOTE PETROLEUM REFINERY IPO)" in text
             assert "Account Summary" in text
-            assert "Price Per Share (NGN)" in text
+            assert "NAV / Share (NGN)" in text
+            assert "Market Value (NGN)" in text
             assert "Shares Allocated" in text
 
             # No refund this time (fully subscribed) -> no stray "Refund" row content.
@@ -240,7 +278,8 @@ class TestCombinedStatementExcel:
 
         ws = wb["Shares Holdings"]
         headers = [c.value for c in ws[1]]
-        assert "Price Per Share (NGN)" in headers
+        assert "NAV / Share (NGN)" in headers
+        assert "Market Value (NGN)" in headers
         assert "Shares Allocated" in headers
         assert "Net (USD)" in headers
 

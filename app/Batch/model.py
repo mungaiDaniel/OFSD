@@ -2,7 +2,7 @@ from app.database.database import db
 from base_model import Base
 from app.database.product_type import ProductTypeEnum, FUNDS
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric, ForeignKey, Date, Index, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric, ForeignKey, Date, Index, UniqueConstraint, Text, event, text
 
 
 class Batch(Base, db.Model):
@@ -85,6 +85,33 @@ class Batch(Base, db.Model):
         if deployed.tzinfo is None:
             deployed = deployed.replace(tzinfo=timezone.utc)
         return deployed + timedelta(days=self.duration_days)
+
+
+@event.listens_for(Batch, "before_insert")
+def _inherit_product_type_from_share_class(mapper, connection, target):
+    """
+    Task 8: a batch always takes its product_type from its share class (which
+    in turn takes it from its CoreFund — see ShareClass's own event) — the
+    same "fund/share/batch/holding product always matches" chain
+    Investment.product_type already enforces against this very column. Only
+    runs at creation: share_class_id is never reassigned after a batch
+    exists.
+    """
+    if target.share_class_id is None:
+        return
+    row = connection.execute(
+        text("SELECT product_type FROM share_classes WHERE id = :share_class_id"),
+        {"share_class_id": target.share_class_id},
+    ).first()
+    if row is None:
+        return
+    share_class_product_type = row[0]
+    if target.product_type and target.product_type != share_class_product_type:
+        raise ValueError(
+            f"Cannot create a {target.product_type} batch for share class {target.share_class_id}, "
+            f"which is a {share_class_product_type} share class."
+        )
+    target.product_type = share_class_product_type
 
     def __repr__(self):
         return f'<Batch {self.batch_name} - {self.certificate_number}>'

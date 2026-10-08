@@ -192,6 +192,54 @@ def create_app(config_filename):
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS shares_price_per_share_ngn NUMERIC(20, 4)"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS net_ngn NUMERIC(20, 2)"))
 
+            # Task 8: FUNDS vs SHARES product_type moves up to the fund level —
+            # core_funds.product_type is now the authoritative source (ShareClass/
+            # Batch/Investment each inherit and validate against the row above them;
+            # see the before_insert events in their model files). Schema + backfill
+            # repeated here idempotently for the same reason as the Task 1 block
+            # above: this startup sync, not `flask db upgrade`, is what keeps a
+            # running production DB in sync with the models in this app — see
+            # migration 020_add_fund_product_type for the documented/reversible
+            # Alembic-script equivalent of this same change.
+            db.session.execute(text("ALTER TABLE core_funds ADD COLUMN IF NOT EXISTS product_type product_type_enum"))
+            db.session.execute(text("""
+                UPDATE core_funds
+                SET product_type = 'SHARES'
+                WHERE product_type IS NULL
+                  AND (UPPER(COALESCE(fund_code, '')) = 'DPRP'
+                       OR LOWER(COALESCE(fund_name, '')) LIKE '%dangote%'
+                       OR LOWER(COALESCE(fund_name, '')) LIKE '%dprp%')
+            """))
+            db.session.execute(text("UPDATE core_funds SET product_type = 'FUNDS' WHERE product_type IS NULL"))
+            db.session.execute(text("ALTER TABLE core_funds ALTER COLUMN product_type SET NOT NULL"))
+            db.session.execute(text("ALTER TABLE core_funds ALTER COLUMN product_type SET DEFAULT 'FUNDS'"))
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_core_funds_product_type ON core_funds (product_type)"))
+
+            db.session.execute(text("ALTER TABLE share_classes ADD COLUMN IF NOT EXISTS product_type product_type_enum"))
+            db.session.execute(text("""
+                UPDATE share_classes sc
+                SET product_type = cf.product_type
+                FROM core_funds cf
+                WHERE sc.core_fund_id = cf.id AND sc.product_type IS NULL
+            """))
+            db.session.execute(text("UPDATE share_classes SET product_type = 'FUNDS' WHERE product_type IS NULL"))
+            db.session.execute(text("ALTER TABLE share_classes ALTER COLUMN product_type SET NOT NULL"))
+            db.session.execute(text("ALTER TABLE share_classes ALTER COLUMN product_type SET DEFAULT 'FUNDS'"))
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_share_classes_product_type ON share_classes (product_type)"))
+
+            # Currency: SHARES share classes may be NGN now (Task 7 established
+            # DPRP is NGN-valued); FUNDS share classes stay KES/USD — widen the
+            # CHECK constraint, then correct DPRP's own share class(es), which
+            # Task 3 had set to 'USD' only because NGN wasn't a legal value yet.
+            db.session.execute(text("ALTER TABLE share_classes DROP CONSTRAINT IF EXISTS _currency_check"))
+            db.session.execute(text("ALTER TABLE share_classes ADD CONSTRAINT _currency_check CHECK (currency IN ('KES', 'USD', 'NGN'))"))
+            db.session.execute(text("""
+                UPDATE share_classes sc
+                SET currency = 'NGN'
+                FROM core_funds cf
+                WHERE sc.core_fund_id = cf.id AND cf.product_type = 'SHARES' AND sc.currency != 'NGN'
+            """))
+
             # Commit everything above before the optional legacy-column backfill below, so that
             # if it fails it can't silently discard all the schema-sync statements that already
             # succeeded in this same transaction (see rollback() in the except branch — Postgres

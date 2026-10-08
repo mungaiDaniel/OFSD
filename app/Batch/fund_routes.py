@@ -26,12 +26,12 @@ import os
 from werkzeug.utils import secure_filename
 from app.Batch.fund import Fund
 from sqlalchemy import func, or_, distinct
-from app.Batch.core_fund import CoreFund
+from app.Batch.core_fund import CoreFund, get_fund_scoped_or_404
 from app.Investments.model import Investment
 from app.Batch.model import Batch
 from app.Funds.share_class import ShareClass
 from app.Funds.investor_shares import InvestorShares
-from app.utils.statement_theme import resolve_product_type
+from app.database.product_type import FUNDS, SHARES
 
 # Create blueprint
 fund_v1 = Blueprint("fund_v1", __name__, url_prefix='/')
@@ -50,52 +50,73 @@ def allowed_file(filename):
 
 # ==================== FUND MANAGEMENT ====================
 
+def _list_funds_impl(product):
+    """
+    Core Fund Management (global), scoped to one product — shared by
+    GET /api/v1/funds (FUNDS) and GET /api/v1/shares (SHARES), Task 8.
+    Returns CoreFund records of that product with LIVE AUM and investor counts.
+    """
+    funds = db.session.query(CoreFund).filter(
+        CoreFund.is_active == True, CoreFund.product_type == product,
+    ).order_by(CoreFund.fund_name.asc()).all()
+    data = []
+    for f in funds:
+        # Aggregate in SQL instead of loading every Investment row for the
+        # fund into Python — with 100k+ investments this used to load the
+        # whole fund's rows once per fund just to sum() in a loop.
+        fund_scope = or_(
+            Investment.fund_id == f.id,
+            (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
+        )
+        total_aum_raw, investor_count = db.session.query(
+            func.coalesce(func.sum(Investment.amount_deposited), 0),
+            func.count(distinct(Investment.internal_client_code)),
+        ).filter(fund_scope).one()
+        total_aum = float(total_aum_raw or 0)
+        investor_count = investor_count or 0
+        data.append({
+            "id": f.id,
+            "fund_name": f.fund_name,
+            "fund_code": f.fund_code,
+            "product_type": f.product_type,
+            "is_active": f.is_active,
+            "total_aum": total_aum,
+            "investor_count": investor_count
+        })
+    return make_response(jsonify({"status": 200, "message": "Core funds retrieved", "data": data}), 200)
+
+
 @fund_v1.route('/api/v1/funds', methods=['GET'])
 @jwt_required()
 def list_all_funds():
-    """Core Fund Management (global).
-    Returns all CoreFund records with LIVE AUM and investor counts.
-    """
+    """GET /api/v1/funds — FUNDS only. See _list_funds_impl."""
     try:
-        funds = db.session.query(CoreFund).filter(CoreFund.is_active == True).order_by(CoreFund.fund_name.asc()).all()
-        data = []
-        for f in funds:
-            # Aggregate in SQL instead of loading every Investment row for the
-            # fund into Python — with 100k+ investments this used to load the
-            # whole fund's rows once per fund just to sum() in a loop.
-            fund_scope = or_(
-                Investment.fund_id == f.id,
-                (Investment.fund_id == None) & (func.lower(Investment.fund_name) == f.fund_name.lower())
-            )
-            total_aum_raw, investor_count = db.session.query(
-                func.coalesce(func.sum(Investment.amount_deposited), 0),
-                func.count(distinct(Investment.internal_client_code)),
-            ).filter(fund_scope).one()
-            total_aum = float(total_aum_raw or 0)
-            investor_count = investor_count or 0
-            data.append({
-                "id": f.id,
-                "fund_name": f.fund_name,
-                "fund_code": f.fund_code,
-                "product_type": resolve_product_type([f.fund_name], [f.fund_code]),
-                "is_active": f.is_active,
-                "total_aum": total_aum,
-                "investor_count": investor_count
-            })
-        return make_response(jsonify({"status": 200, "message": "Core funds retrieved", "data": data}), 200)
+        return _list_funds_impl(FUNDS)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['GET'])
+@fund_v1.route('/api/v1/shares', methods=['GET'])
 @jwt_required()
-def get_single_fund(fund_id: int):
-    """Get single fund with live performance/AUM tracking and respective batches."""
+def list_all_shares():
+    """GET /api/v1/shares — Task 8 alias of /funds, scoped to SHARES."""
     try:
-        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not f:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+        return _list_funds_impl(SHARES)
+    except Exception as e:
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
+
+def _get_single_fund_impl(fund_id, product):
+    """
+    Get single fund with live performance/AUM tracking and respective
+    batches, scoped to one product — shared by GET /api/v1/funds/<id>
+    (FUNDS) and GET /api/v1/shares/<id> (SHARES), Task 8. A fund_id
+    belonging to the other product 404s exactly like a nonexistent id.
+    """
+    f, error_response = get_fund_scoped_or_404(fund_id, product)
+    if error_response:
+        return error_response
+    try:
         # Aggregate in SQL instead of loading every Investment row for the fund
         # into Python — with 100k+ investments this used to materialize the
         # entire fund's row set on every fund-detail page load.
@@ -187,7 +208,7 @@ def get_single_fund(fund_id: int):
             "id": f.id,
             "fund_name": f.fund_name,
             "fund_code": f.fund_code,
-            "product_type": resolve_product_type([f.fund_name], [f.fund_code]),
+            "product_type": f.product_type,
             "is_active": f.is_active,
             "total_aum": total_aum,
             "investor_count": investor_count,
@@ -197,6 +218,20 @@ def get_single_fund(fund_id: int):
         return make_response(jsonify({"status": 200, "message": "Fund retrieved", "data": data}), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['GET'])
+@jwt_required()
+def get_single_fund(fund_id: int):
+    """GET /api/v1/funds/<id> — FUNDS only. See _get_single_fund_impl."""
+    return _get_single_fund_impl(fund_id, FUNDS)
+
+
+@fund_v1.route('/api/v1/shares/<int:fund_id>', methods=['GET'])
+@jwt_required()
+def get_single_share_fund(fund_id: int):
+    """GET /api/v1/shares/<id> — Task 8 alias of /funds/<id>, scoped to SHARES."""
+    return _get_single_fund_impl(fund_id, SHARES)
 
 
 @fund_v1.route('/api/v1/funds/core', methods=['POST'])
@@ -243,15 +278,18 @@ def create_core_fund():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['PATCH'])
-@jwt_required()
-def update_core_fund(fund_id: int):
-    """Update a core fund (name and/or active state)."""
+def _update_fund_impl(fund_id, product):
+    """
+    Update a fund's name/active state, scoped to one product — shared by
+    PATCH /api/v1/funds/<id> (FUNDS) and PATCH /api/v1/shares/<id> (SHARES),
+    Task 8. product_type itself is immutable after creation (same rule as
+    Batch/Investment) — not an updatable field here.
+    """
+    f, error_response = get_fund_scoped_or_404(fund_id, product)
+    if error_response:
+        return error_response
     try:
         data = request.get_json() or {}
-        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not f:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
 
         if "fund_name" in data and data["fund_name"] is not None:
             name = str(data["fund_name"]).strip()
@@ -275,17 +313,31 @@ def update_core_fund(fund_id: int):
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['DELETE'])
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['PATCH'])
 @jwt_required()
-def delete_core_fund(fund_id: int):
-    """
-    Completely remove fund from database (including related investments & withdrawals), then hide it from UI.
-    """
-    try:
-        f = db.session.query(CoreFund).filter(CoreFund.id == fund_id).first()
-        if not f:
-            return make_response(jsonify({"status": 404, "message": "Fund not found"}), 404)
+def update_core_fund(fund_id: int):
+    """PATCH /api/v1/funds/<id> — FUNDS only. See _update_fund_impl."""
+    return _update_fund_impl(fund_id, FUNDS)
 
+
+@fund_v1.route('/api/v1/shares/<int:fund_id>', methods=['PATCH'])
+@jwt_required()
+def update_share_fund(fund_id: int):
+    """PATCH /api/v1/shares/<id> — Task 8 alias of /funds/<id>, scoped to SHARES."""
+    return _update_fund_impl(fund_id, SHARES)
+
+
+def _delete_fund_impl(fund_id, product):
+    """
+    Completely remove a fund from the database (including related
+    investments & withdrawals), then hide it from UI — scoped to one
+    product, shared by DELETE /api/v1/funds/<id> (FUNDS) and
+    DELETE /api/v1/shares/<id> (SHARES), Task 8.
+    """
+    f, error_response = get_fund_scoped_or_404(fund_id, product)
+    if error_response:
+        return error_response
+    try:
         # Delete related dependent rows before deleting fund to avoid FK constraints
         db.session.query(Investment).filter(Investment.fund_id == fund_id).delete(synchronize_session=False)
         from app.Investments.model import Withdrawal
@@ -302,6 +354,20 @@ def delete_core_fund(fund_id: int):
     except Exception as e:
         db.session.rollback()
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['DELETE'])
+@jwt_required()
+def delete_core_fund(fund_id: int):
+    """DELETE /api/v1/funds/<id> — FUNDS only. See _delete_fund_impl."""
+    return _delete_fund_impl(fund_id, FUNDS)
+
+
+@fund_v1.route('/api/v1/shares/<int:fund_id>', methods=['DELETE'])
+@jwt_required()
+def delete_share_fund(fund_id: int):
+    """DELETE /api/v1/shares/<id> — Task 8 alias of /funds/<id>, scoped to SHARES."""
+    return _delete_fund_impl(fund_id, SHARES)
 
 @fund_v1.route('/api/v1/batches/<int:batch_id>/funds', methods=['GET'])
 @jwt_required()

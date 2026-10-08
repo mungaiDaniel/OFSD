@@ -21,9 +21,26 @@ import type {
   ReportSummary,
   Batch,
   BatchInvestor,
+  ProductType,
 } from "@/lib/types";
 import { toast } from "sonner";
-import { ArrowLeft, Landmark, Layers, ChevronDown, ChevronUp, Users } from "lucide-react";
+import { ArrowLeft, Landmark, Coins, Layers, ChevronDown, ChevronUp, Users } from "lucide-react";
+
+// Task 9: currencies available per product — Funds keep KES/USD, Shares
+// (DPRP) is NGN-valued (Task 7/8). Mirrors FundListPage's own copy.
+const CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
+  FUNDS: ["KES", "USD"],
+  SHARES: ["NGN"],
+};
+
+const CURRENCY_COLOR_VAR: Record<string, string> = {
+  KES: "--color-kes",
+  USD: "--color-usd",
+  NGN: "--color-ngn",
+};
+function currencyColor(currency: string | undefined) {
+  return `var(${(currency && CURRENCY_COLOR_VAR[currency]) ?? "--color-usd"})`;
+}
 
 function formatNumber(val: number | null | undefined, digits = 4) {
   if (val == null) return "—";
@@ -64,7 +81,7 @@ const sectionSubheaderStyle: React.CSSProperties = {
 };
 
 function CurrencyBadge({ currency }: { currency: string }) {
-  const isKES = currency === "KES";
+  const varName = CURRENCY_COLOR_VAR[currency] ?? "--color-usd";
   return (
     <span
       style={{
@@ -76,9 +93,9 @@ function CurrencyBadge({ currency }: { currency: string }) {
         fontWeight: 700,
         letterSpacing: "0.06em",
         fontFamily: "var(--font-mono)",
-        background: isKES ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
-        color: isKES ? "var(--color-kes)" : "var(--color-usd)",
-        border: isKES ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+        background: `var(${varName}-bg)`,
+        color: `var(${varName})`,
+        border: `1px solid var(${varName}-border)`,
       }}
     >
       {currency}
@@ -111,10 +128,21 @@ function AutoCloseCountdown({ closeAt }: { closeAt: string }) {
   );
 }
 
-export default function FundDetailPage() {
+interface FundDetailPageProps {
+  /** Scopes this page to one product — same component, layout, and forms,
+   * different data/wording/currency (Task 9). Defaults to FUNDS (unchanged
+   * behavior for the existing /funds/:id page). */
+  product?: ProductType;
+}
+
+export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const fundId = Number(id);
+  const isShares = product === "SHARES";
+  const noun = isShares ? "share" : "fund";
+  const listPath = isShares ? ROUTES.SHARES : ROUTES.FUNDS;
+  const currencies = CURRENCIES_BY_PRODUCT[product];
 
   const [fund, setFund] = useState<CoreFund | null>(null);
   const [fundClasses, setFundClasses] = useState<FundShareClass[]>([]);
@@ -132,7 +160,7 @@ export default function FundDetailPage() {
   const [editingClassId, setEditingClassId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editCode, setEditCode] = useState("");
-  const [editCurrency, setEditCurrency] = useState("KES");
+  const [editCurrency, setEditCurrency] = useState(currencies[0]!);
   const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
@@ -140,9 +168,9 @@ export default function FundDetailPage() {
       setLoading(true);
       try {
         const res = await Promise.allSettled([
-          fundService.getById(fundId),
-          fundService.getClasses(fundId),
-          fundService.getSummary(),
+          fundService.getById(fundId, product),
+          fundService.getClasses(fundId, product),
+          fundService.getSummary(product),
           batchService.getAll(),
           reportService.getAll(fundId),
         ]);
@@ -158,13 +186,14 @@ export default function FundDetailPage() {
     if (fundId && !Number.isNaN(fundId)) {
       loadData();
     }
-  }, [fundId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fundId, product]);
 
   const reloadClassesAndFund = async () => {
     const res = await Promise.allSettled([
-      fundService.getById(fundId),
-      fundService.getClasses(fundId),
-      fundService.getSummary(),
+      fundService.getById(fundId, product),
+      fundService.getClasses(fundId, product),
+      fundService.getSummary(product),
       batchService.getAll(),
     ]);
     if (res[0].status === "fulfilled") setFund(res[0].value);
@@ -178,22 +207,22 @@ export default function FundDetailPage() {
     [summary, fundId]
   );
 
-  const kesClassesWithNav = useMemo(
-    () => (fundSummary?.classes ?? []).filter((c) => c.currency === "KES" && c.current_nav != null),
-    [fundSummary]
-  );
+  // Task 9: one AUM card per currency actually in use by this product — Funds
+  // always shows KES + USD (same as before), Shares shows NGN only. Falls
+  // back to the product's full currency list so the card still renders
+  // (showing "—") before any class/summary data has loaded.
+  const currenciesInUse = useMemo(() => {
+    const present = new Set((fundSummary?.classes ?? []).map((c) => c.currency));
+    return currencies.filter((c) => present.size === 0 || present.has(c));
+  }, [fundSummary, currencies]);
 
-  const usdClassesWithNav = useMemo(
-    () => (fundSummary?.classes ?? []).filter((c) => c.currency === "USD" && c.current_nav != null),
-    [fundSummary]
-  );
+  const classesWithNavByCurrency = (currency: string) =>
+    (fundSummary?.classes ?? []).filter((c) => c.currency === currency && c.current_nav != null);
 
-  const totalKES = fundSummary?.totals_by_currency?.KES ?? 0;
-  const totalUSD = fundSummary?.totals_by_currency?.USD ?? 0;
-  const investedKES = fundSummary?.invested_by_currency?.KES ?? 0;
-  const investedUSD = fundSummary?.invested_by_currency?.USD ?? 0;
-  const gainKES = fundSummary?.gain_by_currency?.KES ?? 0;
-  const gainUSD = fundSummary?.gain_by_currency?.USD ?? 0;
+  const totalByCurrency = (currency: string) => fundSummary?.totals_by_currency?.[currency] ?? 0;
+  const investedByCurrency = (currency: string) => fundSummary?.invested_by_currency?.[currency] ?? 0;
+  const gainByCurrency = (currency: string) => fundSummary?.gain_by_currency?.[currency] ?? 0;
+  const currencyPrefix = (currency: string | undefined) => (currency === "USD" ? "$ " : currency === "NGN" ? "₦ " : `${currency ?? ""} `);
 
   const linkedBatches = useMemo(() => {
     if (!fund) return [];
@@ -314,7 +343,7 @@ export default function FundDetailPage() {
         class_name: editName.trim(),
         class_code: editCode.trim().toUpperCase(),
         currency: editCurrency,
-      });
+      }, product);
       toast.success("Share class updated");
       setEditingClassId(null);
       await reloadClassesAndFund();
@@ -327,11 +356,11 @@ export default function FundDetailPage() {
 
   const handleDeleteFund = async () => {
     if (!fundId || !fund) return;
-    if (confirm("Delete this fund? This cannot be undone.")) {
+    if (confirm(`Delete this ${noun}? This cannot be undone.`)) {
       try {
-        await fundService.delete(fundId);
+        await fundService.delete(fundId, product);
         toast.success("Deleted");
-        navigate(ROUTES.FUNDS);
+        navigate(listPath);
       } catch (err: any) {
         toast.error(err.response?.data?.message || "Failed");
       }
@@ -384,7 +413,7 @@ export default function FundDetailPage() {
       {/* Back button */}
       <button
         type="button"
-        onClick={() => navigate(ROUTES.FUNDS)}
+        onClick={() => navigate(listPath)}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -398,7 +427,7 @@ export default function FundDetailPage() {
           color: "var(--color-text-tertiary)",
         }}
       >
-        <ArrowLeft size={14} /> Funds
+        <ArrowLeft size={14} /> {isShares ? "Shares" : "Funds"}
       </button>
 
       {/* Header Row */}
@@ -424,7 +453,11 @@ export default function FundDetailPage() {
               background: "var(--color-brand-50)",
             }}
           >
-            <Landmark size={20} style={{ color: "var(--color-brand-400)" }} />
+            {isShares ? (
+              <Coins size={20} style={{ color: "var(--color-brand-400)" }} />
+            ) : (
+              <Landmark size={20} style={{ color: "var(--color-brand-400)" }} />
+            )}
           </div>
           <div>
             <h1
@@ -504,151 +537,92 @@ export default function FundDetailPage() {
           : "Summary unavailable — some metrics may be incomplete"}
       </p>
 
-      {/* 4-Column KPI Grid */}
+      {/* KPI Grid — one AUM card per currency in use, plus Performance + Investors/Batches */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gridTemplateColumns: `repeat(${currenciesInUse.length + 2}, minmax(0, 1fr))`,
           gap: "14px",
           marginBottom: "22px",
         }}
         className="fund-detail-kpi-grid"
       >
-        {/* KPI 1: KES Total AUM */}
-        <div style={{ ...glassCardStyle, padding: "18px 22px" }}>
-          <div
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-              marginBottom: "8px",
-            }}
-          >
-            Total AUM{" "}
-            <span style={{ color: "var(--color-kes)", marginLeft: "4px" }}>KES</span>
-          </div>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "20px",
-              fontWeight: 700,
-              color: "var(--color-kes)",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            {totalKES > 0
-              ? totalKES.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })
-              : "—"}
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "10px",
-              marginTop: "6px",
-              fontSize: "11px",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            <span>
-              {kesClassesWithNav.length} class{kesClassesWithNav.length !== 1 ? "es" : ""} w/ NAV
-            </span>
-            <span style={{ fontFamily: "var(--font-mono)" }}>
-              Invested:{" "}
-              {investedKES > 0
-                ? investedKES.toLocaleString("en-US", { maximumFractionDigits: 2 })
-                : "—"}
-            </span>
-          </div>
-          <div
-            style={{
-              marginTop: "4px",
-              fontSize: "11px",
-              color: gainKES >= 0 ? "#22c55e" : "#ef4444",
-              fontFamily: "var(--font-mono)",
-            }}
-          >
-            Gain/Loss:{" "}
-            {totalKES > 0 || investedKES > 0
-              ? (gainKES >= 0 ? "+" : "") +
-                gainKES.toLocaleString("en-US", { maximumFractionDigits: 2 })
-              : "—"}
-          </div>
-        </div>
+        {/* AUM card(s) — one per currency in use */}
+        {currenciesInUse.map((currency) => {
+          const total = totalByCurrency(currency);
+          const invested = investedByCurrency(currency);
+          const gain = gainByCurrency(currency);
+          const classesWithNav = classesWithNavByCurrency(currency);
+          const color = currencyColor(currency);
+          return (
+            <div key={currency} style={{ ...glassCardStyle, padding: "18px 22px" }}>
+              <div
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--color-text-tertiary)",
+                  marginBottom: "8px",
+                }}
+              >
+                Total <span style={{ color, marginLeft: "4px" }}>{currency}</span>
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  color,
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                {total > 0
+                  ? `${currencyPrefix(currency)}${total.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}`
+                  : "—"}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "10px",
+                  marginTop: "6px",
+                  fontSize: "11px",
+                  color: "var(--color-text-tertiary)",
+                }}
+              >
+                <span>
+                  {classesWithNav.length} class{classesWithNav.length !== 1 ? "es" : ""} w/ NAV
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>
+                  Invested:{" "}
+                  {invested > 0
+                    ? `${currencyPrefix(currency)}${invested.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+                    : "—"}
+                </span>
+              </div>
+              <div
+                style={{
+                  marginTop: "4px",
+                  fontSize: "11px",
+                  color: gain >= 0 ? "#22c55e" : "#ef4444",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                Gain/Loss:{" "}
+                {total > 0 || invested > 0
+                  ? (gain >= 0 ? "+" : "") +
+                    `${currencyPrefix(currency)}${Math.abs(gain).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+                  : "—"}
+              </div>
+            </div>
+          );
+        })}
 
-        {/* KPI 2: USD Total AUM */}
-        <div style={{ ...glassCardStyle, padding: "18px 22px" }}>
-          <div
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-              marginBottom: "8px",
-            }}
-          >
-            Total AUM{" "}
-            <span style={{ color: "var(--color-usd)", marginLeft: "4px" }}>USD</span>
-          </div>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "20px",
-              fontWeight: 700,
-              color: "var(--color-usd)",
-              letterSpacing: "-0.02em",
-            }}
-          >
-            {totalUSD > 0
-              ? `$ ${totalUSD.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}`
-              : "—"}
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "10px",
-              marginTop: "6px",
-              fontSize: "11px",
-              color: "var(--color-text-tertiary)",
-            }}
-          >
-            <span>
-              {usdClassesWithNav.length} class{usdClassesWithNav.length !== 1 ? "es" : ""} w/ NAV
-            </span>
-            <span style={{ fontFamily: "var(--font-mono)" }}>
-              Invested:{" "}
-              {investedUSD > 0
-                ? `$ ${investedUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-                : "—"}
-            </span>
-          </div>
-          <div
-            style={{
-              marginTop: "4px",
-              fontSize: "11px",
-              color: gainUSD >= 0 ? "#22c55e" : "#ef4444",
-              fontFamily: "var(--font-mono)",
-            }}
-          >
-            Gain/Loss:{" "}
-            {totalUSD > 0 || investedUSD > 0
-              ? (gainUSD >= 0 ? "+" : "") +
-                `$ ${Math.abs(gainUSD).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-              : "—"}
-          </div>
-        </div>
-
-        {/* KPI 3: Weighted Performance */}
+        {/* KPI: Weighted Performance */}
         <div style={{ ...glassCardStyle, padding: "18px 22px" }}>
           <div
             style={{
@@ -742,27 +716,21 @@ export default function FundDetailPage() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            gridTemplateColumns: currenciesInUse.length > 1 ? "1fr 1fr" : "1fr",
             gap: "14px",
           }}
           className="fund-detail-nav-charts"
         >
-          <div style={{ ...glassCardStyle, padding: "20px 24px" }}>
-            <NAVLineChart
-              classes={fundSummary?.classes?.filter((c) => c.currency === "KES") ?? []}
-              currency="KES"
-              title="KES classes — NAV / share"
-              asOfDate={summary?.as_of_date}
-            />
-          </div>
-          <div style={{ ...glassCardStyle, padding: "20px 24px" }}>
-            <NAVLineChart
-              classes={fundSummary?.classes?.filter((c) => c.currency === "USD") ?? []}
-              currency="USD"
-              title="USD classes — NAV / share"
-              asOfDate={summary?.as_of_date}
-            />
-          </div>
+          {currenciesInUse.map((currency) => (
+            <div key={currency} style={{ ...glassCardStyle, padding: "20px 24px" }}>
+              <NAVLineChart
+                classes={fundSummary?.classes?.filter((c) => c.currency === currency) ?? []}
+                currency={currency}
+                title={`${currency} classes — NAV / share`}
+                asOfDate={summary?.as_of_date}
+              />
+            </div>
+          ))}
         </div>
 
         {/* Right Column: Latest Valuation & Batch Status */}
@@ -809,7 +777,6 @@ export default function FundDetailPage() {
                   {(fundSummary?.classes ?? [])
                     .filter((c) => c.current_nav != null)
                     .map((c) => {
-                      const isKES = c.currency === "KES";
                       const perfStr = formatPercent(c.performance_pct);
                       const isPositive = (c.performance_pct ?? 0) >= 0;
                       return (
@@ -823,7 +790,7 @@ export default function FundDetailPage() {
                                 fontFamily: "var(--font-mono)",
                                 fontSize: "10px",
                                 fontWeight: 700,
-                                color: isKES ? "var(--color-kes)" : "var(--color-usd)",
+                                color: currencyColor(c.currency),
                               }}
                             >
                               {c.class_code}
@@ -848,7 +815,7 @@ export default function FundDetailPage() {
                             }}
                           >
                             {c.total_nav != null
-                              ? (isKES ? "KES " : "$ ") +
+                              ? currencyPrefix(c.currency) +
                                 c.total_nav.toLocaleString("en-US", { maximumFractionDigits: 0 })
                               : "—"}
                           </td>
@@ -1092,8 +1059,11 @@ export default function FundDetailPage() {
                         fontSize: "12px",
                       }}
                     >
-                      <option value="KES">KES</option>
-                      <option value="USD">USD</option>
+                      {currencies.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
                     </select>
                     <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
                       <button
@@ -1286,7 +1256,7 @@ export default function FundDetailPage() {
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   <th style={{ width: "40px" }}></th>
-                  {["Batch", "AUM (batch)", "Investors", "Deployed", "Status"].map((col) => (
+                  {["Batch", "Total (batch)", "Investors", "Deployed", "Status"].map((col) => (
                     <th
                       key={col}
                       style={{

@@ -78,6 +78,10 @@
   --color-usd-strong: #3b82f6;
   --color-usd-bg: rgba(59, 130, 246, 0.12);
   --color-usd-border: rgba(59, 130, 246, 0.3);
+  --color-ngn: #4ade80;
+  --color-ngn-strong: #22c55e;
+  --color-ngn-bg: rgba(34, 197, 94, 0.12);
+  --color-ngn-border: rgba(34, 197, 94, 0.3);
 }
 
 .ofds-page {

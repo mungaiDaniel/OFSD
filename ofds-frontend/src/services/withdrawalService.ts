@@ -1,10 +1,12 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, Withdrawal, CreateWithdrawalRequest, WithdrawalSource } from "@/lib/types";
+import type { ApiResponse, Withdrawal, CreateWithdrawalRequest, WithdrawalSource, ProductType } from "@/lib/types";
 
 type WithdrawalListParams = {
   status?: string;
   source?: WithdrawalSource;
+  /** Task 11: Funds vs Shares — resolved server-side via the withdrawal's fund. */
+  product?: ProductType;
   fundId?: number;
   search?: string;
   page?: number;
@@ -19,6 +21,7 @@ export const withdrawalService = {
     const query = new URLSearchParams();
     if (params?.status) query.set("status", params.status);
     if (params?.source) query.set("source", params.source);
+    if (params?.product) query.set("product", params.product);
     if (params?.fundId) query.set("fund_id", String(params.fundId));
     if (params?.search) query.set("search", params.search);
     if (params?.page) query.set("page", String(params.page));
@@ -35,6 +38,7 @@ export const withdrawalService = {
     const query = new URLSearchParams();
     if (params?.status) query.set("status", params.status);
     if (params?.source) query.set("source", params.source);
+    if (params?.product) query.set("product", params.product);
     if (params?.fundId) query.set("fund_id", String(params.fundId));
     if (params?.search) query.set("search", params.search);
     query.set("count_only", "true");
@@ -72,13 +76,14 @@ export const withdrawalService = {
 
   async bulkAction(
     action: "approve" | "reject",
-    scope?: { source?: WithdrawalSource; fundId?: number },
+    scope?: { source?: WithdrawalSource; product?: ProductType; fundId?: number },
     note?: string
   ): Promise<ApiResponse<{ processed: number; approved: number; rejected: number; affected_batch_ids: number[] }>> {
     const body: Record<string, unknown> = { action, note };
-    if (scope?.source || scope?.fundId) {
+    if (scope?.source || scope?.product || scope?.fundId) {
       body.scope = {
         ...(scope.source ? { source: scope.source } : {}),
+        ...(scope.product ? { product: scope.product } : {}),
         ...(scope.fundId ? { fund_id: scope.fundId } : {}),
       };
     }
@@ -93,12 +98,13 @@ export const withdrawalService = {
 
   async downloadExport(
     format: "excel" | "pdf",
-    filters?: { fundId?: number; status?: string; source?: WithdrawalSource; dateFrom?: string; dateTo?: string }
+    filters?: { fundId?: number; status?: string; source?: WithdrawalSource; product?: ProductType; dateFrom?: string; dateTo?: string }
   ): Promise<void> {
     const query = new URLSearchParams();
     if (filters?.fundId) query.set("fund_id", String(filters.fundId));
     if (filters?.status) query.set("status", filters.status);
     if (filters?.source) query.set("source", filters.source);
+    if (filters?.product) query.set("product", filters.product);
     if (filters?.dateFrom) query.set("date_from", filters.dateFrom);
     if (filters?.dateTo) query.set("date_to", filters.dateTo);
     const qs = query.toString();

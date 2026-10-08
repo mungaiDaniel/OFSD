@@ -182,10 +182,11 @@ class BatchManagementService:
         # find_or_create_batch() keeps reusing this same open batch for every
         # subsequent DPRP deposit instead of the usual "reuse until Thursday,
         # then spin up a new one" behavior every other fund gets.
-        from app.utils.statement_theme import is_dangote_dprp_fund, resolve_product_type
-        is_dprp = is_dangote_dprp_fund([core_fund.fund_name], [core_fund.fund_code])
-        product_type = resolve_product_type([core_fund.fund_name], [core_fund.fund_code])
-        if is_dprp:
+        # Task 8: product is the real CoreFund.product_type column now, not a
+        # name/code guess — SHARES currently only ever means DPRP, so this is
+        # still exactly the "is this the single-persistent-batch IPO-style
+        # fund" signal, just driven by the authoritative column.
+        if core_fund.product_type == SHARES:
             auto_close_at = None
         else:
             # Calculate auto_close_at (next Thursday 9:00 AM UTC)
@@ -194,7 +195,10 @@ class BatchManagementService:
             thursday_9am_utc = thursday_9am_eat - EAT_TIMEZONE_OFFSET
             auto_close_at = thursday_9am_utc.replace(tzinfo=timezone.utc)
 
-        # Create batch
+        # Create batch — product_type is intentionally omitted here: Batch's
+        # own before_insert event (app/Batch/model.py) inherits and validates
+        # it from share_class.product_type automatically, the same way
+        # Investment.product_type inherits from its Batch.
         batch = Batch(
             batch_name=batch_name,
             share_class_id=share_class.id,
@@ -203,7 +207,6 @@ class BatchManagementService:
             date_deployed=None,  # Will be set during deployment
             is_active=False,  # Becomes active after deployment
             stage=1,  # Deposited stage
-            product_type=product_type,
         )
 
         db.session.add(batch)

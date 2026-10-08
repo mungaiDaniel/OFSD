@@ -35,8 +35,24 @@ describe("Sidebar — Funds/Shares nav groups", () => {
     const sharesGroup = screen.getByTestId("nav-group-shares");
     expect(sharesGroup).toHaveAttribute("aria-expanded", "true");
     // Its items are visible without needing a click.
-    expect(screen.getByRole("link", { name: /Deployment & allocation/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Refunds/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Shares" })).toHaveAttribute("href", "/shares");
+    expect(screen.getAllByRole("link", { name: "Valuations" })[0]).toHaveAttribute(
+      "href",
+      "/shares/valuations"
+    );
+  });
+
+  it("renders the exact Funds and Shares items, in order, with the deployment/refunds items removed", () => {
+    renderSidebar("/funds/batches");
+
+    const fundsGroup = screen.getByTestId("nav-group-funds");
+    const fundsLi = fundsGroup.closest("li")!;
+    const fundsLinks = Array.from(fundsLi.querySelectorAll("a")).map((a) => a.textContent);
+    expect(fundsLinks).toEqual(["Batches", "Investors", "Valuations", "Funds"]);
+
+    expect(screen.queryByRole("link", { name: /Deployment & allocation/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Refunds/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Funds & share classes" })).not.toBeInTheDocument();
   });
 
   it("does not auto-expand the other group", () => {
@@ -55,7 +71,7 @@ describe("Sidebar — Funds/Shares nav groups", () => {
     await user.click(fundsGroup);
 
     expect(fundsGroup).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("link", { name: "Funds & share classes" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Funds" })).toHaveAttribute("href", "/funds");
   });
 
   it("lets the user collapse an active group manually", async () => {

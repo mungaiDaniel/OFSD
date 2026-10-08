@@ -6,7 +6,7 @@ import { batchService } from "@/services/batchService";
 import { dashboardService, type OverviewStats } from "@/services/dashboardService";
 import ClientActivitySection from "@/components/overview/ClientActivitySection";
 import { ROUTES } from "@/lib/constants";
-import type { FundClassSummary, FundsSummaryResponse, Batch } from "@/lib/types";
+import type { FundClassSummary, FundSummaryItem, FundsSummaryResponse, Batch, ProductType } from "@/lib/types";
 import { ProductToggle, OVERVIEW_PRODUCT_OPTIONS, type ProductFilterValue } from "@/components/ui/ProductToggle";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -16,15 +16,21 @@ import { ProductToggle, OVERVIEW_PRODUCT_OPTIONS, type ProductFilterValue } from
 //
 // Layout:
 //   1. Header: "Portfolio Overview" + NAV as-of date
-//   2. KPI row (4 cards): AUM KES, AUM USD, Investors, Batches
+//   2. KPI row: Total KES, Total USD, Total NGN, Investors, Batches — the
+//      currency cards shown depend on the Product filter (Task 10)
 //   3. Two-column grid:
-//      Left (2x2): KES NAV chart  |  USD NAV chart
-//      Right: Latest Valuation table + Batch Status list
+//      Left: one NAV chart per visible currency | Right: Latest Valuation + Batch Status
 //
 // Each section loads independently (its own loading flag) rather than blocking
 // the whole page behind the slowest of several requests. The old "Recent
 // Transactions" table was removed — a client-level activity search/report is
 // being built separately to replace it.
+//
+// Task 10: Funds and Shares (NGN) used to be two separate blocks on this page
+// (Shares priced per-batch, not NAV-based). Now both are the same NAV-based
+// KPI/chart/table shapes, merged into one layout and scoped by the Product
+// filter / the Fund-or-Share dropdown — never summed together across
+// currencies or products.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Shared glassmorphism card style ──────────────────────────────────────────
@@ -46,9 +52,18 @@ const SECTION_LABEL: React.CSSProperties = {
   marginBottom: "12px",
 };
 
+// ── Currency color/prefix lookups (KES/USD/NGN) ──────────────────────────────
+const CURRENCY_COLOR_VAR: Record<string, string> = { KES: "--color-kes", USD: "--color-usd", NGN: "--color-ngn" };
+function currencyColorVar(currency: string | undefined) {
+  return (currency && CURRENCY_COLOR_VAR[currency]) ?? "--color-usd";
+}
+function currencyPrefix(currency: string | undefined) {
+  return currency === "USD" ? "$ " : currency === "NGN" ? "₦ " : "";
+}
+
 // ── Currency badge ────────────────────────────────────────────────────────────
 function CurrencyBadge({ currency }: { currency: string }) {
-  const isKES = currency === "KES";
+  const colorVar = currencyColorVar(currency);
   return (
     <span
       style={{
@@ -60,9 +75,9 @@ function CurrencyBadge({ currency }: { currency: string }) {
         fontWeight: 700,
         letterSpacing: "0.06em",
         fontFamily: "var(--font-mono)",
-        background: isKES ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
-        color: isKES ? "var(--color-kes)" : "var(--color-usd)",
-        border: isKES ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+        background: `var(${colorVar}-bg)`,
+        color: `var(${colorVar})`,
+        border: `1px solid var(${colorVar}-border)`,
       }}
     >
       {currency}
@@ -123,6 +138,130 @@ function getBatchStatus(b: Batch): string {
   return "Deposited";
 }
 
+// ── One "Total <currency>" KPI card — shared shape for KES/USD/NGN (Task 10) ──
+interface CurrencyKpiCardProps {
+  currency: string;
+  total: number;
+  activeClassesCount: number;
+  netHoldings: number;
+  gross: number;
+  withdrawn: number;
+  refunds: number;
+  gain: number;
+  /** Only meaningful when a single fund/share is selected — "No <currency>
+   * exposure for this fund/share" vs. a blank dash for the portfolio-wide view. */
+  scopedToThisEntity: boolean;
+  hasExposure: boolean;
+  entityNoun: "fund" | "share";
+  /** When provided, gates the Gain/Loss line with an extra "Not valued yet"
+   * state (Task 10, NGN/Shares only — see FundClassSummary.is_valued). */
+  anyValued?: boolean;
+}
+
+function CurrencyKpiCard({
+  currency,
+  total,
+  activeClassesCount,
+  netHoldings,
+  gross,
+  withdrawn,
+  refunds,
+  gain,
+  scopedToThisEntity,
+  hasExposure,
+  entityNoun,
+  anyValued,
+}: CurrencyKpiCardProps) {
+  const colorVar = currencyColorVar(currency);
+  const color = `var(${colorVar})`;
+  const prefix = currencyPrefix(currency);
+  const deployed = total > 0;
+  const gainLabel = !deployed
+    ? "Not deployed yet"
+    : anyValued === false
+      ? "Not valued yet"
+      : (gain >= 0 ? "+" : "-") + `${prefix}${Math.abs(gain).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <div style={{ ...CARD, padding: "18px 22px" }}>
+      <div
+        style={{
+          fontSize: "10px",
+          fontWeight: 600,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: "var(--color-text-tertiary)",
+          marginBottom: "8px",
+        }}
+      >
+        Total <span style={{ color, marginLeft: "4px" }}>{currency}</span>
+      </div>
+      {scopedToThisEntity && !hasExposure ? (
+        <div style={{ fontSize: "13px", color: "var(--color-text-tertiary)", padding: "6px 0" }}>
+          No {currency} exposure for this {entityNoun}
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: "20px",
+              fontWeight: 700,
+              color,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            {total > 0 ? `${prefix}${total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
+            {activeClassesCount} active class{activeClassesCount !== 1 ? "es" : ""}
+          </div>
+          <div
+            style={{
+              marginTop: "8px",
+              fontFamily: "var(--font-mono)",
+              fontSize: "13px",
+              fontWeight: 700,
+              color: "var(--color-text-primary)",
+            }}
+          >
+            Net Holdings:{" "}
+            {netHoldings !== 0 ? `${prefix}${netHoldings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+            Gross Invested:{" "}
+            {gross > 0 ? `${prefix}${gross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+          </div>
+          {withdrawn > 0 && (
+            <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
+              Withdrawn: -{prefix}{withdrawn.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          )}
+          {refunds > 0 && (
+            <div style={{ fontSize: "11px", color: "#F59E0B", fontFamily: "var(--font-mono)" }}>
+              Pending Refunds: {prefix}{refunds.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          )}
+          <div
+            style={{
+              marginTop: "6px",
+              fontSize: "11px",
+              // Gated on `deployed` (actual current value existing) AND
+              // `anyValued` (a real valuation, not just the deployment-NAV
+              // fallback) — neither "not deployed" nor "not valued" is a loss,
+              // so both stay green; only a real negative gain shows red.
+              color: !deployed || anyValued === false ? "#22c55e" : gain >= 0 ? "#22c55e" : "#ef4444",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            Gain/Loss: {gainLabel}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Main Page Component
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -132,16 +271,19 @@ export default function OverviewPage() {
   const [fundSummary, setFundSummary] = useState<FundsSummaryResponse | null>(null);
   const [loadingFundSummary, setLoadingFundSummary] = useState(true);
 
+  const [sharesSummary, setSharesSummary] = useState<FundsSummaryResponse | null>(null);
+  const [loadingSharesSummary, setLoadingSharesSummary] = useState(true);
+
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loadingBatches, setLoadingBatches] = useState(true);
 
   const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
 
-  // Fund filter — persisted in the URL (?fund=<id>) so a refresh doesn't
-  // silently reset to "All Funds". "all" (the default/no-param state) means
-  // every card below shows portfolio-wide totals, exactly as before this
-  // feature existed.
+  // Fund/Share filter — persisted in the URL (?fund=<id>) so a refresh doesn't
+  // silently reset to "All". "all" (the default/no-param state) means every
+  // card below shows totals for the current Product filter instead of one
+  // specific fund/share.
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedFundId = searchParams.get("fund") ?? "all";
   const isFundScoped = selectedFundId !== "all";
@@ -156,9 +298,6 @@ export default function OverviewPage() {
   );
 
   // Product filter — same URL-persisted pattern as the fund filter above.
-  // Default "ALL" shows both the (Funds-only) NAV section and the Shares
-  // summary section below it, as two separate blocks — never blended into
-  // one figure, since NAV and price-per-share aren't comparable numbers.
   const productFilter = (searchParams.get("product") as ProductFilterValue) ?? "ALL";
   const setProductFilter = useCallback(
     (value: ProductFilterValue) => {
@@ -169,18 +308,32 @@ export default function OverviewPage() {
     },
     [searchParams, setSearchParams]
   );
-  const showFundsSection = productFilter !== "SHARES";
-  const showSharesSection = productFilter !== "FUNDS";
+  // Task 10: KES/USD cards show for Funds or All; NGN shows for Shares or All —
+  // never add different currencies together.
+  const showFundsGroup = productFilter !== "SHARES";
+  const showSharesGroup = productFilter !== "FUNDS";
 
   const fetchFundSummary = useCallback(async () => {
     setLoadingFundSummary(true);
     try {
-      const data = await fundService.getSummary();
+      const data = await fundService.getSummary("FUNDS");
       setFundSummary(data);
     } catch {
       setFundSummary(null);
     } finally {
       setLoadingFundSummary(false);
+    }
+  }, []);
+
+  const fetchSharesSummary = useCallback(async () => {
+    setLoadingSharesSummary(true);
+    try {
+      const data = await fundService.getSummary("SHARES");
+      setSharesSummary(data);
+    } catch {
+      setSharesSummary(null);
+    } finally {
+      setLoadingSharesSummary(false);
     }
   }, []);
 
@@ -190,6 +343,7 @@ export default function OverviewPage() {
   // independent of the KPI cards / charts above it).
   useEffect(() => {
     fetchFundSummary();
+    fetchSharesSummary();
 
     setLoadingBatches(true);
     batchService.getAll().then((b) => {
@@ -205,136 +359,182 @@ export default function OverviewPage() {
       .then((s) => setOverviewStats(s))
       .catch(() => setOverviewStats(null))
       .finally(() => setLoadingStats(false));
-  }, [fetchFundSummary]);
+  }, [fetchFundSummary, fetchSharesSummary]);
 
   // ── Derived data ────────────────────────────────────────────────────────────
 
-  // All active FUNDS funds, for the selector dropdown — sorted alphabetically.
-  // SHARES (DPRP) has no NAV to scope this dropdown to; see the Shares
-  // summary section below instead.
-  const allFunds = useMemo(
-    () =>
-      [...(fundSummary?.funds ?? [])]
-        .filter((f) => (f.product_type ?? "FUNDS") === "FUNDS")
-        .sort((a, b) => a.fund_name.localeCompare(b.fund_name)),
+  // Dropdown option lists — each summary endpoint is already scoped to one
+  // product server-side (Task 8/9), so no extra filtering is needed here.
+  const fundsOptions = useMemo(
+    () => [...(fundSummary?.funds ?? [])].sort((a, b) => a.fund_name.localeCompare(b.fund_name)),
     [fundSummary]
   );
-
-  // "All Funds" (default) → every FUNDS fund; otherwise just the one selected.
-  // Every NAV-based card/chart below is derived from this one array, so
-  // selecting a fund filters ALL of them together rather than each card
-  // having its own separate filter logic. Always excludes SHARES funds
-  // (DPRP) regardless of the fund dropdown — they're valued at price per
-  // share, not NAV, so they never belong in this NAV-labeled arithmetic; see
-  // the separate Shares summary section below instead.
-  const filteredFunds = useMemo(() => {
-    if (!fundSummary) return [];
-    const fundsOnly = fundSummary.funds.filter((f) => (f.product_type ?? "FUNDS") === "FUNDS");
-    if (!isFundScoped) return fundsOnly;
-    return fundsOnly.filter((f) => String(f.id) === selectedFundId);
-  }, [fundSummary, isFundScoped, selectedFundId]);
-
-  // SHARES batches for the separate Shares summary section — computed from
-  // the same batches list already fetched for the Batches KPI/list below, no
-  // extra request needed.
-  const sharesBatches = useMemo(() => batches.filter((b) => b.product_type === "SHARES"), [batches]);
-  const sharesAumUsd = useMemo(() => sharesBatches.reduce((s, b) => s + (b.total_capital || 0), 0), [sharesBatches]);
-  const sharesInvestors = useMemo(() => sharesBatches.reduce((s, b) => s + (b.investors_count || 0), 0), [sharesBatches]);
-  const sharesOversubscribedCount = useMemo(() => sharesBatches.filter((b) => b.is_oversubscribed).length, [sharesBatches]);
-  const sharesUnallocatedTotal = useMemo(
-    () => sharesBatches.reduce((s, b) => s + (b.shares_unallocated_total || 0), 0),
-    [sharesBatches]
+  const sharesOptions = useMemo(
+    () => [...(sharesSummary?.funds ?? [])].sort((a, b) => a.fund_name.localeCompare(b.fund_name)),
+    [sharesSummary]
   );
 
-  const selectedFund = isFundScoped ? filteredFunds[0] : undefined;
-
-  // Share classes within the current fund filter
-  const allClasses = useMemo<FundClassSummary[]>(
-    () => filteredFunds.flatMap((f) => f.classes ?? []),
-    [filteredFunds]
+  const selectedFundEntity = useMemo(
+    () => fundsOptions.find((f) => String(f.id) === selectedFundId),
+    [fundsOptions, selectedFundId]
   );
+  const selectedShareEntity = useMemo(
+    () => sharesOptions.find((f) => String(f.id) === selectedFundId),
+    [sharesOptions, selectedFundId]
+  );
+  const selectedEntity: FundSummaryItem | undefined = selectedFundEntity ?? selectedShareEntity;
+  const scopedProduct: ProductType | undefined = selectedFundEntity ? "FUNDS" : selectedShareEntity ? "SHARES" : undefined;
+
+  // Task 10: the combined Fund/Share dropdown stays in sync with the Product
+  // tabs — picking a share switches the tab to Shares; narrowing the tab to
+  // one product resets a now-hidden selection back to "all" rather than
+  // leaving an invisible option selected.
+  const handleEntitySelect = useCallback(
+    (value: string) => {
+      setSelectedFundId(value);
+      if (value !== "all") {
+        const isShare = sharesOptions.some((f) => String(f.id) === value);
+        if (isShare && productFilter !== "SHARES") setProductFilter("SHARES");
+      }
+    },
+    [setSelectedFundId, sharesOptions, productFilter, setProductFilter]
+  );
+
+  useEffect(() => {
+    if (selectedFundId === "all" || productFilter === "ALL") return;
+    const stillVisible =
+      productFilter === "FUNDS"
+        ? fundsOptions.some((f) => String(f.id) === selectedFundId)
+        : sharesOptions.some((f) => String(f.id) === selectedFundId);
+    if (!stillVisible) setSelectedFundId("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productFilter, fundsOptions, sharesOptions]);
+
+  // "All" (default, per group) → every fund/share in that product; otherwise
+  // just the one selected. Every NAV-based card/chart below is derived from
+  // these two arrays, so selecting an entity filters ALL of them together.
+  const fundsEntities = useMemo(() => {
+    if (!showFundsGroup) return [];
+    if (scopedProduct === "FUNDS" && selectedEntity) return [selectedEntity];
+    if (isFundScoped) return [];
+    return fundsOptions;
+  }, [showFundsGroup, scopedProduct, selectedEntity, isFundScoped, fundsOptions]);
+
+  const sharesEntities = useMemo(() => {
+    if (!showSharesGroup) return [];
+    if (scopedProduct === "SHARES" && selectedEntity) return [selectedEntity];
+    if (isFundScoped) return [];
+    return sharesOptions;
+  }, [showSharesGroup, scopedProduct, selectedEntity, isFundScoped, sharesOptions]);
+
+  const fundsClasses = useMemo<FundClassSummary[]>(() => fundsEntities.flatMap((f) => f.classes ?? []), [fundsEntities]);
+  const sharesClasses = useMemo<FundClassSummary[]>(() => sharesEntities.flatMap((f) => f.classes ?? []), [sharesEntities]);
 
   const kesClasses = useMemo(
-    () => allClasses.filter((c) => c.currency === "KES" && c.current_nav != null),
-    [allClasses]
+    () => fundsClasses.filter((c) => c.currency === "KES" && c.current_nav != null),
+    [fundsClasses]
   );
   const usdClasses = useMemo(
-    () => allClasses.filter((c) => c.currency === "USD" && c.current_nav != null),
-    [allClasses]
+    () => fundsClasses.filter((c) => c.currency === "USD" && c.current_nav != null),
+    [fundsClasses]
   );
-  // Whether this fund has ANY share class in a currency at all (regardless of
-  // valuation state) — drives "No <currency> exposure for this fund" vs. a
-  // blank dash. Only meaningful once a specific fund is selected; "All Funds"
-  // keeps today's behavior (a dash when there's genuinely nothing yet).
-  const fundHasKES = useMemo(() => allClasses.some((c) => c.currency === "KES"), [allClasses]);
-  const fundHasUSD = useMemo(() => allClasses.some((c) => c.currency === "USD"), [allClasses]);
-
-  const sumByCurrency = (field: "totals_by_currency" | "gain_by_currency" | "gross_deposited_by_currency" | "net_principal_after_refund_by_currency" | "withdrawals_by_currency" | "refunds_by_currency" | "net_holdings_by_currency", currency: "KES" | "USD") =>
-    filteredFunds.reduce((s, f) => s + ((f[field]?.[currency]) ?? 0), 0);
-
-  // AUM KES/USD: prefer the global stats endpoint when showing everything
-  // (it's the authoritative portfolio-wide figure); once a fund is selected,
-  // that endpoint can't scope to it, so sum straight from the fund summary.
-  const aumKES = useMemo(
-    () => (isFundScoped ? sumByCurrency("totals_by_currency", "KES") : overviewStats?.total_aum_kes ?? sumByCurrency("totals_by_currency", "KES")),
-    [filteredFunds, isFundScoped, overviewStats]
-  );
-  const aumUSD = useMemo(
-    () => (isFundScoped ? sumByCurrency("totals_by_currency", "USD") : overviewStats?.total_aum_usd ?? sumByCurrency("totals_by_currency", "USD")),
-    [filteredFunds, isFundScoped, overviewStats]
+  const ngnClasses = useMemo(
+    () => sharesClasses.filter((c) => c.currency === "NGN" && c.current_nav != null),
+    [sharesClasses]
   );
 
-  // GROSS INVESTED — total ever deposited, unadjusted. Distinct from the old
-  // "Invested" figure (which was cost-basis/deployment-NAV based) — this is
-  // the raw deposit total the Gross/Net split calls for.
-  const grossKES = useMemo(() => sumByCurrency("gross_deposited_by_currency", "KES"), [filteredFunds]);
-  const grossUSD = useMemo(() => sumByCurrency("gross_deposited_by_currency", "USD"), [filteredFunds]);
+  // Whether the SPECIFIC selected fund/share has ANY class in that currency at
+  // all (regardless of valuation state) — drives "No <currency> exposure for
+  // this fund/share" vs. a blank dash. Only meaningful once one entity is
+  // selected; "All" keeps the portfolio-wide behavior (a dash when there's
+  // genuinely nothing yet).
+  const fundHasKES = useMemo(() => fundsClasses.some((c) => c.currency === "KES"), [fundsClasses]);
+  const fundHasUSD = useMemo(() => fundsClasses.some((c) => c.currency === "USD"), [fundsClasses]);
+  const shareHasNGN = useMemo(() => sharesClasses.some((c) => c.currency === "NGN"), [sharesClasses]);
+
+  // Task 10: "Not valued yet" (deployed with only a deployment-NAV fallback
+  // price, see FundClassSummary.is_valued) vs "Not deployed yet" (nothing
+  // deployed at all) — only tracked for NGN/Shares today.
+  const ngnAnyValued = useMemo(() => ngnClasses.some((c) => c.is_valued), [ngnClasses]);
+
+  const sumByCurrencyFor = (
+    entities: FundSummaryItem[],
+    field: "totals_by_currency" | "gain_by_currency" | "gross_deposited_by_currency" | "net_principal_after_refund_by_currency" | "withdrawals_by_currency" | "refunds_by_currency" | "net_holdings_by_currency",
+    currency: string
+  ) => entities.reduce((s, f) => s + ((f[field]?.[currency]) ?? 0), 0);
+
+  // Total KES/USD/NGN: prefer the global stats endpoint for the portfolio-wide
+  // figure (authoritative); once a specific fund/share is selected, that
+  // endpoint can't scope to it, so sum straight from the relevant summary.
+  const totalKES = useMemo(
+    () => (scopedProduct === "FUNDS" ? sumByCurrencyFor(fundsEntities, "totals_by_currency", "KES") : overviewStats?.total_aum_kes ?? sumByCurrencyFor(fundsEntities, "totals_by_currency", "KES")),
+    [fundsEntities, scopedProduct, overviewStats]
+  );
+  const totalUSD = useMemo(
+    () => (scopedProduct === "FUNDS" ? sumByCurrencyFor(fundsEntities, "totals_by_currency", "USD") : overviewStats?.total_aum_usd ?? sumByCurrencyFor(fundsEntities, "totals_by_currency", "USD")),
+    [fundsEntities, scopedProduct, overviewStats]
+  );
+  const totalNGN = useMemo(
+    () => (scopedProduct === "SHARES" ? sumByCurrencyFor(sharesEntities, "totals_by_currency", "NGN") : overviewStats?.total_ngn ?? sumByCurrencyFor(sharesEntities, "totals_by_currency", "NGN")),
+    [sharesEntities, scopedProduct, overviewStats]
+  );
+
+  // GROSS INVESTED — total ever deposited, unadjusted.
+  const grossKES = useMemo(() => sumByCurrencyFor(fundsEntities, "gross_deposited_by_currency", "KES"), [fundsEntities]);
+  const grossUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "gross_deposited_by_currency", "USD"), [fundsEntities]);
+  const grossNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "gross_deposited_by_currency", "NGN"), [sharesEntities]);
 
   // Withdrawn — shown as its own line so the Gross → Net gap is visible.
-  const withdrawnKES = useMemo(() => sumByCurrency("withdrawals_by_currency", "KES"), [filteredFunds]);
-  const withdrawnUSD = useMemo(() => sumByCurrency("withdrawals_by_currency", "USD"), [filteredFunds]);
+  const withdrawnKES = useMemo(() => sumByCurrencyFor(fundsEntities, "withdrawals_by_currency", "KES"), [fundsEntities]);
+  const withdrawnUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "withdrawals_by_currency", "USD"), [fundsEntities]);
+  const withdrawnNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "withdrawals_by_currency", "NGN"), [sharesEntities]);
 
-  // Pending/processed oversubscription refunds — real money that's neither
-  // "invested" nor "lost"; shown as its own line so it never silently
-  // disappears from the totals without being labeled.
-  const refundsKES = useMemo(() => sumByCurrency("refunds_by_currency", "KES"), [filteredFunds]);
-  const refundsUSD = useMemo(() => sumByCurrency("refunds_by_currency", "USD"), [filteredFunds]);
+  // Pending/processed oversubscription refunds.
+  const refundsKES = useMemo(() => sumByCurrencyFor(fundsEntities, "refunds_by_currency", "KES"), [fundsEntities]);
+  const refundsUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "refunds_by_currency", "USD"), [fundsEntities]);
+  const refundsNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "refunds_by_currency", "NGN"), [sharesEntities]);
 
-  // NET HOLDINGS — net principal (gross deposited minus transfer cost, entry
-  // fee, and any oversubscription refund) minus withdrawals — computed
-  // server-side in compute_funds_summary_data. Deliberately NOT the same
-  // number as aumKES/aumUSD above (current market value) — this is "what's
-  // still actually committed", the AUM card is "what it's worth today".
-  const netHoldingsKES = useMemo(() => sumByCurrency("net_holdings_by_currency", "KES"), [filteredFunds]);
-  const netHoldingsUSD = useMemo(() => sumByCurrency("net_holdings_by_currency", "USD"), [filteredFunds]);
+  // NET HOLDINGS — net principal minus withdrawals, computed server-side.
+  // Deliberately NOT the same number as totalKES/USD/NGN above (current
+  // market value) — this is "what's still actually committed".
+  const netHoldingsKES = useMemo(() => sumByCurrencyFor(fundsEntities, "net_holdings_by_currency", "KES"), [fundsEntities]);
+  const netHoldingsUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "net_holdings_by_currency", "USD"), [fundsEntities]);
+  const netHoldingsNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "net_holdings_by_currency", "NGN"), [sharesEntities]);
 
-  // Gain/Loss — current value vs. Net Holdings (computed server-side in
-  // compute_funds_summary_data using net_holdings_by_currency, not the older
-  // cost-basis formula still used elsewhere in the app for per-class figures).
+  // Gain/Loss — current value vs. Net Holdings, computed server-side.
   const gainKES = useMemo(
-    () => (isFundScoped ? sumByCurrency("gain_by_currency", "KES") : overviewStats?.gain_kes ?? sumByCurrency("gain_by_currency", "KES")),
-    [filteredFunds, isFundScoped, overviewStats]
+    () => (scopedProduct === "FUNDS" ? sumByCurrencyFor(fundsEntities, "gain_by_currency", "KES") : overviewStats?.gain_kes ?? sumByCurrencyFor(fundsEntities, "gain_by_currency", "KES")),
+    [fundsEntities, scopedProduct, overviewStats]
   );
   const gainUSD = useMemo(
-    () => (isFundScoped ? sumByCurrency("gain_by_currency", "USD") : overviewStats?.gain_usd ?? sumByCurrency("gain_by_currency", "USD")),
-    [filteredFunds, isFundScoped, overviewStats]
+    () => (scopedProduct === "FUNDS" ? sumByCurrencyFor(fundsEntities, "gain_by_currency", "USD") : overviewStats?.gain_usd ?? sumByCurrencyFor(fundsEntities, "gain_by_currency", "USD")),
+    [fundsEntities, scopedProduct, overviewStats]
+  );
+  const gainNGN = useMemo(
+    () => (scopedProduct === "SHARES" ? sumByCurrencyFor(sharesEntities, "gain_by_currency", "NGN") : overviewStats?.gain_ngn ?? sumByCurrencyFor(sharesEntities, "gain_by_currency", "NGN")),
+    [sharesEntities, scopedProduct, overviewStats]
   );
 
-  // Total investors — "All Funds" uses the same authoritative count used by
-  // the Investor Directory page; a selected fund uses that fund's own
-  // distinct-investor count from the fund summary instead.
-  const totalInvestors = isFundScoped ? (selectedFund?.investors_count ?? 0) : (overviewStats?.total_investors ?? 0);
+  // Total investors — "All" uses the same authoritative, distinct-across-the-
+  // portfolio count used by the Investor Directory page (summing per-fund
+  // investors_count would double-count investors holding more than one fund);
+  // a selected fund/share uses that entity's own distinct-investor count.
+  const totalInvestors = isFundScoped ? (selectedEntity?.investors_count ?? 0) : (overviewStats?.total_investors ?? 0);
 
-  // Batches — scoped to the selected fund's share classes when one is
-  // selected; batchService.getAll() already excludes empty batches
-  // server-side, so "All Funds" still matches the Batches page directly.
-  const fundShareClassIds = useMemo(
-    () => new Set((selectedFund?.classes ?? []).map((c) => c.id)),
-    [selectedFund]
+  // Batches — scoped to the current Product filter, then further narrowed to
+  // the selected fund/share's own share classes when one is picked (Task 10:
+  // "the Batches and Batch Status cards follow the selected product").
+  const productScopedBatches = useMemo(
+    () => (productFilter === "ALL" ? batches : batches.filter((b) => b.product_type === productFilter)),
+    [batches, productFilter]
+  );
+  const entityShareClassIds = useMemo(
+    () => new Set((selectedEntity?.classes ?? []).map((c) => c.id)),
+    [selectedEntity]
   );
   const filteredBatches = useMemo(
-    () => (isFundScoped ? batches.filter((b) => b.share_class_id != null && fundShareClassIds.has(b.share_class_id)) : batches),
-    [batches, isFundScoped, fundShareClassIds]
+    () => (isFundScoped ? productScopedBatches.filter((b) => b.share_class_id != null && entityShareClassIds.has(b.share_class_id)) : productScopedBatches),
+    [productScopedBatches, isFundScoped, entityShareClassIds]
   );
   const totalBatches = filteredBatches.length;
 
@@ -344,16 +544,82 @@ export default function OverviewPage() {
     [filteredBatches]
   );
 
-  // All classes with current_nav (for Latest Valuation table)
+  // All classes with current_nav (for Latest Valuation table) — Funds and/or
+  // Shares, following the same product visibility as everything else above.
   const valuedClasses = useMemo(
-    () => allClasses.filter((c) => c.current_nav != null),
-    [allClasses]
+    () => [...(showFundsGroup ? fundsClasses : []), ...(showSharesGroup ? sharesClasses : [])].filter((c) => c.current_nav != null),
+    [showFundsGroup, showSharesGroup, fundsClasses, sharesClasses]
   );
+
+  const asOfDate = showFundsGroup ? fundSummary?.as_of_date : sharesSummary?.as_of_date;
+
+  const chartGroups = useMemo(
+    () =>
+      [
+        showFundsGroup && { currency: "KES", classes: kesClasses, asOf: fundSummary?.as_of_date },
+        showFundsGroup && { currency: "USD", classes: usdClasses, asOf: fundSummary?.as_of_date },
+        showSharesGroup && { currency: "NGN", classes: ngnClasses, asOf: sharesSummary?.as_of_date },
+      ].filter((g): g is { currency: string; classes: FundClassSummary[]; asOf: string | undefined } => Boolean(g)),
+    [showFundsGroup, showSharesGroup, kesClasses, usdClasses, ngnClasses, fundSummary, sharesSummary]
+  );
+
+  const currencyCards = useMemo(
+    () =>
+      [
+        showFundsGroup && {
+          currency: "KES",
+          total: totalKES,
+          activeClassesCount: kesClasses.length,
+          netHoldings: netHoldingsKES,
+          gross: grossKES,
+          withdrawn: withdrawnKES,
+          refunds: refundsKES,
+          gain: gainKES,
+          scopedToThisEntity: scopedProduct === "FUNDS",
+          hasExposure: fundHasKES,
+        },
+        showFundsGroup && {
+          currency: "USD",
+          total: totalUSD,
+          activeClassesCount: usdClasses.length,
+          netHoldings: netHoldingsUSD,
+          gross: grossUSD,
+          withdrawn: withdrawnUSD,
+          refunds: refundsUSD,
+          gain: gainUSD,
+          scopedToThisEntity: scopedProduct === "FUNDS",
+          hasExposure: fundHasUSD,
+        },
+        showSharesGroup && {
+          currency: "NGN",
+          total: totalNGN,
+          activeClassesCount: ngnClasses.length,
+          netHoldings: netHoldingsNGN,
+          gross: grossNGN,
+          withdrawn: withdrawnNGN,
+          refunds: refundsNGN,
+          gain: gainNGN,
+          scopedToThisEntity: scopedProduct === "SHARES",
+          hasExposure: shareHasNGN,
+          anyValued: ngnAnyValued,
+        },
+      ].filter(Boolean) as (CurrencyKpiCardProps & { currency: string })[],
+    [
+      showFundsGroup, showSharesGroup, scopedProduct,
+      totalKES, kesClasses, netHoldingsKES, grossKES, withdrawnKES, refundsKES, gainKES, fundHasKES,
+      totalUSD, usdClasses, netHoldingsUSD, grossUSD, withdrawnUSD, refundsUSD, gainUSD, fundHasUSD,
+      totalNGN, ngnClasses, netHoldingsNGN, grossNGN, withdrawnNGN, refundsNGN, gainNGN, shareHasNGN, ngnAnyValued,
+    ]
+  );
+
+  const entityNoun: "fund" | "share" = scopedProduct === "SHARES" ? "share" : "fund";
+  const dropdownLabel = productFilter === "FUNDS" ? "Fund" : productFilter === "SHARES" ? "Share" : "Fund / Share";
+  const allOptionLabel = productFilter === "FUNDS" ? "All Funds" : productFilter === "SHARES" ? "All Shares" : "All";
 
   // ── Loading spinner ─────────────────────────────────────────────────────────
   // Batch Status (right column) renders its own inline loading state instead of
   // gating the whole page — see loadingBatches usage below.
-  if (loadingFundSummary || loadingStats) {
+  if (loadingFundSummary || loadingSharesSummary || loadingStats) {
     return (
       <div
         style={{
@@ -407,250 +673,92 @@ export default function OverviewPage() {
             Portfolio Overview
           </h1>
           <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            {fundSummary?.as_of_date
-              ? `NAV as of ${fmtDate(fundSummary.as_of_date)}`
-              : "Live fund data"}
+            {asOfDate ? `NAV as of ${fmtDate(asOfDate)}` : "Live fund data"}
           </p>
         </div>
 
         <div style={{ display: "flex", alignItems: "flex-end", gap: "16px", flexWrap: "wrap" }}>
-          {/* Product filter — default All shows both sections below; persisted in the URL */}
+          {showSharesGroup && (
+            <button
+              onClick={() => navigate(ROUTES.SHARES_BATCHES)}
+              style={{ fontSize: "11px", fontWeight: 500, color: "var(--color-brand-400)", background: "none", border: "none", cursor: "pointer", padding: "0 0 9px" }}
+            >
+              View Shares batches →
+            </button>
+          )}
+
+          {/* Product filter — default All shows every currency; persisted in the URL */}
           <ProductToggle value={productFilter} onChange={setProductFilter} options={OVERVIEW_PRODUCT_OPTIONS} label="Product" />
 
-          {/* Fund filter — scopes the Funds NAV section only, persisted in the URL */}
-          {showFundsSection && (
-          <div>
-          <label
-            style={{
-              display: "block",
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-              marginBottom: "6px",
-            }}
-          >
-            Fund
-          </label>
-          <select
-            value={selectedFundId}
-            onChange={(e) => setSelectedFundId(e.target.value)}
-            style={{
-              minWidth: "220px",
-              padding: "9px 12px",
-              borderRadius: "10px",
-              border: "1px solid rgba(255,255,255,0.1)",
-              background: "rgba(0,0,0,0.25)",
-              color: "var(--color-text-primary)",
-              fontSize: "13px",
-              fontWeight: 600,
-            }}
-          >
-            <option value="all">All Funds</option>
-            {allFunds.map((f) => (
-              <option key={f.id} value={String(f.id)}>
-                {f.fund_name}
-              </option>
-            ))}
-          </select>
-          </div>
+          {/* Fund/Share filter — Task 10: one combined dropdown, grouped and
+              narrowed by the Product filter above */}
+          {(showFundsGroup || showSharesGroup) && (
+            <div>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--color-text-tertiary)",
+                  marginBottom: "6px",
+                }}
+              >
+                {dropdownLabel}
+              </label>
+              <select
+                value={selectedFundId}
+                onChange={(e) => handleEntitySelect(e.target.value)}
+                style={{
+                  minWidth: "220px",
+                  padding: "9px 12px",
+                  borderRadius: "10px",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.25)",
+                  color: "var(--color-text-primary)",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                }}
+              >
+                <option value="all">{allOptionLabel}</option>
+                {showFundsGroup && fundsOptions.length > 0 && (
+                  <optgroup label="Funds">
+                    {fundsOptions.map((f) => (
+                      <option key={f.id} value={String(f.id)}>
+                        {f.fund_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {showSharesGroup && sharesOptions.length > 0 && (
+                  <optgroup label="Shares">
+                    {sharesOptions.map((f) => (
+                      <option key={f.id} value={String(f.id)}>
+                        {f.fund_name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
           )}
         </div>
       </div>
 
-      {/* ── Funds NAV section — hidden entirely when Product = Shares ── */}
-      {showFundsSection && (
-      <>
-      {/* ── KPI Row (4 cards) ── */}
+      {/* ── KPI Row ── */}
       <div
         className="overview-kpi-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
+          gridTemplateColumns: `repeat(${currencyCards.length + 2}, 1fr)`,
           gap: "14px",
           marginBottom: "22px",
         }}
       >
-        {/* AUM KES */}
-        <div style={{ ...CARD, padding: "18px 22px" }}>
-          <div
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-              marginBottom: "8px",
-            }}
-          >
-            Total AUM{" "}
-            <span style={{ color: "var(--color-kes)", marginLeft: "4px" }}>KES</span>
-          </div>
-          {isFundScoped && !fundHasKES ? (
-            <div style={{ fontSize: "13px", color: "var(--color-text-tertiary)", padding: "6px 0" }}>
-              No KES exposure for this fund
-            </div>
-          ) : (
-            <>
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "20px",
-                  fontWeight: 700,
-                  color: "var(--color-kes)",
-                  letterSpacing: "-0.02em",
-                }}
-              >
-                {aumKES > 0
-                  ? aumKES.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })
-                  : "—"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
-                {kesClasses.length} active class{kesClasses.length !== 1 ? "es" : ""}
-              </div>
-              <div
-                style={{
-                  marginTop: "8px",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  color: "var(--color-text-primary)",
-                }}
-              >
-                Net Holdings:{" "}
-                {netHoldingsKES !== 0
-                  ? netHoldingsKES.toLocaleString("en-US", { maximumFractionDigits: 2 })
-                  : "—"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                Gross Invested:{" "}
-                {grossKES > 0 ? grossKES.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
-              </div>
-              {withdrawnKES > 0 && (
-                <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                  Withdrawn: -{withdrawnKES.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                </div>
-              )}
-              {refundsKES > 0 && (
-                <div style={{ fontSize: "11px", color: "#F59E0B", fontFamily: "var(--font-mono)" }}>
-                  Pending Refunds: {refundsKES.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                </div>
-              )}
-              <div
-                style={{
-                  marginTop: "6px",
-                  fontSize: "11px",
-                  color: aumKES > 0 ? (gainKES >= 0 ? "#22c55e" : "#ef4444") : "#22c55e",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                Gain/Loss:{" "}
-                {/* Gated on aumKES (actual deployed current value), not just a
-                    NAV price existing — a deposit can have a NAV/share known
-                    (current_nav set) while still sitting undeployed with zero
-                    shares, so total value (aumKES) is genuinely 0. That's not
-                    a loss, it's cash awaiting deployment, so it's never shown
-                    in red: no realized position yet means nothing to lose. */}
-                {aumKES > 0
-                  ? (gainKES >= 0 ? "+" : "") +
-                    gainKES.toLocaleString("en-US", { maximumFractionDigits: 2 })
-                  : "Not deployed yet"}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* AUM USD */}
-        <div style={{ ...CARD, padding: "18px 22px" }}>
-          <div
-            style={{
-              fontSize: "10px",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--color-text-tertiary)",
-              marginBottom: "8px",
-            }}
-          >
-            Total AUM{" "}
-            <span style={{ color: "var(--color-usd)", marginLeft: "4px" }}>USD</span>
-          </div>
-          {isFundScoped && !fundHasUSD ? (
-            <div style={{ fontSize: "13px", color: "var(--color-text-tertiary)", padding: "6px 0" }}>
-              No USD exposure for this fund
-            </div>
-          ) : (
-            <>
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "20px",
-                  fontWeight: 700,
-                  color: "var(--color-usd)",
-                  letterSpacing: "-0.02em",
-                }}
-              >
-                {aumUSD > 0
-                  ? `$ ${aumUSD.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}`
-                  : "—"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
-                {usdClasses.length} active class{usdClasses.length !== 1 ? "es" : ""}
-              </div>
-              <div
-                style={{
-                  marginTop: "8px",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "13px",
-                  fontWeight: 700,
-                  color: "var(--color-text-primary)",
-                }}
-              >
-                Net Holdings:{" "}
-                {netHoldingsUSD !== 0
-                  ? `$ ${netHoldingsUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-                  : "—"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                Gross Invested:{" "}
-                {grossUSD > 0 ? `$ ${grossUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : "—"}
-              </div>
-              {withdrawnUSD > 0 && (
-                <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-                  Withdrawn: -${withdrawnUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                </div>
-              )}
-              {refundsUSD > 0 && (
-                <div style={{ fontSize: "11px", color: "#F59E0B", fontFamily: "var(--font-mono)" }}>
-                  Pending Refunds: ${refundsUSD.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                </div>
-              )}
-              <div
-                style={{
-                  marginTop: "6px",
-                  fontSize: "11px",
-                  color: aumUSD > 0 ? (gainUSD >= 0 ? "#22c55e" : "#ef4444") : "#22c55e",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                Gain/Loss:{" "}
-                {/* See the KES card's comment — gated on aumUSD (actual deployed
-                    value), not just a NAV price existing. */}
-                {aumUSD > 0
-                  ? (gainUSD >= 0 ? "+" : "-") +
-                    `$ ${Math.abs(gainUSD).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
-                  : "Not deployed yet"}
-              </div>
-            </>
-          )}
-        </div>
+        {currencyCards.map((c) => (
+          <CurrencyKpiCard key={c.currency} {...c} entityNoun={entityNoun} />
+        ))}
 
         {/* Investors */}
         <div style={{ ...CARD, padding: "18px 22px" }}>
@@ -680,7 +788,7 @@ export default function OverviewPage() {
           <div
             style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}
           >
-            {isFundScoped ? `In ${selectedFund?.fund_name ?? "this fund"}` : "Across all funds"}
+            {isFundScoped ? `In ${selectedEntity?.fund_name ?? `this ${entityNoun}`}` : "Across all funds"}
           </div>
         </div>
 
@@ -711,7 +819,7 @@ export default function OverviewPage() {
           <div
             style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}
           >
-            {isFundScoped ? `In ${selectedFund?.fund_name ?? "this fund"}` : "Total batches"}
+            {isFundScoped ? `In ${selectedEntity?.fund_name ?? `this ${entityNoun}`}` : "Total batches"}
           </div>
         </div>
       </div>
@@ -727,27 +835,21 @@ export default function OverviewPage() {
           alignItems: "start",
         }}
       >
-        {/* Left: 2x2 NAV charts */}
-        <div className="overview-nav-charts" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-          {/* KES chart */}
-          <div style={{ ...CARD, padding: "20px 24px" }}>
-            <NAVLineChart
-              classes={kesClasses}
-              currency="KES"
-              title="KES Classes — NAV / Share"
-              asOfDate={fundSummary?.as_of_date}
-            />
-          </div>
-
-          {/* USD chart */}
-          <div style={{ ...CARD, padding: "20px 24px" }}>
-            <NAVLineChart
-              classes={usdClasses}
-              currency="USD"
-              title="USD Classes — NAV / Share"
-              asOfDate={fundSummary?.as_of_date}
-            />
-          </div>
+        {/* Left: one NAV chart per visible currency */}
+        <div
+          className="overview-nav-charts"
+          style={{ display: "grid", gridTemplateColumns: chartGroups.length > 1 ? "1fr 1fr" : "1fr", gap: "14px" }}
+        >
+          {chartGroups.map((g) => (
+            <div key={g.currency} style={{ ...CARD, padding: "20px 24px" }}>
+              <NAVLineChart
+                classes={g.classes}
+                currency={g.currency}
+                title={`${g.currency} Classes — NAV / Share`}
+                asOfDate={g.asOf}
+              />
+            </div>
+          ))}
         </div>
 
         {/* Right: Latest Valuation + Batch Status */}
@@ -755,7 +857,7 @@ export default function OverviewPage() {
           {/* Latest Valuation */}
           <div style={{ ...CARD, padding: "20px 22px" }}>
             <p style={SECTION_LABEL}>Latest Valuation</p>
-            {fundSummary?.as_of_date && (
+            {asOfDate && (
               <div
                 style={{
                   fontSize: "11px",
@@ -764,7 +866,7 @@ export default function OverviewPage() {
                   fontFamily: "var(--font-mono)",
                 }}
               >
-                as of {fmtDate(fundSummary.as_of_date)}
+                as of {fmtDate(asOfDate)}
               </div>
             )}
             <div style={{ overflowX: "auto" }}>
@@ -792,7 +894,6 @@ export default function OverviewPage() {
                 </thead>
                 <tbody>
                   {valuedClasses.map((cls) => {
-                    const isKES = cls.currency === "KES";
                     const perf = cls.performance_pct;
                     const perfStr =
                       perf != null
@@ -818,7 +919,7 @@ export default function OverviewPage() {
                                 fontFamily: "var(--font-mono)",
                                 fontSize: "10px",
                                 fontWeight: 700,
-                                color: isKES ? "var(--color-kes)" : "var(--color-usd)",
+                                color: `var(${currencyColorVar(cls.currency)})`,
                               }}
                             >
                               {cls.class_code ?? cls.class_name}
@@ -844,8 +945,7 @@ export default function OverviewPage() {
                           }}
                         >
                           {cls.total_nav != null
-                            ? (isKES ? "KES " : "$ ") +
-                              cls.total_nav.toLocaleString("en-US", { maximumFractionDigits: 0 })
+                            ? currencyPrefix(cls.currency) + cls.total_nav.toLocaleString("en-US", { maximumFractionDigits: 0 })
                             : "—"}
                         </td>
                         <td
@@ -873,7 +973,7 @@ export default function OverviewPage() {
                           fontSize: "12px",
                         }}
                       >
-                        {isFundScoped ? "No valuation data yet for this fund" : "No valuation data yet"}
+                        {isFundScoped ? `No valuation data yet for this ${entityNoun}` : "No valuation data yet"}
                       </td>
                     </tr>
                   )}
@@ -898,7 +998,7 @@ export default function OverviewPage() {
                   fontSize: "12px",
                 }}
               >
-                {isFundScoped ? "No batches for this fund" : "No batches available"}
+                {isFundScoped ? `No batches for this ${entityNoun}` : "No batches available"}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -983,66 +1083,6 @@ export default function OverviewPage() {
           </div>
         </div>
       </div>
-      </>
-      )}
-
-      {/* ── Shares summary — a separate section/cards, never blended into the
-          Funds NAV figures above (different valuation model: price per share,
-          not NAV). Hidden entirely when Product = Funds. ── */}
-      {showSharesSection && (
-        <div style={{ marginBottom: "24px" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: "12px",
-            }}
-          >
-            <h2 style={{ fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)", margin: 0 }}>
-              Shares (DPRP)
-            </h2>
-            <button
-              onClick={() => navigate(ROUTES.SHARES_BATCHES)}
-              style={{ fontSize: "11px", fontWeight: 500, color: "var(--color-brand-400)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
-            >
-              View Shares batches →
-            </button>
-          </div>
-          <div
-            className="overview-kpi-grid"
-            style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px" }}
-          >
-            <div style={{ ...CARD, padding: "18px 22px" }}>
-              <div style={SECTION_LABEL}>Shares AUM (USD)</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-usd)", letterSpacing: "-0.02em" }}>
-                {sharesAumUsd > 0 ? sharesAumUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
-                Current standing across {sharesBatches.length} batch{sharesBatches.length !== 1 ? "es" : ""}
-              </div>
-            </div>
-            <div style={{ ...CARD, padding: "18px 22px" }}>
-              <div style={SECTION_LABEL}>Shares Investors</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
-                {sharesInvestors.toLocaleString()}
-              </div>
-            </div>
-            <div style={{ ...CARD, padding: "18px 22px" }}>
-              <div style={SECTION_LABEL}>Oversubscribed Batches</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: sharesOversubscribedCount > 0 ? "#F59E0B" : "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
-                {sharesOversubscribedCount}
-              </div>
-            </div>
-            <div style={{ ...CARD, padding: "18px 22px" }}>
-              <div style={SECTION_LABEL}>Unallocated Shares</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
-                {sharesUnallocatedTotal.toLocaleString()}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Client Activity (search one investor, or pull everyone's activity for a day) ── */}
       <ClientActivitySection />

@@ -16,6 +16,11 @@ export interface OverviewStats {
   invested_usd?: number;
   gain_kes?: number;
   gain_usd?: number;
+  /** Task 10: Shares (SHARES/DPRP) NGN totals — a separate product/currency
+   * from the FUNDS figures above (see app/Stats/route.py). */
+  total_ngn?: number;
+  invested_ngn?: number;
+  gain_ngn?: number;
   total_withdrawals?: number;
   total_profit?: number;
   total_invested?: number;

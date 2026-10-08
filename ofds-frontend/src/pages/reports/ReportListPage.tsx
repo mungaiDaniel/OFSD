@@ -563,7 +563,7 @@ export default function ReportListPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", background: "rgba(0,0,0,0.15)", borderRadius: "8px", overflow: "hidden", border: "1px solid rgba(255,255,255,0.07)" }}>
               <thead style={{ background: "rgba(255,255,255,0.03)" }}>
                 <tr>
-                  {["Valuation Date", "Fund / Class", "Opening", "Profit", "Closing AUM", "Investors"].map((h, n) => (
+                  {["Valuation Date", "Fund / Class", "Opening", "Profit", "Closing Total", "Investors"].map((h, n) => (
                     <th key={h} style={{ textAlign: n >= 2 ? "right" : "left", padding: "9px 12px", fontSize: "9px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#475569", borderBottom: "1px solid rgba(255,255,255,0.07)", whiteSpace: "nowrap" }}>
                       {h}
                     </th>

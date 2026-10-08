@@ -10,6 +10,7 @@ Run with: pytest tests/test_shares_deployment.py -v
 """
 
 import json
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -287,6 +288,133 @@ class TestSharesDeploymentIdempotency:
                     batch_id=batch.id, source=WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND
                 ).all()
                 assert len({r.internal_client_code for r in refunds}) == len(refunds) == 1  # only C was refunded
+            finally:
+                db.session.remove()
+                db.drop_all()
+
+
+class TestSharesDeploymentNavValuation:
+    """
+    Task 7 correction: a SHARES holding is valued shares x NAV-per-share
+    (NGN), exactly like FUNDS, via the same InvestorShares/NavHistory
+    mechanism — not a fixed price set once at deployment. These tests cover
+    the data-model wiring apply_to_batch/revert_lock now does to make that
+    work; the statement-level "Not valued yet" / market-value display is
+    covered in tests/test_statement_sections.py.
+    """
+
+    def test_apply_to_batch_creates_investor_shares_rows(self, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                batch, a, b, c = _worked_example_batch()
+                batch.date_deployed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+                db.session.commit()
+
+                SharesDeploymentService.apply_to_batch(
+                    Batch.query.get(batch.id), db.session, "1500", "525", "30000"
+                )
+                db.session.expire_all()
+
+                from app.Funds.investor_shares import InvestorShares
+
+                a_inv = db.session.get(Investment, a.id)
+                shares_row = db.session.query(InvestorShares).filter_by(investment_id=a.id).first()
+                assert shares_row is not None
+                assert shares_row.shares_owned == a_inv.shares_owned == Decimal("5544.000000")
+                assert shares_row.deployment_nav == Decimal("525.000000")
+                assert shares_row.share_class_id == a_inv.share_class_id
+                assert shares_row.batch_id == batch.id
+                assert shares_row.is_active is True
+
+                # FUNDS-equivalent generic fields also populated, same shape a
+                # FUNDS deployment would set (app/Batch/route.py's confirm handler).
+                assert a_inv.previous_nav_price == Decimal("525.000000")
+                assert a_inv.opening_market_value == Decimal("2910600.00")  # 5544 * 525
+
+                updated_batch = Batch.query.get(batch.id)
+                assert updated_batch.deployment_nav == Decimal("525.000000")
+            finally:
+                db.session.remove()
+                db.drop_all()
+
+    def test_rerunning_apply_does_not_duplicate_investor_shares(self, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                batch, a, b, c = _worked_example_batch()
+                batch.date_deployed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+                db.session.commit()
+
+                from app.Funds.investor_shares import InvestorShares
+
+                SharesDeploymentService.apply_to_batch(Batch.query.get(batch.id), db.session, "1500", "525", "20000")
+                SharesDeploymentService.apply_to_batch(Batch.query.get(batch.id), db.session, "1500", "525", "20000")
+                db.session.expire_all()
+
+                rows = db.session.query(InvestorShares).filter(
+                    InvestorShares.investment_id.in_([a.id, b.id, c.id])
+                ).all()
+                assert len(rows) == 3  # one per investment, not six
+            finally:
+                db.session.remove()
+                db.drop_all()
+
+    def test_revert_lock_removes_investor_shares_and_nav_fields(self, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                batch, a, b, c = _worked_example_batch()
+                batch.date_deployed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+                db.session.commit()
+
+                from app.Funds.investor_shares import InvestorShares
+
+                SharesDeploymentService.apply_to_batch(Batch.query.get(batch.id), db.session, "1500", "525", "30000")
+                SharesDeploymentService.revert_lock(Batch.query.get(batch.id), db.session)
+                db.session.expire_all()
+
+                remaining = db.session.query(InvestorShares).filter(
+                    InvestorShares.investment_id.in_([a.id, b.id, c.id])
+                ).count()
+                assert remaining == 0
+
+                a_inv = db.session.get(Investment, a.id)
+                assert a_inv.previous_nav_price is None
+                assert a_inv.opening_market_value is None
+                assert Batch.query.get(batch.id).deployment_nav is None
+            finally:
+                db.session.remove()
+                db.drop_all()
+
+    def test_not_valued_until_a_valuation_is_committed(self, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                from app.Funds.nav_history import NavHistory
+                from app.Investments.route import _resolve_shares_nav_for_investment
+                from datetime import date
+
+                batch, a, b, c = _worked_example_batch()
+                batch.date_deployed = datetime(2026, 6, 1, tzinfo=timezone.utc)
+                db.session.commit()
+
+                SharesDeploymentService.apply_to_batch(Batch.query.get(batch.id), db.session, "1500", "525", "30000")
+                db.session.expire_all()
+                a_inv = db.session.get(Investment, a.id)
+
+                nav, is_valued = _resolve_shares_nav_for_investment(a_inv, session=db.session)
+                assert is_valued is False  # nothing committed yet -> "Not valued yet"
+
+                db.session.add(NavHistory(
+                    share_class_id=a_inv.share_class_id, nav_date=date(2026, 7, 1),
+                    nav_per_share=Decimal("600.00"), source="valuation",
+                ))
+                db.session.commit()
+
+                nav2, is_valued2 = _resolve_shares_nav_for_investment(a_inv, session=db.session)
+                assert is_valued2 is True
+                assert nav2 == Decimal("600.00")
             finally:
                 db.session.remove()
                 db.drop_all()

@@ -22,13 +22,15 @@ const FundDetailPage = lazy(() => import("@/pages/funds/FundDetailPage"));
 const FundsBatchListPage = lazy(() => import("@/pages/funds/FundsBatchListPage"));
 const FundsBatchCreatePage = lazy(() => import("@/pages/funds/FundsBatchCreatePage"));
 const FundsInvestorListPage = lazy(() => import("@/pages/funds/FundsInvestorListPage"));
+const FundsValuationListPage = lazy(() => import("@/pages/funds/FundsValuationListPage"));
+const FundsValuationCreatePage = lazy(() => import("@/pages/funds/FundsValuationCreatePage"));
+const SharesListPage = lazy(() => import("@/pages/shares/SharesListPage"));
+const ShareDetailPage = lazy(() => import("@/pages/shares/ShareDetailPage"));
 const SharesBatchListPage = lazy(() => import("@/pages/shares/SharesBatchListPage"));
 const SharesBatchCreatePage = lazy(() => import("@/pages/shares/SharesBatchCreatePage"));
 const SharesInvestorListPage = lazy(() => import("@/pages/shares/SharesInvestorListPage"));
-const SharesDeploymentListPage = lazy(() => import("@/pages/shares/SharesDeploymentListPage"));
-const SharesRefundsPage = lazy(() => import("@/pages/shares/SharesRefundsPage"));
-const ValuationListPage = lazy(() => import("@/pages/valuations/ValuationListPage"));
-const ValuationCreatePage = lazy(() => import("@/pages/valuations/ValuationCreatePage"));
+const SharesValuationListPage = lazy(() => import("@/pages/shares/SharesValuationListPage"));
+const SharesValuationCreatePage = lazy(() => import("@/pages/shares/SharesValuationCreatePage"));
 const ReportListPage = lazy(() => import("@/pages/reports/ReportListPage"));
 const ReportDetailPage = lazy(() => import("@/pages/reports/ReportDetailPage"));
 const PortfolioPage = lazy(() => import("@/pages/reports/PortfolioPage"));
@@ -69,7 +71,7 @@ function withSuspense(Component: React.LazyExoticComponent<React.ComponentType<a
 
 // ── Route definitions ──
 
-const routes: RouteObject[] = [
+export const routes: RouteObject[] = [
   // Public: Landing
   {
     path: "/",
@@ -121,17 +123,25 @@ const routes: RouteObject[] = [
       { path: "/funds/batches", element: withSuspense(FundsBatchListPage) },
       { path: "/funds/batches/new", element: withSuspense(FundsBatchCreatePage) },
       { path: "/funds/investors", element: withSuspense(FundsInvestorListPage) },
+      { path: "/funds/valuations", element: withSuspense(FundsValuationListPage) },
+      { path: "/funds/valuations/new", element: withSuspense(FundsValuationCreatePage) },
 
       // Shares area (DPRP)
+      { path: "/shares", element: withSuspense(SharesListPage) },
+      { path: "/shares/:id", element: withSuspense(ShareDetailPage) },
       { path: "/shares/batches", element: withSuspense(SharesBatchListPage) },
       { path: "/shares/batches/new", element: withSuspense(SharesBatchCreatePage) },
       { path: "/shares/investors", element: withSuspense(SharesInvestorListPage) },
-      { path: "/shares/deployment", element: withSuspense(SharesDeploymentListPage) },
-      { path: "/shares/refunds", element: withSuspense(SharesRefundsPage) },
+      { path: "/shares/valuations", element: withSuspense(SharesValuationListPage) },
+      { path: "/shares/valuations/new", element: withSuspense(SharesValuationCreatePage) },
+      // Removed in Task 9 — Shares no longer has its own deployment/refunds screens
+      { path: "/shares/deployment", element: <Navigate to={ROUTES.SHARES_BATCHES} replace /> },
+      { path: "/shares/refunds", element: <Navigate to={ROUTES.WITHDRAWALS} replace /> },
 
-      // Valuations (Funds-only — see Task 3: Shares are valued at price per share, not NAV)
-      { path: "/valuations", element: withSuspense(ValuationListPage) },
-      { path: "/valuations/new", element: withSuspense(ValuationCreatePage) },
+      // Valuations — legacy combined URLs redirect into the Funds area (the
+      // overwhelmingly common product), same reasoning as /batches above
+      { path: "/valuations", element: <Navigate to={ROUTES.FUNDS_VALUATIONS} replace /> },
+      { path: "/valuations/new", element: <Navigate to={ROUTES.FUNDS_VALUATION_CREATE} replace /> },
 
       // Reports
       { path: "/reports", element: withSuspense(ReportListPage) },

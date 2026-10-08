@@ -153,6 +153,27 @@ def get_overview_stats():
             authoritative_total_aum = summary_aum_usd
             batch_total_gain = summary_gain_usd
 
+        # ── Task 10: Shares (SHARES/DPRP) NGN total — same synchronize-with-
+        # Funds-Summary approach as KES/USD above, just scoped to the SHARES
+        # product instead of FUNDS, so Overview's NGN card/chart never mixes
+        # Funds and Shares figures (see Task 9's product_type separation).
+        from app.database.product_type import SHARES as SHARES_PRODUCT
+
+        shares_summary = compute_funds_summary_data(db.session, product=SHARES_PRODUCT)
+        total_ngn = Decimal("0")
+        invested_ngn = Decimal("0")
+        gain_ngn = Decimal("0")
+        for f_item in shares_summary.get("funds", []):
+            t_map = f_item.get("totals_by_currency") or {}
+            i_map = f_item.get("invested_by_currency") or {}
+            g_map = f_item.get("gain_by_currency") or {}
+            if "NGN" in t_map:
+                total_ngn += Decimal(str(t_map["NGN"] or 0))
+            if "NGN" in i_map:
+                invested_ngn += Decimal(str(i_map["NGN"] or 0))
+            if "NGN" in g_map:
+                gain_ngn += Decimal(str(g_map["NGN"] or 0))
+
         # Authoritative investor count matching the investor directory page
         total_investors_count = get_total_investors_count(db.session)
         if total_investors_count == 0:
@@ -434,6 +455,9 @@ def get_overview_stats():
                     "invested_usd": float_2dp(invested_usd),
                     "gain_kes": float_2dp(gain_kes),
                     "gain_usd": float_2dp(gain_usd),
+                    "total_ngn": float_2dp(total_ngn),
+                    "invested_ngn": float_2dp(invested_ngn),
+                    "gain_ngn": float_2dp(gain_ngn),
                     "total_investors": int(total_investors_count),
                     "active_investors": int(total_investors_count),
                     "performance_pct": float_2dp(
@@ -539,6 +563,9 @@ def get_overview_stats():
                         "invested_usd": float_2dp(invested_usd),
                         "gain_kes": float_2dp(gain_kes),
                         "gain_usd": float_2dp(gain_usd),
+                        "total_ngn": float_2dp(total_ngn),
+                        "invested_ngn": float_2dp(invested_ngn),
+                        "gain_ngn": float_2dp(gain_ngn),
                         "total_investors": int(total_investors),
                         "active_investors": int(total_investors),
                         "performance_pct": float_2dp(performance_pct),

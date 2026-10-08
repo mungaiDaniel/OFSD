@@ -42,7 +42,7 @@ export function FundAllocationDoughnut({ data, height = 280 }: Props) {
             : `$${(total / 1_000).toFixed(0)}K`}
         </span>
         <span className="text-[10px]" style={{ color: "var(--color-text-tertiary)" }}>
-          Total AUM
+          Total
         </span>
       </div>
     </div>

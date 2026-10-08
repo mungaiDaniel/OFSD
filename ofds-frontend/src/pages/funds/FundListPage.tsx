@@ -3,9 +3,23 @@ import { useNavigate } from "react-router-dom";
 import { fundService } from "@/services/fundService";
 import { ROUTES } from "@/lib/constants";
 import { formatCurrencyCompact } from "@/lib/utils";
-import type { CoreFund } from "@/lib/types";
+import type { CoreFund, ProductType } from "@/lib/types";
 import { toast } from "sonner";
-import { Plus, X, Landmark, ChevronRight } from "lucide-react";
+import { Plus, X, Landmark, Coins, ChevronRight } from "lucide-react";
+
+// Task 9: currencies available per product in the Add/Edit Share Class forms
+// — Funds keep KES/USD, Shares (DPRP) is NGN-valued (Task 7/8).
+const CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
+  FUNDS: ["KES", "USD"],
+  SHARES: ["NGN"],
+};
+
+interface FundListPageProps {
+  /** Scopes this page to one product — same component, same layout/forms,
+   * different data/wording/currency (Task 9). Defaults to FUNDS (unchanged
+   * behavior for the existing /funds page). */
+  product?: ProductType;
+}
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -51,12 +65,18 @@ function handleBlur(e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) {
   e.target.style.background = "rgba(0,0,0,0.25)";
 }
 
-export default function FundListPage() {
+export default function FundListPage({ product = "FUNDS" }: FundListPageProps) {
   const navigate = useNavigate();
+  const isShares = product === "SHARES";
+  const currencies = CURRENCIES_BY_PRODUCT[product];
+  const noun = isShares ? "share" : "fund";
+  const Noun = isShares ? "Share" : "Fund";
+  const detailPath = isShares ? ROUTES.SHARE_DETAIL : ROUTES.FUND_DETAIL;
+
   const [funds, setFunds] = useState<CoreFund[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Create fund modal/form state
+  // Create fund/share modal/form state
   const [showCreateFund, setShowCreateFund] = useState(false);
   const [newFundName, setNewFundName] = useState("");
   const [newFundCode, setNewFundCode] = useState("");
@@ -67,13 +87,13 @@ export default function FundListPage() {
   const [selectedFundId, setSelectedFundId] = useState<number | "">("");
   const [className, setClassName] = useState("");
   const [classCode, setClassCode] = useState("");
-  const [classCurrency, setClassCurrency] = useState("KES");
+  const [classCurrency, setClassCurrency] = useState(currencies[0]!);
   const [addingClass, setAddingClass] = useState(false);
 
   const loadFunds = async () => {
     setLoading(true);
     try {
-      setFunds(await fundService.getAll());
+      setFunds(await fundService.getAll(product));
     } finally {
       setLoading(false);
     }
@@ -81,23 +101,24 @@ export default function FundListPage() {
 
   useEffect(() => {
     loadFunds();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product]);
 
   const handleCreateFund = async () => {
     if (!newFundName.trim() || !newFundCode.trim()) {
-      toast.error("Fund name and code are required");
+      toast.error(`${Noun} name and code are required`);
       return;
     }
     setCreatingFund(true);
     try {
-      await fundService.createFund(newFundName.trim(), newFundCode.trim());
-      toast.success(`Fund "${newFundName}" created`);
+      await fundService.createFund(newFundName.trim(), newFundCode.trim(), product);
+      toast.success(`${Noun} "${newFundName}" created`);
       setNewFundName("");
       setNewFundCode("");
       setShowCreateFund(false);
       await loadFunds();
     } catch (err: any) {
-      toast.error(err.response?.data?.message || "Failed to create fund");
+      toast.error(err.response?.data?.message || `Failed to create ${noun}`);
     } finally {
       setCreatingFund(false);
     }
@@ -110,15 +131,19 @@ export default function FundListPage() {
     }
     setAddingClass(true);
     try {
-      await fundService.createClass(selectedFundId, {
-        class_name: className.trim(),
-        class_code: classCode.trim(),
-        currency: classCurrency,
-      });
+      await fundService.createClass(
+        selectedFundId,
+        {
+          class_name: className.trim(),
+          class_code: classCode.trim(),
+          currency: classCurrency,
+        },
+        product
+      );
       toast.success(`Share class "${className}" added`);
       setClassName("");
       setClassCode("");
-      setClassCurrency("KES");
+      setClassCurrency(currencies[0]!);
       setShowAddClass(false);
       setSelectedFundId("");
       await loadFunds();
@@ -134,9 +159,11 @@ export default function FundListPage() {
       {/* Page Header */}
       <div className="page-header-row mb-4">
         <div>
-          <h1 className="ofds-page-title">Funds</h1>
+          <h1 className="ofds-page-title">{isShares ? "Shares" : "Funds"}</h1>
           <p className="ofds-page-subtitle">
-            Core funds used for performance tracking and valuation
+            {isShares
+              ? "Shares: core shares used for performance tracking and valuation"
+              : "Core funds used for performance tracking and valuation"}
           </p>
         </div>
         <button
@@ -148,7 +175,7 @@ export default function FundListPage() {
             boxShadow: "0 0 20px rgba(26,69,255,0.35)",
           }}
         >
-          <Plus size={16} /> New fund
+          <Plus size={16} /> New {noun}
         </button>
       </div>
 
@@ -175,7 +202,7 @@ export default function FundListPage() {
                 className="fw-bold mb-0"
                 style={{ fontSize: "14px", color: "var(--color-text-primary)" }}
               >
-                Create New Fund
+                Create New {Noun}
               </h5>
               <button
                 onClick={() => {
@@ -195,11 +222,11 @@ export default function FundListPage() {
             </div>
             <div className="row g-3 mb-3">
               <div className="col-md-6">
-                <label style={labelStyle}>Fund Name *</label>
+                <label style={labelStyle}>{Noun} Name *</label>
                 <input
                   value={newFundName}
                   onChange={(e) => setNewFundName(e.target.value)}
-                  placeholder="e.g. Axiom"
+                  placeholder={isShares ? "e.g. Dangote Petroleum Refinery" : "e.g. Axiom"}
                   style={inputStyle}
                   onFocus={handleFocus}
                   onBlur={handleBlur}
@@ -207,11 +234,11 @@ export default function FundListPage() {
                 />
               </div>
               <div className="col-md-6">
-                <label style={labelStyle}>Fund Code *</label>
+                <label style={labelStyle}>{Noun} Code *</label>
                 <input
                   value={newFundCode}
                   onChange={(e) => setNewFundCode(e.target.value.toUpperCase())}
-                  placeholder="e.g. AXM"
+                  placeholder={isShares ? "e.g. DPRP" : "e.g. AXM"}
                   style={inputStyle}
                   onFocus={handleFocus}
                   onBlur={handleBlur}
@@ -273,7 +300,7 @@ export default function FundListPage() {
                   boxShadow: "0 0 20px rgba(26,69,255,0.35)",
                 }}
               >
-                {creatingFund ? "Creating..." : "Create Fund"}
+                {creatingFund ? "Creating..." : `Create ${Noun}`}
               </button>
             </div>
           </div>
@@ -324,7 +351,7 @@ export default function FundListPage() {
             </div>
             <div className="row g-3 mb-3">
               <div className="col-md-6">
-                <label style={labelStyle}>Fund *</label>
+                <label style={labelStyle}>{Noun} *</label>
                 <select
                   value={selectedFundId}
                   onChange={(e) => setSelectedFundId(e.target.value ? Number(e.target.value) : "")}
@@ -332,7 +359,7 @@ export default function FundListPage() {
                   onFocus={handleFocus}
                   onBlur={handleBlur}
                 >
-                  <option value="">Select a fund...</option>
+                  <option value="">Select a {noun}...</option>
                   {funds.map((f) => (
                     <option key={f.id} value={f.id}>
                       {f.fund_name}
@@ -375,8 +402,11 @@ export default function FundListPage() {
                   onFocus={handleFocus}
                   onBlur={handleBlur}
                 >
-                  <option value="KES">KES</option>
-                  <option value="USD">USD</option>
+                  {currencies.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -476,7 +506,7 @@ export default function FundListPage() {
               e.currentTarget.style.borderColor = "rgba(26,69,255,0.3)";
             }}
           >
-            <Plus size={16} /> Create Fund
+            <Plus size={16} /> Create {Noun}
           </button>
           <button
             onClick={() => setShowAddClass(true)}
@@ -522,13 +552,15 @@ export default function FundListPage() {
       ) : funds.length === 0 ? (
         <div className="card shadow text-center py-5">
           <div className="card-body d-flex flex-column align-items-center">
-            <Landmark
-              size={36}
-              className="mb-3"
-              style={{ color: "var(--color-text-tertiary)" }}
-            />
+            {isShares ? (
+              <Coins size={36} className="mb-3" style={{ color: "var(--color-text-tertiary)" }} />
+            ) : (
+              <Landmark size={36} className="mb-3" style={{ color: "var(--color-text-tertiary)" }} />
+            )}
             <p className="mb-0" style={{ color: "var(--color-text-tertiary)", fontSize: "13px" }}>
-              No funds created yet. Upload a batch Excel or create a fund manually.
+              {isShares
+                ? "No shares created yet. Create a share manually."
+                : "No funds created yet. Upload a batch Excel or create a fund manually."}
             </p>
           </div>
         </div>
@@ -539,7 +571,7 @@ export default function FundListPage() {
               <div
                 className="card shadow h-100"
                 style={{ cursor: "pointer", transition: "background 0.15s" }}
-                onClick={() => navigate(ROUTES.FUND_DETAIL(fund.id))}
+                onClick={() => navigate(detailPath(fund.id))}
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = "#243447")}
                 onMouseLeave={(e) =>
                   ((e.currentTarget as HTMLElement).style.background = "var(--color-bg-surface)")
@@ -556,7 +588,11 @@ export default function FundListPage() {
                         flexShrink: 0,
                       }}
                     >
-                      <Landmark size={18} style={{ color: "var(--color-brand-400)" }} />
+                      {isShares ? (
+                        <Coins size={18} style={{ color: "var(--color-brand-400)" }} />
+                      ) : (
+                        <Landmark size={18} style={{ color: "var(--color-brand-400)" }} />
+                      )}
                     </div>
                     <div>
                       <h3
@@ -591,7 +627,7 @@ export default function FundListPage() {
                             color: "var(--color-text-secondary)",
                           }}
                         >
-                          {formatCurrencyCompact(fund.total_aum || 0)} AUM
+                          {formatCurrencyCompact(fund.total_aum || 0)} Total
                         </span>
                         <span
                           className="badge rounded-pill border"

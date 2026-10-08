@@ -12,7 +12,6 @@ from app.Funds.investor_shares import InvestorShares
 from app.database.database import db
 from app.utils.email_service import EmailService
 from app.utils.audit_log import create_audit_log
-from app.utils.statement_theme import resolve_product_type
 from app.database.product_type import PRODUCT_TYPES, FUNDS, SHARES
 from app.logic.shares_transfer_service import SharesTransferService, SharesTransferError
 from app.logic.shares_deployment_service import SharesDeploymentService, SharesDeploymentError
@@ -66,13 +65,15 @@ class BatchController:
             is_open = data.get('is_open')
 
             # Resolve product_type (FUNDS or SHARES). When a share_class_id is given,
-            # the share class's fund is the single source of truth (see
-            # resolve_product_type) — an explicit product_type must agree with it.
-            # Without a share_class_id yet (two-stage creation), fall back to an
-            # explicit product_type or default to FUNDS, the overwhelmingly common
-            # case; a SHARES batch created this way must have share_class_id set
-            # (and therefore its real product_type resolved) before it can accept
-            # deposits — see BatchManagementService.add_investor_to_batch.
+            # the share class's own product_type column is the single source of
+            # truth (Task 8 — inherited from its CoreFund at creation, see
+            # app/Funds/share_class.py) — an explicit product_type must agree with
+            # it. Without a share_class_id yet (two-stage creation), fall back to
+            # an explicit product_type or default to FUNDS, the overwhelmingly
+            # common case; a SHARES batch created this way must have
+            # share_class_id set (and therefore its real product_type resolved)
+            # before it can accept deposits — see
+            # BatchManagementService.add_investor_to_batch.
             requested_product_type = data.get('product_type')
             if requested_product_type is not None:
                 requested_product_type = str(requested_product_type).strip().upper()
@@ -90,11 +91,7 @@ class BatchController:
                         "status": 400,
                         "message": f"Share class {share_class_id} not found"
                     }), 400)
-                core_fund = session.query(CoreFund).filter(CoreFund.id == share_class.core_fund_id).first()
-                derived_product_type = resolve_product_type(
-                    [core_fund.fund_name if core_fund else None],
-                    [core_fund.fund_code if core_fund else None],
-                )
+                derived_product_type = share_class.product_type
                 if requested_product_type and requested_product_type != derived_product_type:
                     return make_response(jsonify({
                         "status": 400,

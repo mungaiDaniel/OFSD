@@ -13,6 +13,9 @@ import type { FundClassSummary } from "@/lib/types";
 // ── Color palettes per currency ──────────────────────────────────────────────
 const KES_COLORS = ["#F59E0B", "#FBBF24", "#D97706", "#FCD34D", "#92400E"];
 const USD_COLORS = ["#3B82F6", "#60A5FA", "#2563EB", "#93C5FD", "#1D4ED8"];
+const NGN_COLORS = ["#22C55E", "#4ADE80", "#16A34A", "#86EFAC", "#15803D"];
+const PALETTE_BY_CURRENCY: Record<string, string[]> = { KES: KES_COLORS, USD: USD_COLORS, NGN: NGN_COLORS };
+const CURRENCY_VAR: Record<string, string> = { KES: "--color-kes", USD: "--color-usd", NGN: "--color-ngn" };
 
 // ── Date formatter for X axis ─────────────────────────────────────────────────
 // Includes the day — "month + 2-digit year" alone (e.g. "Sep 26") reads as
@@ -68,15 +71,15 @@ function NAVTooltip({ active, payload, label }: any) {
 // ── Main Component ─────────────────────────────────────────────────────────────
 interface NAVLineChartProps {
   classes: FundClassSummary[];
-  currency: "KES" | "USD";
+  currency: string;
   title?: string;
   asOfDate?: string;
 }
 
 export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChartProps) {
-  const isKES = currency === "KES";
-  const palette = isKES ? KES_COLORS : USD_COLORS;
-  const currencyColor = isKES ? "var(--color-kes)" : "var(--color-usd)";
+  const currencyVar = CURRENCY_VAR[currency] ?? "--color-usd";
+  const palette = PALETTE_BY_CURRENCY[currency] ?? USD_COLORS;
+  const currencyColor = `var(${currencyVar})`;
 
   // Only classes with at least one nav_history point
   const activeClasses = classes
@@ -213,11 +216,9 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
               fontWeight: 700,
               letterSpacing: "0.06em",
               fontFamily: "var(--font-mono)",
-              background: isKES ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
+              background: `var(${currencyVar}-bg)`,
               color: currencyColor,
-              border: isKES
-                ? "1px solid var(--color-kes-border)"
-                : "1px solid var(--color-usd-border)",
+              border: `1px solid var(${currencyVar}-border)`,
             }}
           >
             {currency}

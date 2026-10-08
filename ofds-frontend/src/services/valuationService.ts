@@ -8,6 +8,7 @@ import type {
   NavValuationPreviewResponse,
   NavValuationRunItem,
   ValuationJobStatus,
+  ProductType,
 } from "@/lib/types";
 
 export const valuationService = {
@@ -21,8 +22,11 @@ export const valuationService = {
     return res.data;
   },
 
-  async getActiveFunds(): Promise<CoreFund[]> {
-    const res = await api.get<ApiResponse<CoreFund[]>>(API.VALUATION_FUNDS);
+  /** Task 9: product scopes this to FUNDS or SHARES funds — Funds and Shares
+   * valuations never mix (see app/Valuation/route.py's product filter). */
+  async getActiveFunds(product?: ProductType): Promise<CoreFund[]> {
+    const qs = product ? `?product=${product}` : "";
+    const res = await api.get<ApiResponse<CoreFund[]>>(`${API.VALUATION_FUNDS}${qs}`);
     return res.data.data ?? [];
   },
 
@@ -58,9 +62,10 @@ export const valuationService = {
     return res.data.data as ValuationJobStatus;
   },
 
-  async listNavRuns(limit = 50): Promise<NavValuationRunItem[]> {
+  async listNavRuns(limit = 50, product?: ProductType): Promise<NavValuationRunItem[]> {
     const params = new URLSearchParams();
     params.set("limit", String(limit));
+    if (product) params.set("product", product);
     const res = await api.get<ApiResponse<NavValuationRunItem[]>>(
       `${API.VALUATION_NAV_RUNS}?${params.toString()}`
     );

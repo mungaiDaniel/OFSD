@@ -50,15 +50,19 @@ export const ROUTES = {
   FUNDS_BATCHES: "/funds/batches",
   FUNDS_BATCH_CREATE: "/funds/batches/new",
   FUNDS_INVESTORS: "/funds/investors",
+  FUNDS_VALUATIONS: "/funds/valuations",
+  FUNDS_VALUATION_CREATE: "/funds/valuations/new",
 
   // Shares area (product_type = SHARES, i.e. DPRP)
+  SHARES: "/shares",
+  SHARE_DETAIL: (id: number | string) => `/shares/${id}`,
   SHARES_BATCHES: "/shares/batches",
   SHARES_BATCH_CREATE: "/shares/batches/new",
   SHARES_INVESTORS: "/shares/investors",
-  SHARES_DEPLOYMENT: "/shares/deployment",
-  SHARES_REFUNDS: "/shares/refunds",
+  SHARES_VALUATIONS: "/shares/valuations",
+  SHARES_VALUATION_CREATE: "/shares/valuations/new",
 
-  // Valuations
+  // Valuations — legacy combined paths, redirected into /funds/valuations (see routes/index.tsx)
   VALUATIONS: "/valuations",
   VALUATION_CREATE: "/valuations/new",
 
@@ -151,6 +155,11 @@ export const API = {
   FUNDS: "/funds",
   FUNDS_SUMMARY: "/funds/summary",
   FUND_CLASSES: (fundId: number | string) => `/funds/${fundId}/classes`,
+
+  // Shares (Task 8/9 — same endpoints as Funds, product=SHARES)
+  SHARES: "/shares",
+  SHARES_SUMMARY: "/shares/summary",
+  SHARE_CLASSES: (fundId: number | string) => `/shares/${fundId}/classes`,
 
   // Performance
   BATCH_PERFORMANCE: (batchId: number) => `/batches/${batchId}/performance`,

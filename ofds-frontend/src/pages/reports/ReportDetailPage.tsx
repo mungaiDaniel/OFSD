@@ -329,7 +329,7 @@ export default function ReportDetailPage() {
           <KPICard valueSize="1.0 rem" label="Profit distributed" value={formatCurrency(s.total_profit_distributed)} />
         </div>
         <div className="col-12 col-md-6 col-lg-2">
-          <KPICard valueSize="1.0 rem" label="Closing AUM" value={formatCurrency(s.total_closing_aum)} />
+          <KPICard valueSize="1.0 rem" label="Closing Total" value={formatCurrency(s.total_closing_aum)} />
         </div>
         <div className="col-12 col-md-6 col-lg-2">
           <KPICard valueSize="1.0 rem" label="Investors" value={String(s.investor_count)} />
@@ -345,7 +345,7 @@ export default function ReportDetailPage() {
       <div className="rounded-lg p-3 p-md-5 mb-4 d-flex flex-column flex-sm-row align-items-stretch align-items-sm-center justify-content-between gap-3" style={{ background: "var(--color-bg-surface)", borderColor: "var(--color-border-subtle)" }}>
         <div>
           <p className="text-xs font-medium" style={{ color: "var(--color-text-secondary)" }}>Reconciliation difference</p>
-          <p className="text-sm mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>Local closing AUM vs head office total ({formatCurrency(report.head_office_total)})</p>
+          <p className="text-sm mt-0.5" style={{ color: "var(--color-text-tertiary)" }}>Local closing total vs head office total ({formatCurrency(report.head_office_total)})</p>
         </div>
         <p className="text-lg fw-bold" style={{ fontFamily: "var(--font-mono)", color: diffPositive ? "var(--color-success)" : "var(--color-destructive)" }}>
           {diffPositive ? "+" : ""}{formatCurrency(reconciliationDiff)}

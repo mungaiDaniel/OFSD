@@ -2547,19 +2547,64 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
     # one-time narrative, and the task spec explicitly calls for it.
 
 
+def _resolve_shares_nav_for_investment(inv, investor_shares_by_investment_id=None, session=None):
+    """
+    Task 7: shared "current NAV per share" resolver for a SHARES holding —
+    used by both the PDF statement section and the Excel export, so the two
+    never disagree. (nav_per_share, is_valued): is_valued is False when no
+    committed valuation exists yet for this share class since deployment
+    (NavHistory.resolve_current_price would otherwise silently fall back to
+    the deployment price, which this app deliberately surfaces as "Not valued
+    yet" instead of a real valuation — see _append_shares_statement_section).
+    """
+    from app.Funds.investor_shares import InvestorShares
+    from app.Funds.nav_history import NavHistory
+
+    session = session or db.session
+    inv_shares = (investor_shares_by_investment_id or {}).get(inv.id)
+    if inv_shares is None:
+        inv_shares = session.query(InvestorShares).filter(InvestorShares.investment_id == inv.id).first()
+
+    share_class_id = (inv_shares.share_class_id if inv_shares else None) or inv.share_class_id
+    deployment_date = inv_shares.deployment_date if inv_shares else (inv.date_transferred.date() if inv.date_transferred else None)
+    deployment_nav = (inv_shares.deployment_nav if inv_shares else None) or inv.previous_nav_price or inv.shares_price_per_share_ngn
+    if not share_class_id or deployment_nav is None:
+        return None, False
+
+    nav_per_share, _nav_date, is_fallback = NavHistory.resolve_current_price(
+        share_class_id, deployment_date, deployment_nav, session=session
+    )
+    if nav_per_share is None or is_fallback:
+        return None, False
+    return nav_per_share, True
+
+
 def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_styles, body_font, body_font_bold, theme):
     """
-    Renders the "Shares (Dangote Petroleum Refinery IPO)" statement section:
-    one Description/Amount table per SHARES holding (deposit), using the
-    fee/allocation fields Tasks 2-3 already computed and stored directly on
-    Investment — no EpochLedger/NAV machinery involved, since SHARES is valued
-    at price per share, not NAV (see Task 3). A totals table is added when the
-    investor has more than one SHARES holding.
+    Renders the "Shares (Dangote Petroleum Refinery IPO)" statement section.
+
+    Task 7 correction: SHARES is valued exactly like a FUNDS holding — shares
+    x the latest committed NAV-per-share (NGN) for its share class, via the
+    same InvestorShares / NavHistory mechanism FUNDS uses (NavHistory.
+    resolve_current_price), NOT a fixed "price per share" set once at
+    deployment. price_per_share_ngn (shares_price_per_share_ngn on Investment)
+    only ever determined how many whole shares were bought (Task 3) — it's
+    shown here as the deployment cost basis, never as the ongoing valuation.
+    If no valuation has been committed for this share class since deployment,
+    resolve_current_price falls back to the deployment price itself; this
+    section deliberately does NOT silently treat that as "the current value"
+    the way FUNDS's generic balance calc does — it shows "Not valued yet"
+    instead, per Task 7.
+
+    One Description/Amount table per SHARES holding (deposit); a totals table
+    is added when the investor has more than one SHARES holding.
 
     USD-denominated fields (deposit, entry fee, transaction cost, net, refund)
-    and NGN-denominated fields (net, price per share, value) are always kept
-    on separate rows/totals — never summed together (Task 5 rule).
+    and NGN-denominated fields (net/cost basis, NAV, market value, gain/loss)
+    are always kept on separate rows/totals — never summed together (Task 5 rule).
     """
+    from app.Funds.investor_shares import InvestorShares
+
     section_heading_style = pdf_styles["section_heading"]
     normal_style = pdf_styles["normal"]
 
@@ -2577,6 +2622,14 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
         return
 
     cent = Decimal("0.01")
+    NOT_VALUED_YET = "Not valued yet"
+
+    investor_shares_by_investment_id = {
+        s.investment_id: s
+        for s in db.session.query(InvestorShares).filter(
+            InvestorShares.investment_id.in_([h.id for h in holdings])
+        ).all()
+    }
 
     def _money(value):
         return _format_statement_money(value, "USD")
@@ -2593,11 +2646,15 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
     def _shares_qty(value):
         return f"{Decimal(str(value)):,.4f}" if value is not None else "—"
 
+    def _resolve_nav(inv):
+        return _resolve_shares_nav_for_investment(inv, investor_shares_by_investment_id, db.session)
+
     totals = {
         "deposit": Decimal("0.00"), "entry_fee": Decimal("0.00"), "tx_cost": Decimal("0.00"),
         "net_usd": Decimal("0.00"), "net_ngn": Decimal("0.00"), "shares": Decimal("0.00"),
-        "value_ngn": Decimal("0.00"), "refund_usd": Decimal("0.00"),
+        "market_value_ngn": Decimal("0.00"), "gain_loss_ngn": Decimal("0.00"), "refund_usd": Decimal("0.00"),
     }
+    all_valued = True
 
     for inv in holdings:
         deposit = Decimal(str(inv.amount_deposited or 0))
@@ -2609,14 +2666,18 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
         net_usd = (deposit - entry_fee - tx_cost).quantize(cent)
         refund_usd = Decimal(str(inv.oversubscription_refund_amount or 0))
         exchange_rate = inv.shares_exchange_rate_ngn
-        net_ngn = inv.net_ngn
-        price_per_share = inv.shares_price_per_share_ngn
+        net_ngn = inv.net_ngn  # the NGN cost basis deployed into shares
         shares_owned = inv.shares_owned
-        value_ngn = (
-            (Decimal(str(shares_owned)) * Decimal(str(price_per_share))).quantize(cent)
-            if shares_owned is not None and price_per_share is not None
-            else None
-        )
+
+        nav_per_share, is_valued = _resolve_nav(inv)
+        if is_valued and shares_owned is not None:
+            market_value_ngn = (Decimal(str(shares_owned)) * Decimal(str(nav_per_share))).quantize(cent)
+            cost_basis_ngn = Decimal(str(net_ngn)) if net_ngn is not None else Decimal("0.00")
+            gain_loss_ngn = market_value_ngn - cost_basis_ngn
+        else:
+            market_value_ngn = None
+            gain_loss_ngn = None
+            all_valued = False
 
         refund_status = "—"
         if refund_usd > 0:
@@ -2640,8 +2701,10 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
             totals["net_ngn"] += Decimal(str(net_ngn))
         if shares_owned is not None:
             totals["shares"] += Decimal(str(shares_owned))
-        if value_ngn is not None:
-            totals["value_ngn"] += value_ngn
+        if market_value_ngn is not None:
+            totals["market_value_ngn"] += market_value_ngn
+        if gain_loss_ngn is not None:
+            totals["gain_loss_ngn"] += gain_loss_ngn
         totals["refund_usd"] += refund_usd
 
         if len(holdings) > 1:
@@ -2657,10 +2720,11 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
             ["Transaction Cost (USD)", _money(tx_cost)],
             ["Net (USD)", _money(net_usd)],
             ["Exchange Rate Used (NGN / USD)", _rate(exchange_rate)],
-            ["Net (NGN)", _ngn(net_ngn)],
-            ["Price Per Share (NGN)", _ngn(price_per_share, places=4)],
+            ["Net (NGN) — Cost Basis", _ngn(net_ngn)],
             ["Shares Allocated", _shares_qty(shares_owned)],
-            ["Value at Price Per Share (NGN)", _ngn(value_ngn)],
+            ["NAV / Share (NGN)", _ngn(nav_per_share, places=4) if is_valued else NOT_VALUED_YET],
+            ["Market Value (NGN)", _ngn(market_value_ngn) if is_valued else NOT_VALUED_YET],
+            ["Gain / Loss (NGN)", _ngn(gain_loss_ngn) if is_valued else NOT_VALUED_YET],
             ["Refund (USD)", _money(refund_usd) if refund_usd > 0 else "—"],
             ["Refund Status", refund_status],
         ]
@@ -2676,9 +2740,10 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
             ["Total Entry Fee (USD)", _money(totals["entry_fee"])],
             ["Total Transaction Cost (USD)", _money(totals["tx_cost"])],
             ["Total Net (USD)", _money(totals["net_usd"])],
-            ["Total Net (NGN)", _ngn(totals["net_ngn"])],
+            ["Total Net (NGN) — Cost Basis", _ngn(totals["net_ngn"])],
             ["Total Shares Allocated", _shares_qty(totals["shares"])],
-            ["Total Value at Price Per Share (NGN)", _ngn(totals["value_ngn"])],
+            ["Total Market Value (NGN)", _ngn(totals["market_value_ngn"]) if all_valued else NOT_VALUED_YET],
+            ["Total Gain / Loss (NGN)", _ngn(totals["gain_loss_ngn"]) if all_valued else NOT_VALUED_YET],
             ["Total Refund (USD)", _money(totals["refund_usd"]) if totals["refund_usd"] > 0 else "—"],
         ]
         if theme.is_jh:
@@ -2990,9 +3055,13 @@ def download_investor_statement_excel(client_code):
         email = inv.investor_email if inv else ""
 
         # Task 5: the FUNDS sheets below (Portfolio Summary / Statement
-        # Timeline) are EpochLedger-based and meaningless for a Shares-only
-        # investor (SHARES never posts to EpochLedger — see Task 3) — omit
-        # them entirely rather than emit an all-zero/empty "Funds" section.
+        # Timeline) are EpochLedger-based (fund-level monthly epoch
+        # compounding) and meaningless for a Shares-only investor — SHARES
+        # still never posts to EpochLedger (that's unrelated to NAV; see
+        # Task 7, which corrected SHARES to value shares x NAV-per-share via
+        # InvestorShares/NavHistory, same as FUNDS, just not via this
+        # particular epoch-reconciliation mechanism) — omit these sheets
+        # entirely rather than emit an all-zero/empty "Funds" section.
         has_funds_holdings = db.session.query(Investment.id).filter(
             func.lower(Investment.internal_client_code) == func.lower(client_code),
             Investment.product_type == FUNDS,
@@ -3042,14 +3111,25 @@ def download_investor_statement_excel(client_code):
                 "Audit Hash": str(r.get("audit_hash") or "")[:20] + "..." if r.get("audit_hash") else "—",
             })
 
-        # Task 5: Shares holdings sheet — built directly from Investment rows
+        # Task 5/7: Shares holdings sheet — built directly from Investment rows
         # (product_type SHARES), independent of the FUNDS-only EpochLedger-
-        # based aggregation above (SHARES never posts to EpochLedger — see
-        # Task 3). Omitted entirely (no sheet) when the investor holds none.
+        # based aggregation above (SHARES never posts to EpochLedger — that's
+        # unrelated to NAV; see Task 7, which values SHARES as shares x
+        # NAV-per-share via InvestorShares/NavHistory, same as FUNDS, just not
+        # via this epoch-reconciliation mechanism). Omitted entirely (no
+        # sheet) when the investor holds none.
         shares_holdings = db.session.query(Investment).filter(
             func.lower(Investment.internal_client_code) == func.lower(client_code),
             Investment.product_type == SHARES,
         ).order_by(Investment.date_deposited.asc()).all()
+
+        from app.Funds.investor_shares import InvestorShares as _InvestorShares
+        shares_investor_shares_by_id = {
+            s.investment_id: s
+            for s in db.session.query(_InvestorShares).filter(
+                _InvestorShares.investment_id.in_([h.id for h in shares_holdings])
+            ).all()
+        } if shares_holdings else {}
 
         shares_rows = []
         for s in shares_holdings:
@@ -3058,11 +3138,18 @@ def download_investor_statement_excel(client_code):
             tx_cost = Decimal(str(s.transfer_fee_deducted or 0))
             net_usd = deposit - entry_fee - tx_cost
             refund_usd = Decimal(str(s.oversubscription_refund_amount or 0))
-            value_ngn = (
-                float(Decimal(str(s.shares_owned)) * Decimal(str(s.shares_price_per_share_ngn)))
-                if s.shares_owned is not None and s.shares_price_per_share_ngn is not None
-                else "—"
-            )
+
+            nav_per_share, is_valued = _resolve_shares_nav_for_investment(s, shares_investor_shares_by_id, db.session)
+            if is_valued and s.shares_owned is not None:
+                market_value_ngn = float(Decimal(str(s.shares_owned)) * Decimal(str(nav_per_share)))
+                cost_basis_ngn = float(s.net_ngn) if s.net_ngn is not None else 0.0
+                gain_loss_ngn = market_value_ngn - cost_basis_ngn
+                nav_display = float(nav_per_share)
+            else:
+                market_value_ngn = "Not valued yet"
+                gain_loss_ngn = "Not valued yet"
+                nav_display = "Not valued yet"
+
             refund_status = "—"
             if refund_usd > 0:
                 refund_wd = (
@@ -3084,10 +3171,11 @@ def download_investor_statement_excel(client_code):
                 "Transaction Cost (USD)": float(tx_cost),
                 "Net (USD)": float(net_usd),
                 "Exchange Rate (NGN/USD)": float(s.shares_exchange_rate_ngn) if s.shares_exchange_rate_ngn is not None else "—",
-                "Net (NGN)": float(s.net_ngn) if s.net_ngn is not None else "—",
-                "Price Per Share (NGN)": float(s.shares_price_per_share_ngn) if s.shares_price_per_share_ngn is not None else "—",
+                "Net (NGN) - Cost Basis": float(s.net_ngn) if s.net_ngn is not None else "—",
                 "Shares Allocated": float(s.shares_owned) if s.shares_owned is not None else "—",
-                "Value at Price Per Share (NGN)": value_ngn,
+                "NAV / Share (NGN)": nav_display,
+                "Market Value (NGN)": market_value_ngn,
+                "Gain / Loss (NGN)": gain_loss_ngn,
                 "Refund (USD)": float(refund_usd) if refund_usd > 0 else "—",
                 "Refund Status": refund_status,
             })
@@ -5055,6 +5143,8 @@ def list_withdrawals():
     List withdrawals with optional filters:
     - status=Pending|Approved|Rejected
     - source=investor_request|oversubscription_refund
+    - product=FUNDS|SHARES (Task 11) — resolved via the withdrawal's fund
+      (every withdrawal, refund or not, always has fund_id set)
     - fund_id=<int>
     - search (optional): matches client code
     - count_only=true: skip building/returning rows, just return the matching
@@ -5068,6 +5158,7 @@ def list_withdrawals():
     try:
         status = request.args.get('status')
         source = request.args.get('source')
+        product = (request.args.get('product') or '').strip().upper() or None
         fund_id = request.args.get('fund_id', type=int)
         search = (request.args.get('search') or '').strip()
         count_only = (request.args.get('count_only') or '').lower() == 'true'
@@ -5080,6 +5171,8 @@ def list_withdrawals():
             q = q.filter(Withdrawal.status == status)
         if source:
             q = q.filter(Withdrawal.source == source)
+        if product:
+            q = q.join(CoreFund, CoreFund.id == Withdrawal.fund_id).filter(CoreFund.product_type == product)
         if fund_id:
             q = q.filter(Withdrawal.fund_id == fund_id)
         if search:
@@ -5103,12 +5196,24 @@ def list_withdrawals():
             .limit(per_page)
             .all()
         )
+
+        # Task 11: investor name for the "Investor" column — one bulk lookup
+        # for the whole page instead of one query per row.
+        client_codes = {w.internal_client_code for w in rows}
+        investor_names = dict(
+            db.session.query(Investment.internal_client_code, Investment.investor_name)
+            .filter(Investment.internal_client_code.in_(client_codes))
+            .all()
+        ) if client_codes else {}
+
         data = [
             {
                 "id": w.id,
                 "client_id": w.internal_client_code,
+                "investor_name": investor_names.get(w.internal_client_code),
                 "fund_id": w.fund_id,
                 "fund_name": w.fund.fund_name if w.fund else w.fund_name,  # Use relationship if available, fallback to column
+                "product_type": w.fund.product_type if w.fund else None,
                 "amount": float(w.gross_amount if getattr(w, "gross_amount", None) is not None else w.amount or 0),
                 "status": w.status,
                 "date_withdrawn": w.date_withdrawn.isoformat(),
@@ -5117,6 +5222,10 @@ def list_withdrawals():
                 "source": w.source or WITHDRAWAL_SOURCE_INVESTOR_REQUEST,
                 "batch_id": w.batch_id,
                 "batch_name": w.batch.batch_name if w.batch else None,
+                # The NGN/1 USD rate used at SHARES deployment (same rate for
+                # every investor in the batch) — only meaningful for a
+                # source=oversubscription_refund row, which always has batch_id.
+                "rate_used": float(w.batch.shares_exchange_rate_ngn) if w.batch and w.batch.shares_exchange_rate_ngn is not None else None,
                 # Only meaningful for source=oversubscription_refund — whether the
                 # one-time Oversubscription/Refund Notice has been sent for this
                 # refund yet (see EmailService.send_oversubscription_refund_notices).
@@ -5434,6 +5543,7 @@ def bulk_update_withdrawals():
       ids?: number[],           # exact withdrawal IDs (e.g. a checkbox selection)
       scope?: {                 # used instead of ids: act on every row matching this
         source?: 'investor_request' | 'oversubscription_refund',
+        product?: 'FUNDS' | 'SHARES',
         fund_id?: number,
       },
       note?: string,
@@ -5469,9 +5579,12 @@ def bulk_update_withdrawals():
             q = q.filter(Withdrawal.id.in_(ids))
         else:
             source = scope.get('source')
+            product = (scope.get('product') or '').strip().upper() or None
             fund_id = scope.get('fund_id')
             if source:
                 q = q.filter(Withdrawal.source == source)
+            if product:
+                q = q.join(CoreFund, CoreFund.id == Withdrawal.fund_id).filter(CoreFund.product_type == product)
             if fund_id:
                 q = q.filter(Withdrawal.fund_id == fund_id)
 
@@ -5603,7 +5716,7 @@ def bulk_update_withdrawals():
                         "user_id": actor_id, "user_email": actor_email, "user_name": actor_name,
                         "action": "WITHDRAWAL_APPROVED", "target_type": "Withdrawal", "target_id": w.id,
                         "target_name": f"{w.internal_client_code} - {w.fund_name}",
-                        "description": f"AUM updated: ${amount} withdrawal processed for client {w.internal_client_code} (bulk approval)",
+                        "description": f"Total updated: ${amount} withdrawal processed for client {w.internal_client_code} (bulk approval)",
                         "old_value": _json.dumps({
                             "client_code": w.internal_client_code, "fund_name": w.fund_name,
                             "amount": float(amount), "valuation_before": float(old_valuation),
@@ -5759,7 +5872,7 @@ def _calculate_investor_impact(withdrawal: Withdrawal):
             target_type="Withdrawal",
             target_id=withdrawal.id,
             target_name=f"{client_code} - {withdrawal.fund_name}",
-            description=f"AUM updated: ${amount} withdrawal processed for client {client_code}",
+            description=f"Total updated: ${amount} withdrawal processed for client {client_code}",
             old_value={
                 "client_code": client_code,
                 "fund_name": withdrawal.fund_name,

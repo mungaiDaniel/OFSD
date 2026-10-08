@@ -46,14 +46,14 @@ export default function PortfolioPage() {
       <div className="page-header-row mb-4">
         <div>
           <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>Portfolio</h1>
-          <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>Global AUM and performance across all active funds</p>
+          <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>Global total and performance across all active funds</p>
         </div>
         <button onClick={handleExport} className="btn btn-sm d-flex align-items-center gap-2 px-3 py-2 fw-bold" style={{ border: "1px solid rgba(255,255,255,0.15)", color: "var(--color-text-secondary)", background: "transparent", fontSize: "12px", borderRadius: "8px" }}><Download size={14} /> Export Excel</button>
       </div>
 
       <div className="row g-3 mb-4">
         <div className="col-lg-4 col-sm-6">
-          <KPICard label="Total AUM" value={formatCurrencyCompact(totalAUM)} />
+          <KPICard label="Total" value={formatCurrencyCompact(totalAUM)} />
         </div>
         <div className="col-lg-4 col-sm-6">
           <KPICard label="Active funds" value={String(fundNames.length)} />
@@ -65,7 +65,7 @@ export default function PortfolioPage() {
 
       <div className="row g-4 mb-4">
         <div className="col-lg-6">
-          <ChartCard title="Portfolio AUM over time" legend={fundNames.map((n) => ({ label: `${n} ${formatCurrencyCompact(latestPerFund.find((f) => f.name === n)?.value || 0)}`, color: getFundColor(n) }))}>
+          <ChartCard title="Portfolio Total over time" legend={fundNames.map((n) => ({ label: `${n} ${formatCurrencyCompact(latestPerFund.find((f) => f.name === n)?.value || 0)}`, color: getFundColor(n) }))}>
             <PortfolioAUMChart data={{ labels: labels.length ? labels : ["—"], funds: fundNames.map((n) => ({ name: n, data: sorted.filter((r) => r.fund_name === n).map((r) => r.summary.total_closing_aum), growth: sorted.filter((r) => r.fund_name === n).map((r) => r.performance_rate_percent || 0) })) }} height={300} />
           </ChartCard>
         </div>

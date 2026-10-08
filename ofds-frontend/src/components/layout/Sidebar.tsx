@@ -12,7 +12,6 @@ import {
   TrendingUp,
   FileBarChart,
   ArrowDownUp,
-  Undo2,
   Users,
   BookUser,
   ShieldCheck,
@@ -46,6 +45,8 @@ const mainNav: NavItem[] = [
 ];
 
 // ── Funds / Shares collapsible groups ──
+// Task 9: exact item order — Batches, Investors, Valuations, then the
+// fund/share-management page itself (named after its product, last).
 const navGroups: NavGroup[] = [
   {
     key: "funds",
@@ -54,8 +55,8 @@ const navGroups: NavGroup[] = [
     items: [
       { label: "Batches", path: ROUTES.FUNDS_BATCHES, icon: <Layers size={15} /> },
       { label: "Investors", path: ROUTES.FUNDS_INVESTORS, icon: <BookUser size={15} /> },
-      { label: "Funds & share classes", path: ROUTES.FUND_MANAGE, icon: <Landmark size={15} /> },
-      { label: "Valuations", path: ROUTES.VALUATIONS, icon: <TrendingUp size={15} /> },
+      { label: "Valuations", path: ROUTES.FUNDS_VALUATIONS, icon: <TrendingUp size={15} /> },
+      { label: "Funds", path: ROUTES.FUNDS, icon: <Landmark size={15} /> },
     ],
   },
   {
@@ -65,8 +66,8 @@ const navGroups: NavGroup[] = [
     items: [
       { label: "Batches", path: ROUTES.SHARES_BATCHES, icon: <Layers size={15} /> },
       { label: "Investors", path: ROUTES.SHARES_INVESTORS, icon: <BookUser size={15} /> },
-      { label: "Deployment & allocation", path: ROUTES.SHARES_DEPLOYMENT, icon: <TrendingUp size={15} /> },
-      { label: "Refunds", path: ROUTES.SHARES_REFUNDS, icon: <Undo2 size={15} /> },
+      { label: "Valuations", path: ROUTES.SHARES_VALUATIONS, icon: <TrendingUp size={15} /> },
+      { label: "Shares", path: ROUTES.SHARES, icon: <Coins size={15} /> },
     ],
   },
 ];
