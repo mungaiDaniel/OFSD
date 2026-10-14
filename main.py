@@ -1,6 +1,7 @@
 import os
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
+from flask_migrate import Migrate
 from config import DevelopmentConfig as Config
 from app.database.database import db
 from flask_jwt_extended import JWTManager, verify_jwt_in_request, get_jwt_identity, decode_token
@@ -49,6 +50,10 @@ def create_app(config_filename):
             "http://osfmr.aib-axysafrica.com"
         ]}})
         db.init_app(app)
+        # Registers `flask db <command>` (upgrade/current/history/...) — this
+        # was never wired up before, which is why those commands didn't exist.
+        # Doesn't change any runtime behavior; only adds the CLI commands.
+        Migrate(app, db)
         EmailService.init_app(app)
         app.app_context().push()
         db.create_all()

@@ -65,8 +65,8 @@ def upgrade():
 
     conn.execute(
         text("""
-            INSERT INTO audit_logs (action, target_type, description, success, timestamp)
-            VALUES (:action, 'migration', :description, true, now())
+            INSERT INTO audit_logs (action, target_type, description, success, timestamp, date_created, date_updated, created_by, active)
+            VALUES (:action, 'migration', :description, true, now(), now(), now(), 'SYSTEM', true)
         """),
         {
             "action": MARKER_ACTION,
