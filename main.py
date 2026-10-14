@@ -1,4 +1,5 @@
 import os
+import sys
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -78,8 +79,23 @@ def create_app(config_filename):
         # sent twice (two schedulers, each polling the same 'Queued' rows).
         # WERKZEUG_RUN_MAIN is only set in the worker child, so this guard makes
         # sure schedulers start there exactly once, not in the watcher too.
-        # In production (debug=False, no reloader) this is always true.
-        is_reloader_parent = app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+        #
+        # BUG FIXED: this used to be just `app.debug and WERKZEUG_RUN_MAIN != "true"`.
+        # DevelopmentConfig.DEBUG is True, and this config is used everywhere
+        # (including prod, via gunicorn) — gunicorn NEVER sets WERKZEUG_RUN_MAIN
+        # (that var only exists under Werkzeug's own dev-server reloader), so the
+        # old condition was always true under gunicorn too: gunicorn's one real
+        # worker was being mistaken for the reloader's "watcher" process, which
+        # silently skipped the schema-sync DDL below AND all three background
+        # schedulers (batch/backup/email-queue) in every production run. The
+        # `"gunicorn" not in sys.modules` check rules gunicorn out explicitly —
+        # gunicorn always has its own package already imported into sys.modules
+        # before it loads this app module, `python main.py` (local dev) never does.
+        is_reloader_parent = (
+            app.debug
+            and "gunicorn" not in sys.modules
+            and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+        )
         if is_reloader_parent:
             print("Reloader watcher process detected — skipping scheduler startup here (worker process will start them).")
         else:
