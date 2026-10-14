@@ -16,7 +16,12 @@ class Investment(Base, db.Model):
     internal_client_code = Column(String(50), nullable=False, index=True)  # Unique ID from Excel (now allows duplicates across batches)
     amount_deposited = Column(Numeric(20, 2), nullable=False)
     deployment_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Pro-rata transaction cost deducted at deployment
-    transfer_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Pro-rata transfer cost deducted at transfer
+    transfer_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Transfer-stage transaction cost for this investor (pro-rata formula, or amount_deposited - transfer_amount_received when manually entered)
+    # The real amount that landed in the bank for this investor at the Transfer
+    # stage, manually entered per investor (FUNDS only — see
+    # StatusUpdateController._apply_transfer_cost_deduction). NULL when the
+    # batch used the legacy pro-rata transaction-cost formula instead.
+    transfer_amount_received = Column(Numeric(20, 2), nullable=True)
     date_deposited = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
     date_transferred = Column(DateTime, nullable=True)  # When actually transferred/deployed
     deposit_date = Column(Date, nullable=True)  # Actual date client deposited money (distinct from system timestamp)

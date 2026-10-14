@@ -202,90 +202,59 @@ class StatusUpdateController:
         session,
         transfer_cost_total=None,
         entry_fee_percent=0,
+        amounts_received=None,
     ):
         """
-        Apply two-stage transfer deductions to all investors in the batch.
+        Apply transfer-stage deductions to all investors in the batch.
 
-        Order of operations:
-        A) transaction_fee_usd = total_transaction_cost * investor_weight
-           net_after_transaction = amount_deposited - transaction_fee_usd
-        B) entry_fee_usd = amount_deposited * entry_fee_percent
+        Two modes:
+        - Manual per-investor mode (`amounts_received` given — {investment_id:
+          amount_received_usd}): each investor's "amount received" is exactly
+          what was typed in for them — the real amount that landed in the
+          bank, already net of whatever the bank itself took. transfer_fee_deducted
+          becomes amount_deposited - amount_received (so it keeps meaning "what
+          the transfer cost this investor", just computed from reality instead
+          of a formula) and the real figure is also stored verbatim on
+          transfer_amount_received for an audit trail. An investor missing from
+          the map defaults to their full amount_deposited (nothing lost).
+        - Legacy pro-rata mode (`amounts_received` not given — unchanged): one
+          aggregate transfer_cost_total is split proportional to each
+          investor's share of the batch's total deposits.
+
+        Order of operations (both modes):
+        A) net_after_transaction = amount actually received after the bank's cut
+        B) entry_fee_usd = net_after_transaction * entry_fee_percent
            main_balance = net_after_transaction - entry_fee_usd
         """
         from app.Investments.model import Investment
 
-        transfer_cost = Decimal(str(transfer_cost_total if transfer_cost_total is not None else (batch.transfer_transaction_cost or 0)))
         entry_fee_ratio = Decimal(str(entry_fee_percent or 0)) / Decimal("100")
+        quant = Decimal("0.01")
+        now = datetime.now(timezone.utc)
 
-        # Get all investments in this batch
         investments = session.query(Investment).filter(
             Investment.batch_id == batch.id
         ).all()
-        
+
         if not investments:
             logger.warning(f"No investments found for batch {batch.id}")
             return {"total_transaction_fee_usd": Decimal("0.00"), "total_entry_fee_usd": Decimal("0.00"), "total_main_balance": Decimal("0.00")}
 
-        total_principal = sum(Decimal(str(inv.amount_deposited or 0)) for inv in investments)
-        if total_principal <= 0:
-            logger.warning(f"Batch {batch.id}: total principal is zero; skipping weighted allocation")
-            return {"total_transaction_fee_usd": Decimal("0.00"), "total_entry_fee_usd": Decimal("0.00"), "total_main_balance": Decimal("0.00")}
-
-        logger.info(
-            f"Batch {batch.id}: Two-stage transfer deduction | "
-            f"transaction_total=${transfer_cost}, entry_fee_percent={entry_fee_percent}% "
-            f"across principal=${total_principal} and investors={len(investments)}"
-        )
-
-        allocated_total = Decimal("0.00")
-        quant = Decimal("0.01")
-        total_entry_fee = Decimal("0.00")
-        total_main_balance = Decimal("0.00")
-        now = datetime.now(timezone.utc)
-
-        # Per-row math stays a Python loop (the "last row gets the rounding
-        # remainder" allocation is inherently sequential), but persistence is
-        # batched via bulk_update_mappings instead of session.add() per row —
-        # at 100k investments, ORM-tracked per-row updates (each triggering its
-        # own change-tracking overhead) plus a logger.info() call per row were
-        # together what made "Advance to Transfer" hang/fail instead of just
-        # being slow. One summary log line replaces the removed per-row ones.
-        mappings = []
-        for idx, investment in enumerate(investments):
-            investor_principal = Decimal(str(investment.amount_deposited or 0))
-            weight = investor_principal / total_principal if total_principal > 0 else Decimal("0")
-
-            # Allocate rounded cents; final row gets remainder to keep totals exact.
-            if idx == len(investments) - 1:
-                investor_fee = (transfer_cost - allocated_total).quantize(quant)
-            else:
-                investor_fee = (transfer_cost * weight).quantize(quant)
-                allocated_total += investor_fee
-
-            # Guard against edge-case negatives from remainder rounding.
-            if investor_fee < Decimal("0"):
-                investor_fee = Decimal("0.00")
-
-            net_after_transaction = investor_principal - investor_fee
-            if net_after_transaction < Decimal("0"):
-                net_after_transaction = Decimal("0.00")
-
-            # Entry fee is charged after the transfer cost deduction on the remaining amount.
+        def _finalize_row(investment, net_after_transaction, investor_fee, amount_received=None):
             entry_fee_usd = (net_after_transaction * entry_fee_ratio).quantize(quant)
             if entry_fee_usd < Decimal("0"):
                 entry_fee_usd = Decimal("0.00")
-
             date_transferred = investment.date_transferred
             if batch.is_transferred and date_transferred is None:
                 date_transferred = now
-
-            mappings.append({
+            mapping = {
                 "id": investment.id,
                 "transfer_fee_deducted": investor_fee,
                 "deployment_fee_deducted": entry_fee_usd,
                 "date_transferred": date_transferred,
-            })
-
+            }
+            if amount_received is not None:
+                mapping["transfer_amount_received"] = amount_received
             # net_principal is a Python @property computed from the fields just
             # set above (plus any pre-existing oversubscription refund, which
             # deploy-stage sets — never yet set this early in the normal
@@ -293,15 +262,76 @@ class StatusUpdateController:
             # correctness regardless of ordering) — mirrored here instead of
             # reading it off the not-yet-flushed ORM instance, so the summary
             # totals are correct without needing a round-trip first.
-            row_net_principal = (
-                net_after_transaction - entry_fee_usd
-                - Decimal(str(investment.oversubscription_refund_amount or 0))
+            row_net_principal = max(
+                Decimal("0.00"),
+                net_after_transaction - entry_fee_usd - Decimal(str(investment.oversubscription_refund_amount or 0)),
             )
-            if row_net_principal < Decimal("0"):
-                row_net_principal = Decimal("0.00")
+            return mapping, entry_fee_usd, row_net_principal
 
-            total_entry_fee += entry_fee_usd
-            total_main_balance += row_net_principal
+        mappings = []
+        total_transaction_fee = Decimal("0.00")
+        total_entry_fee = Decimal("0.00")
+        total_main_balance = Decimal("0.00")
+
+        if amounts_received is not None:
+            logger.info(
+                f"Batch {batch.id}: manual per-investor transfer amounts | "
+                f"entry_fee_percent={entry_fee_percent}% across {len(investments)} investor(s)"
+            )
+            for investment in investments:
+                investor_principal = Decimal(str(investment.amount_deposited or 0))
+                raw_received = amounts_received.get(investment.id)
+                amount_received = Decimal(str(raw_received)) if raw_received is not None else investor_principal
+                amount_received = max(Decimal("0.00"), amount_received).quantize(quant)
+                investor_fee = max(Decimal("0.00"), (investor_principal - amount_received).quantize(quant))
+
+                mapping, entry_fee_usd, row_net_principal = _finalize_row(
+                    investment, amount_received, investor_fee, amount_received=amount_received
+                )
+                mappings.append(mapping)
+                total_transaction_fee += investor_fee
+                total_entry_fee += entry_fee_usd
+                total_main_balance += row_net_principal
+        else:
+            transfer_cost = Decimal(str(transfer_cost_total if transfer_cost_total is not None else (batch.transfer_transaction_cost or 0)))
+            total_principal = sum(Decimal(str(inv.amount_deposited or 0)) for inv in investments)
+            if total_principal <= 0:
+                logger.warning(f"Batch {batch.id}: total principal is zero; skipping weighted allocation")
+                return {"total_transaction_fee_usd": Decimal("0.00"), "total_entry_fee_usd": Decimal("0.00"), "total_main_balance": Decimal("0.00")}
+
+            logger.info(
+                f"Batch {batch.id}: Two-stage transfer deduction | "
+                f"transaction_total=${transfer_cost}, entry_fee_percent={entry_fee_percent}% "
+                f"across principal=${total_principal} and investors={len(investments)}"
+            )
+
+            # Per-row math stays a Python loop (the "last row gets the rounding
+            # remainder" allocation is inherently sequential), but persistence is
+            # batched via bulk_update_mappings instead of session.add() per row —
+            # at 100k investments, ORM-tracked per-row updates (each triggering its
+            # own change-tracking overhead) plus a logger.info() call per row were
+            # together what made "Advance to Transfer" hang/fail instead of just
+            # being slow. One summary log line replaces the removed per-row ones.
+            allocated_total = Decimal("0.00")
+            for idx, investment in enumerate(investments):
+                investor_principal = Decimal(str(investment.amount_deposited or 0))
+                weight = investor_principal / total_principal if total_principal > 0 else Decimal("0")
+
+                # Allocate rounded cents; final row gets remainder to keep totals exact.
+                if idx == len(investments) - 1:
+                    investor_fee = (transfer_cost - allocated_total).quantize(quant)
+                else:
+                    investor_fee = (transfer_cost * weight).quantize(quant)
+                    allocated_total += investor_fee
+                investor_fee = max(Decimal("0.00"), investor_fee)
+
+                net_after_transaction = max(Decimal("0.00"), investor_principal - investor_fee)
+
+                mapping, entry_fee_usd, row_net_principal = _finalize_row(investment, net_after_transaction, investor_fee)
+                mappings.append(mapping)
+                total_transaction_fee += investor_fee
+                total_entry_fee += entry_fee_usd
+                total_main_balance += row_net_principal
 
         session.bulk_update_mappings(Investment, mappings)
         session.commit()
@@ -310,7 +340,7 @@ class StatusUpdateController:
             f"{len(mappings)} investment(s) updated, total_entry_fee=${total_entry_fee.quantize(quant)}"
         )
         return {
-            "total_transaction_fee_usd": transfer_cost,
+            "total_transaction_fee_usd": total_transaction_fee.quantize(quant),
             "total_entry_fee_usd": total_entry_fee.quantize(quant),
             "total_main_balance": total_main_balance.quantize(quant),
         }

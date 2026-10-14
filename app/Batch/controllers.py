@@ -2029,6 +2029,16 @@ class BatchController:
             old_is_active = batch.is_active
             transfer_entry_fee_percent = Decimal("0")
             transfer_settings_changed = False
+            # Manual per-investor transfer amounts: {investment_id: amount_received_usd}.
+            # When present, replaces the pro-rata transaction-cost split with the real
+            # amount that landed in the bank for each investor (see
+            # StatusUpdateController._apply_transfer_cost_deduction). FUNDS only.
+            transfer_amounts_received = None
+            if data.get('transfer_amounts_received') is not None:
+                transfer_amounts_received = {
+                    int(k): v for k, v in data['transfer_amounts_received'].items()
+                }
+                transfer_settings_changed = True
 
             # SHARES deployment validation MUST happen before any field below is
             # mutated (same reasoning as the transfer-fee check below it) — a 400
@@ -2167,6 +2177,7 @@ class BatchController:
                             session,
                             transfer_cost_total=batch.transfer_transaction_cost,
                             entry_fee_percent=transfer_entry_fee_percent,
+                            amounts_received=transfer_amounts_received,
                         )
                         batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
                         session.commit()
@@ -2208,6 +2219,7 @@ class BatchController:
                             session,
                             transfer_cost_total=batch.transfer_transaction_cost,
                             entry_fee_percent=transfer_entry_fee_percent,
+                            amounts_received=transfer_amounts_received,
                         )
                         batch.transfer_transaction_cost = Decimal(str(deduction_summary["total_transaction_fee_usd"]))
                     session.commit()

@@ -2,7 +2,6 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { batchService } from "@/services/batchService";
 import { reportService } from "@/services/reportService";
-import { getBatchDepositBaseTotal } from "@/lib/transferDeductions";
 import { ROUTES, STAGE_LABELS } from "@/lib/constants";
 import type { Batch, BatchStage } from "@/lib/types";
 import { toast } from "sonner";
@@ -403,13 +402,12 @@ export default function BatchDetailPage() {
     }
   };
 
-  const handleTransferCostConfirm = async (transactionCostUsd: number, entryFeePercent: number) => {
+  const handleTransferCostConfirm = async (amountsReceived: Record<number, number>, entryFeePercent: number) => {
     setIsTransferring(true);
     const patchData: Record<string, unknown> = {
       stage: 2,
       is_transferred: true,
-      transfer_transaction_cost: transactionCostUsd,
-      transfer_entry_fee_percent: entryFeePercent,
+      transfer_amounts_received: amountsReceived,
       entry_fee_percentage: entryFeePercent,
     };
     try {
@@ -572,7 +570,6 @@ export default function BatchDetailPage() {
     }
   };
 
-  const totalBatchDeposit = getBatchDepositBaseTotal(fullInvestments);
 
   if (loading || !batch) {
     return (
@@ -1023,7 +1020,7 @@ export default function BatchDetailPage() {
       {/* Email confirmation gate — opens after stage advance or file upload */}
       <EmailConfirmationModal open={emailConfirmModalOpen} onClose={() => setEmailConfirmModalOpen(false)} batchId={batchId} />
       <DeploymentDateModal open={deployModalOpen} onClose={() => setDeployModalOpen(false)} onConfirm={handleDeployDateConfirm} isLoading={isDeploying} investments={fullInvestments} isDprpFund={batch.is_dprp_fund} />
-      <TransferCostModal open={transferModalOpen} onClose={() => setTransferModalOpen(false)} totalBatchDeposit={totalBatchDeposit} onConfirm={handleTransferCostConfirm} isLoading={isTransferring} />
+      <TransferCostModal open={transferModalOpen} onClose={() => setTransferModalOpen(false)} investments={fullInvestments} onConfirm={handleTransferCostConfirm} isLoading={isTransferring} />
       <SharesTransferModal open={sharesTransferModalOpen} onClose={() => setSharesTransferModalOpen(false)} batchId={batchId} onConfirm={handleSharesTransferConfirm} isLoading={isSharesTransferring} />
     </div>
   );

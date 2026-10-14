@@ -117,6 +117,10 @@ def create_app(config_filename):
             # Add new columns for transfer transaction costs
             db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS transfer_transaction_cost NUMERIC(20, 2) DEFAULT 0.00"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS transfer_fee_deducted NUMERIC(20, 2) DEFAULT 0.00"))
+            # Manual per-investor "amount received" at the Transfer stage (FUNDS
+            # only) — the real amount that landed in the bank for this investor,
+            # typed in by hand instead of computed via the pro-rata formula.
+            db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS transfer_amount_received NUMERIC(20, 2)"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS share_series VARCHAR(100)"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS shares_owned NUMERIC(24, 4)"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS original_deposit_amount NUMERIC(20, 2)"))
