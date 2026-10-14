@@ -2,10 +2,12 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { batchService } from "@/services/batchService";
 import { reportService } from "@/services/reportService";
+import { investmentService } from "@/services/investmentService";
 import { ROUTES, STAGE_LABELS } from "@/lib/constants";
 import type { Batch, BatchStage } from "@/lib/types";
 import { toast } from "sonner";
 import { useBatchReconciliation } from "@/hooks/useBatchReconciliation";
+import { getUserRole } from "@/lib/auth";
 import { ArrowLeft, Pencil, Upload, Download, Trash2, Search, ChevronLeft, ChevronRight, Users2, Rows3 } from "lucide-react";
 import type { BatchInvestorLight } from "@/lib/types";
 import { EmailConfirmationModal } from "@/components/ui/EmailConfirmationModal";
@@ -176,6 +178,8 @@ export default function BatchDetailPage() {
   const allBatchRowsPageRef = useRef(1);
   const allBatchRowsFetchingRef = useRef(false);
   const [exportingBatch, setExportingBatch] = useState(false);
+  // Delete-investor (Show all view only, super_admin only — see isSuperAdmin below).
+  const [deletingInvestmentId, setDeletingInvestmentId] = useState<number | null>(null);
   // Full per-investor list (cheap fields only) fetched on-demand right before
   // the Transfer/Deploy modals open — those need every investor in the batch
   // to group by share class, but that only happens once per stage change.
@@ -318,6 +322,58 @@ export default function BatchDetailPage() {
 
   const isShares = batch?.product_type === "SHARES";
   const investorColumns = getInvestorColumns(isShares);
+  const isSuperAdmin = getUserRole() === "super_admin";
+
+  // "Show all" view only — delete an investor's deposit row from this batch
+  // completely (super_admin only, server-enforced too). Not offered from the
+  // search-first table to keep that path simple; super admins doing cleanup
+  // use "Show all" anyway.
+  const handleDeleteInvestor = async (inv: BatchInvestorLight & { investor_name?: string }) => {
+    if (!window.confirm(`Permanently delete ${inv.investor_name || "this investor"}'s deposit from this batch? This cannot be undone.`)) {
+      return;
+    }
+    setDeletingInvestmentId(inv.id);
+    try {
+      await investmentService.deleteInvestment(inv.id);
+      setAllBatchRows((prev) => prev.filter((row) => row.id !== inv.id));
+      setBatch((prev) => (prev ? { ...prev, investors_count: Math.max(0, (prev.investors_count ?? 1) - 1) } : prev));
+      toast.success("Investor deleted");
+    } catch (err: unknown) {
+      const msg = (err as any)?.response?.data?.message || "Failed to delete investor";
+      toast.error(msg);
+    } finally {
+      setDeletingInvestmentId(null);
+    }
+  };
+
+  const showAllColumns = isSuperAdmin
+    ? [
+        ...investorColumns,
+        {
+          key: "actions",
+          label: "",
+          align: "right" as const,
+          grid: "44px",
+          render: (inv: any) => (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteInvestor(inv);
+              }}
+              disabled={deletingInvestmentId === inv.id}
+              title="Delete this investor's deposit from the batch (super admin only)"
+              style={{
+                background: "transparent", border: "none", color: "#F87171", padding: "4px", borderRadius: "4px",
+                cursor: deletingInvestmentId === inv.id ? "not-allowed" : "pointer",
+                opacity: deletingInvestmentId === inv.id ? 0.5 : 1, display: "inline-flex",
+              }}
+            >
+              <Trash2 size={14} />
+            </button>
+          ),
+        },
+      ]
+    : investorColumns;
 
   const advanceStage = async () => {
     if (!batch) return;
@@ -402,13 +458,20 @@ export default function BatchDetailPage() {
     }
   };
 
-  const handleTransferCostConfirm = async (amountsReceived: Record<number, number>, entryFeePercent: number) => {
+  const handleTransferCostConfirm = async (
+    mode: "manual" | "aggregate",
+    amountsReceived: Record<number, number> | null,
+    transactionCostUsd: number | null,
+    entryFeePercent: number
+  ) => {
     setIsTransferring(true);
     const patchData: Record<string, unknown> = {
       stage: 2,
       is_transferred: true,
-      transfer_amounts_received: amountsReceived,
       entry_fee_percentage: entryFeePercent,
+      ...(mode === "manual"
+        ? { transfer_amounts_received: amountsReceived }
+        : { transfer_transaction_cost: transactionCostUsd }),
     };
     try {
       await batchService.patch(batchId, patchData);
@@ -842,14 +905,14 @@ export default function BatchDetailPage() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: investorColumns.map((c) => c.grid).join(" "),
+                gridTemplateColumns: showAllColumns.map((c) => c.grid).join(" "),
                 gap: "12px",
                 borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
                 padding: "10px 16px",
                 background: "rgba(255, 255, 255, 0.02)",
               }}
             >
-              {investorColumns.map((c) => (
+              {showAllColumns.map((c) => (
                 <span
                   key={c.key}
                   style={{
@@ -882,7 +945,7 @@ export default function BatchDetailPage() {
                     onClick={() => inv.internal_client_code && navigate(ROUTES.INVESTOR_OVERVIEW(inv.internal_client_code))}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: investorColumns.map((c) => c.grid).join(" "),
+                      gridTemplateColumns: showAllColumns.map((c) => c.grid).join(" "),
                 gap: "12px",
                       alignItems: "center",
                       height: "100%",
@@ -893,7 +956,7 @@ export default function BatchDetailPage() {
                       fontSize: "12px",
                     }}
                   >
-                    {investorColumns.map((c) => (
+                    {showAllColumns.map((c) => (
                       <div key={c.key} style={{ textAlign: c.align, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {c.render(inv)}
                       </div>

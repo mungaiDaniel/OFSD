@@ -153,4 +153,9 @@ export const investmentService = {
     const res = await api.get<ApiResponse>(`/batches/notifications/recent/${notificationId}/failures`);
     return res.data;
   },
+
+  /** Permanently delete one investment (deposit) row — super_admin only, enforced server-side too. */
+  async deleteInvestment(investmentId: number): Promise<void> {
+    await api.delete(`${API.INVESTMENTS}/${investmentId}`);
+  },
 };

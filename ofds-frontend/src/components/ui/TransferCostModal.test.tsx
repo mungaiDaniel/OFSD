@@ -22,6 +22,20 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
     expect(amountInputs.map((i) => i.value)).toEqual(["2000", "3000"]);
   });
 
+  it("re-seeds amounts from investments once the real list arrives after the modal first mounts empty", () => {
+    // Reproduces the production bug: the modal is in the tree before the
+    // investor list has loaded (investments=[]), then `open` flips true once
+    // the real list is ready. A one-time useState initializer would freeze
+    // on the empty list; the useEffect keyed on `open` must re-seed instead.
+    const { rerender } = render(<TransferCostModal open={false} investments={[]} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    rerender(<TransferCostModal open={false} investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
+    rerender(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
+
+    const inputs = screen.getAllByRole("spinbutton").filter((el) => el.getAttribute("step") === "0.01" && el.getAttribute("min") === "0") as HTMLInputElement[];
+    const amountInputs = inputs.slice(1);
+    expect(amountInputs.map((i) => i.value)).toEqual(["2000", "3000"]);
+  });
+
   it("recomputes Total Active Principal live as amounts and entry fee change", async () => {
     const user = userEvent.setup();
     render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
@@ -40,7 +54,7 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
     expect(screen.getByText("$4,704.00")).toBeInTheDocument();
   });
 
-  it("confirms with an amountsReceived map keyed by investment id, plus the entry fee %", async () => {
+  it("confirms in manual mode with an amountsReceived map, null transaction cost, plus the entry fee %", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn().mockResolvedValue(undefined);
     render(<TransferCostModal open investments={INVESTORS} onConfirm={onConfirm} onClose={vi.fn()} />);
@@ -56,6 +70,58 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
 
     await user.click(screen.getByRole("button", { name: "Confirm & Transfer" }));
 
-    expect(onConfirm).toHaveBeenCalledWith({ 1: 1800, 2: 3000 }, 2);
+    expect(onConfirm).toHaveBeenCalledWith("manual", { 1: 1800, 2: 3000 }, null, 2);
+  });
+});
+
+describe("TransferCostModal — whole batch at once (aggregate mode)", () => {
+  it("switches to the aggregate view and hides the per-client table", async () => {
+    const user = userEvent.setup();
+    render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Whole batch at once" }));
+
+    expect(screen.queryByText("Alice Johnson")).not.toBeInTheDocument();
+    expect(screen.getByText("TOTAL TRANSACTION COST (USD)", { exact: false })).toBeInTheDocument();
+  });
+
+  it("computes Total Active Principal as deposit minus transaction cost minus entry fee", async () => {
+    const user = userEvent.setup();
+    render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Whole batch at once" }));
+
+    const inputs = screen.getAllByRole("spinbutton") as HTMLInputElement[];
+    const entryFeeInput = inputs[0]!;
+    const costInput = inputs[1]!;
+
+    await user.clear(costInput);
+    await user.type(costInput, "100");
+    await user.clear(entryFeeInput);
+    await user.type(entryFeeInput, "2");
+
+    // Deposited 5000 - cost 100 = 4900; entry fee 2% of 4900 = 98; net = 4802.00
+    expect(screen.getByText("$4,802.00")).toBeInTheDocument();
+  });
+
+  it("confirms in aggregate mode with a transactionCostUsd, null amountsReceived, plus the entry fee %", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    render(<TransferCostModal open investments={INVESTORS} onConfirm={onConfirm} onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Whole batch at once" }));
+
+    const inputs = screen.getAllByRole("spinbutton") as HTMLInputElement[];
+    const entryFeeInput = inputs[0]!;
+    const costInput = inputs[1]!;
+
+    await user.clear(costInput);
+    await user.type(costInput, "100");
+    await user.clear(entryFeeInput);
+    await user.type(entryFeeInput, "2");
+
+    await user.click(screen.getByRole("button", { name: "Confirm & Transfer" }));
+
+    expect(onConfirm).toHaveBeenCalledWith("aggregate", null, 100, 2);
   });
 });
