@@ -78,6 +78,7 @@ def _list_funds_impl(product):
             "id": f.id,
             "fund_name": f.fund_name,
             "fund_code": f.fund_code,
+            "description": f.description,
             "product_type": f.product_type,
             "is_active": f.is_active,
             "total_aum": total_aum,
@@ -208,6 +209,7 @@ def _get_single_fund_impl(fund_id, product):
             "id": f.id,
             "fund_name": f.fund_name,
             "fund_code": f.fund_code,
+            "description": f.description,
             "product_type": f.product_type,
             "is_active": f.is_active,
             "total_aum": total_aum,
@@ -280,37 +282,14 @@ def create_core_fund():
 
 def _update_fund_impl(fund_id, product):
     """
-    Update a fund's name/active state, scoped to one product — shared by
-    PATCH /api/v1/funds/<id> (FUNDS) and PATCH /api/v1/shares/<id> (SHARES),
-    Task 8. product_type itself is immutable after creation (same rule as
-    Batch/Investment) — not an updatable field here.
+    Edit a fund/share, scoped to one product — shared by
+    PATCH /api/v1/funds/<id> (FUNDS) and PATCH /api/v1/shares/<id> (SHARES).
+    Task 12: role check, validation, uniqueness, deactivation blockers,
+    optimistic concurrency, rename cascade and audit logging all live in
+    app/Funds/edit_service.py::update_fund. product_type stays immutable.
     """
-    f, error_response = get_fund_scoped_or_404(fund_id, product)
-    if error_response:
-        return error_response
-    try:
-        data = request.get_json() or {}
-
-        if "fund_name" in data and data["fund_name"] is not None:
-            name = str(data["fund_name"]).strip()
-            normalized = name.title()
-            # Prevent duplicate fund names (case-insensitive)
-            existing = db.session.query(CoreFund).filter(
-                func.lower(CoreFund.fund_name) == normalized.lower(),
-                CoreFund.id != fund_id
-            ).first()
-            if existing:
-                return make_response(jsonify({"status": 409, "message": "Fund with that name already exists"}), 409)
-            f.fund_name = normalized
-
-        if "is_active" in data:
-            f.is_active = bool(data["is_active"])
-
-        db.session.commit()
-        return make_response(jsonify({"status": 200, "message": "Fund updated", "data": {"id": f.id, "fund_name": f.fund_name, "is_active": f.is_active}}), 200)
-    except Exception as e:
-        db.session.rollback()
-        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+    from app.Funds.edit_service import update_fund
+    return update_fund(fund_id, product)
 
 
 @fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['PATCH'])
@@ -338,6 +317,32 @@ def _delete_fund_impl(fund_id, product):
     if error_response:
         return error_response
     try:
+        # Share classes reference the fund (share_classes.core_fund_id), so they
+        # must go first. Only empty ones are removed: a class with batches,
+        # holdings, NAV history or valuation runs would take that history with
+        # it, so refuse instead and suggest deactivating.
+        from app.Funds.share_class import ShareClass
+        from app.Funds.edit_service import share_class_currency_blockers
+        from app.Valuation.model import ValuationRun
+
+        classes = db.session.query(ShareClass).filter(ShareClass.core_fund_id == fund_id).all()
+        blockers = [
+            f"{sc.class_code}: {', '.join(reasons)}"
+            for sc in classes
+            if (reasons := [r for r in share_class_currency_blockers(sc) if not r.endswith(("deposit", "deposits"))])
+        ]
+        valuation_runs = db.session.query(func.count(ValuationRun.id)).filter(ValuationRun.core_fund_id == fund_id).scalar() or 0
+        if valuation_runs:
+            blockers.append(f"{valuation_runs} valuation run{'s' if valuation_runs != 1 else ''}")
+        if blockers:
+            return make_response(jsonify({
+                "status": 409,
+                "message": (
+                    f"Can't delete {f.fund_name}: it still has history ({'; '.join(blockers)}). "
+                    "Deactivate it instead."
+                ),
+            }), 409)
+
         # Delete related dependent rows before deleting fund to avoid FK constraints
         db.session.query(Investment).filter(Investment.fund_id == fund_id).delete(synchronize_session=False)
         from app.Investments.model import Withdrawal
@@ -346,6 +351,11 @@ def _delete_fund_impl(fund_id, product):
         # Optional: remove epoch-ledger rows by fund_name (if full deletion desired)
         from app.Investments.model import EpochLedger
         db.session.query(EpochLedger).filter(EpochLedger.fund_name == f.fund_name).delete(synchronize_session=False)
+
+        # Deposits were removed above, so these classes are now empty.
+        for sc in classes:
+            db.session.delete(sc)
+        db.session.flush()
 
         db.session.delete(f)
         db.session.commit()

@@ -84,8 +84,9 @@ class TestOverviewNgnTotals:
             # A FUNDS (KES) holding and a SHARES (NGN) holding — the NGN total
             # must reflect only the SHARES side, never summed with KES/USD.
             _make_holding("Axiom", "AXIOM-OV", "AXIOM-OV-I", "KES", deployment_nav="100.000000")
+            # DPRP deposits are USD (class currency); value after deployment is NGN.
             _, shares_class, _, _ = _make_holding(
-                "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP-OV", "DPRP-OV-I", "NGN",
+                "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP-OV", "DPRP-OV-I", "USD",
                 deployment_nav="500.000000",
             )
             # Commit a real valuation above deployment NAV so there's a
@@ -101,11 +102,13 @@ class TestOverviewNgnTotals:
             data = resp.get_json()["data"]
 
             assert "total_ngn" in data and "gain_ngn" in data
-            # 100 shares * 550 NAV = 55,000 total. Overview's Gain/Loss is
-            # current value vs. Net Holdings (gross deposited here, since this
-            # fixture has no fees/withdrawals) = 10,000 -> gain 45,000.
+            # 100 shares * 550 NAV = 55,000 NGN total. The USD deposits can't
+            # be subtracted from an NGN value, so the NGN gain is value vs.
+            # cost basis (100 shares * 500 deployment NAV = 50,000) -> 5,000.
             assert data["total_ngn"] == pytest.approx(55000.00)
-            assert data["gain_ngn"] == pytest.approx(45000.00)
+            assert data["gain_ngn"] == pytest.approx(5000.00)
+            # The DPRP USD deposits must not leak into the Funds USD figures.
+            assert data["total_aum_usd"] == pytest.approx(0.0)
             # NGN must never be folded into the KES/USD figures.
             assert data["total_aum_kes"] != data["total_ngn"]
 
@@ -117,6 +120,29 @@ class TestOverviewNgnTotals:
             assert resp.status_code == 200
             data = resp.get_json()["data"]
             assert data.get("total_ngn") == 0.0
+
+
+@pytest.mark.unit
+class TestSharesSummaryCurrencySplit:
+    def test_usd_deposits_and_ngn_value_are_bucketed_separately(self, client, app):
+        """Deposit-side buckets use the class currency (USD); NAV-based buckets
+        the SHARES valuation currency (NGN)."""
+        with app.app_context():
+            _make_holding(
+                "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP-SPLIT", "DPRP-SPLIT-I", "USD",
+                deployment_nav="500.000000",
+            )
+            db.session.commit()
+
+            fund = client.get("/api/v1/shares/summary").get_json()["data"]["funds"][0]
+            cls = fund["classes"][0]
+            assert cls["currency"] == "USD"
+            assert cls["valuation_currency"] == "NGN"
+            assert fund["totals_by_currency"] == {"NGN": pytest.approx(50000.00)}
+            assert fund["invested_by_currency"] == {"NGN": pytest.approx(50000.00)}
+            assert fund["gross_deposited_by_currency"] == {"USD": pytest.approx(10000.00)}
+            assert fund["net_holdings_by_currency"] == {"USD": pytest.approx(10000.00)}
+            assert fund["gain_by_currency"] == {"NGN": pytest.approx(0.0)}
 
 
 @pytest.mark.unit

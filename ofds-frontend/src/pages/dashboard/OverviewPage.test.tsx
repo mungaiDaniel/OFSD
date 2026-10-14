@@ -77,7 +77,8 @@ const SHARES_SUMMARY: FundsSummaryResponse = {
           id: 2,
           class_name: "DPRP Class",
           class_code: "NGN_A",
-          currency: "NGN",
+          currency: "USD",
+          valuation_currency: "NGN",
           current_nav: 525,
           total_nav: 15_750_000,
           performance_pct: 5,
@@ -86,8 +87,8 @@ const SHARES_SUMMARY: FundsSummaryResponse = {
       ],
       totals_by_currency: { NGN: 15_750_000 },
       gain_by_currency: { NGN: 750_000 },
-      gross_deposited_by_currency: { NGN: 15_000_000 },
-      net_holdings_by_currency: { NGN: 15_000_000 },
+      gross_deposited_by_currency: { USD: 10_000 },
+      net_holdings_by_currency: { USD: 10_000 },
       withdrawals_by_currency: {},
       refunds_by_currency: {},
     },
@@ -98,6 +99,9 @@ const BATCHES: Batch[] = [
   makeBatch({ id: 1, batch_name: "Funds Batch", product_type: "FUNDS", share_class_id: 1, class_currency: "KES" }),
   makeBatch({ id: 2, batch_name: "Shares Batch", product_type: "SHARES", share_class_id: 2, class_currency: "NGN" }),
 ];
+
+// The Fund/Share entity dropdown (the NGN card also has a "View in" select).
+const entityCombo = () => screen.getByRole("combobox", { name: /^(Fund|Share|Fund \/ Share)$/ });
 
 function renderPage(initialPath = "/overview") {
   return render(
@@ -141,7 +145,8 @@ describe("Overview — card visibility per product (Task 10)", () => {
     await waitFor(() => expect(screen.getAllByText("NGN").length).toBeGreaterThan(0));
 
     expect(screen.queryAllByText("KES")).toHaveLength(0);
-    expect(screen.queryAllByText("USD")).toHaveLength(0);
+    // No KES/USD total cards (the NGN card's "View in" dropdown has a USD option).
+    expect(screen.queryAllByText("USD").filter((el) => el.tagName !== "OPTION")).toHaveLength(0);
   });
 
   it("Product = All shows KES, USD and NGN together", async () => {
@@ -159,7 +164,7 @@ describe("Overview — dropdown / Product tab sync (Task 10)", () => {
     renderPage("/overview");
     await screen.findByText("Axiom");
 
-    const combo = screen.getByRole("combobox") as HTMLSelectElement;
+    const combo = entityCombo() as HTMLSelectElement;
     const groups = within(combo).getAllByRole("group") as HTMLOptGroupElement[];
     const groupLabels = groups.map((g) => g.label);
     expect(groupLabels).toEqual(["Funds", "Shares"]);
@@ -174,7 +179,7 @@ describe("Overview — dropdown / Product tab sync (Task 10)", () => {
 
     expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
 
-    const combo = screen.getByRole("combobox");
+    const combo = entityCombo();
     await user.selectOptions(combo, "2");
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Shares" })).toHaveAttribute("aria-pressed", "true"));
@@ -187,7 +192,7 @@ describe("Overview — dropdown / Product tab sync (Task 10)", () => {
 
     await user.click(screen.getByRole("button", { name: "Shares" }));
 
-    const combo = screen.getByRole("combobox");
+    const combo = entityCombo();
     expect(within(combo).queryByText("Axiom")).not.toBeInTheDocument();
     expect(within(combo).getByText(/Dangote/i)).toBeInTheDocument();
   });
@@ -199,15 +204,16 @@ describe("Overview — NGN totals for a seeded share holding (Task 10)", () => {
     renderPage("/overview");
     await screen.findByText("Axiom");
 
-    const combo = screen.getByRole("combobox");
+    const combo = entityCombo();
     await user.selectOptions(combo, "2");
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Shares" })).toHaveAttribute("aria-pressed", "true"));
     await waitFor(() => expect(screen.getAllByText("NGN").length).toBeGreaterThan(0));
 
     expect(screen.getByText(/₦ 15,750,000\.00/)).toBeInTheDocument();
-    expect(screen.getByText(/Net Holdings:/).parentElement).toHaveTextContent("₦ 15,000,000.00");
-    expect(screen.getByText(/Gross Invested:/).parentElement).toHaveTextContent("₦ 15,000,000.00");
+    // Deposit-side lines are the USD deposits; value/gain are NGN.
+    expect(screen.getByText(/Net Holdings:/).parentElement).toHaveTextContent("$ 10,000.00");
+    expect(screen.getByText(/Gross Invested:/).parentElement).toHaveTextContent("$ 10,000.00");
     expect(screen.getByText(/Gain\/Loss:/).parentElement).toHaveTextContent("+₦ 750,000.00");
   });
 });

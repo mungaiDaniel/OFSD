@@ -15,7 +15,7 @@ import type {
 } from "@/lib/types";
 import { toast } from "sonner";
 
-// Task 9: Shares (DPRP) are NGN-only; Funds carry KES + USD. Mirrors
+// Task 9: Shares (DPRP) are valued in NGN (deposits are USD); Funds carry KES + USD. Mirrors
 // FundDetailPage's own copy of this product -> currency mapping.
 const CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
   FUNDS: ["KES", "USD"],
@@ -134,7 +134,7 @@ interface ClassRowState {
   totalFundNav: string;
 }
 
-function extractClassRows(funds: any[], activeShareClassIds: Set<number>): ClassRowState[] {
+function extractClassRows(funds: any[], activeShareClassIds: Set<number>, product: ProductType): ClassRowState[] {
   const list: ClassRowState[] = [];
   const filterByBatches = activeShareClassIds.size > 0;
   for (const fund of funds) {
@@ -145,7 +145,10 @@ function extractClassRows(funds: any[], activeShareClassIds: Set<number>): Class
           classCode: cls.class_code,
           className: cls.class_name,
           fundName: fund.fund_name,
-          currency: cls.currency,
+          // NAV currency: Shares (DPRP) classes are deposited in USD but
+          // valued in NGN. The fallback /classes list has no
+          // valuation_currency, so derive it from the product there.
+          currency: cls.valuation_currency ?? (product === "SHARES" ? "NGN" : cls.currency),
           prevNav: cls.current_nav,
           navPerShare: "",
           totalFundNav: "",
@@ -197,7 +200,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
         );
 
         if (summary?.funds && summary.funds.length > 0) {
-          setClassRows(extractClassRows(summary.funds, activeShareClassIds));
+          setClassRows(extractClassRows(summary.funds, activeShareClassIds, product));
         } else {
           const funds = await fundService.getAll(product);
           const fundsWithClasses = await Promise.all(
@@ -212,7 +215,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
               };
             })
           );
-          setClassRows(extractClassRows(fundsWithClasses, activeShareClassIds));
+          setClassRows(extractClassRows(fundsWithClasses, activeShareClassIds, product));
         }
       } catch {
         toast.error("Failed to load funds");

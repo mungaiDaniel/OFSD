@@ -56,6 +56,11 @@ def get_overview_stats():
             }
             currency = ((batch.share_class.currency if getattr(batch, "share_class", None) else None) or "")
             currency = currency.strip().upper()
+            # SHARES (DPRP) balances are NGN whatever the class's deposit
+            # currency is — they're reported on the separate NGN figures below,
+            # never in these KES/USD buckets.
+            if getattr(batch, "product_type", None) == "SHARES":
+                currency = "NGN"
             if currency == "KES":
                 total_aum_kes += balance_dec
             elif currency == "USD":

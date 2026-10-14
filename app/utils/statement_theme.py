@@ -57,14 +57,14 @@ AXYS_THEME = StatementTheme(
 JH_THEME = StatementTheme(
     name="janus_henderson",
     is_jh=True,
-    primary="#E87722",
-    primary_dark="#C9651A",
-    primary_light="#FFF5ED",
-    row_alt="#FFFAF7",
+    primary="#00005b",
+    primary_dark="#00005b",
+    primary_light="#f0f0f5",
+    row_alt="#fafafa",
     co_brand="#00005b",
-    table_header_bg="#E87722",
-    table_header_text="#FFFFFF",
-    label_column_bg="#FFF5ED",
+    table_header_bg="#f5f5f5",
+    table_header_text="#00005b",
+    label_column_bg="#f9f9fb",
 )
 
 
@@ -309,7 +309,7 @@ def append_branded_footer(
         story.append(accent)
         story.append(Spacer(1, 0.06 * inch))
         story.append(Paragraph(
-            'Investing in a Brighter Future <font color="#E87722"><b>Together</b></font>',
+            f'Investing in a Brighter Future <font color="{theme.primary}"><b>Together</b></font>',
             styles["tagline"],
         ))
         story.append(Spacer(1, 0.08 * inch))
@@ -321,31 +321,18 @@ def append_branded_footer(
 def make_page_callbacks(theme: StatementTheme) -> Tuple[Optional[Callable], Optional[Callable]]:
     """Return ReportLab onFirstPage / onLaterPages callbacks for themed decorations."""
 
-    def _draw(canvas, doc, *, show_watermark: bool) -> None:
+    def _draw(canvas, doc) -> None:
         if not theme.is_jh:
             return
         canvas.saveState()
-        page_width, page_height = doc.pagesize
+        _, page_height = doc.pagesize
         bar_width = 4
         canvas.setFillColor(_hex(theme.primary))
         canvas.rect(0, 0, bar_width, page_height, fill=1, stroke=0)
-
-        if show_watermark:
-            canvas.setFillColor(_hex(theme.primary))
-            canvas.setFillAlpha(0.07)
-            canvas.setFont("Helvetica-Bold", 220)
-            canvas.drawString(page_width - 2.1 * inch, 0.35 * inch, "&")
-            canvas.setFillAlpha(1.0)
         canvas.restoreState()
 
-    def on_first_page(canvas, doc):
-        _draw(canvas, doc, show_watermark=True)
-
-    def on_later_pages(canvas, doc):
-        _draw(canvas, doc, show_watermark=False)
-
     if theme.is_jh:
-        return on_first_page, on_later_pages
+        return _draw, _draw
     return None, None
 
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, UniqueConstraint, Index, event
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, UniqueConstraint, Index, event
 from app.database.database import db
 from app.database.product_type import ProductTypeEnum, FUNDS, SHARES
 from base_model import Base
@@ -35,6 +35,7 @@ class CoreFund(Base, db.Model):
     id = Column(Integer, primary_key=True)
     fund_name = Column(String(100), nullable=False)
     fund_code = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)  # Task 12: optional free-text description (editable)
     product_type = Column(ProductTypeEnum, nullable=False, default=FUNDS, server_default=FUNDS)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

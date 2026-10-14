@@ -25,10 +25,12 @@ from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError
 
 # Task 8: currencies a share class may use, by product — Funds keep KES/USD
-# (unchanged); Shares/DPRP is NGN-valued (Task 7). The DB-level CHECK
+# (unchanged); Shares/DPRP take USD/NGN/KES deposits (USD by default) and are
+# valued in NGN after deployment (ShareClass.valuation_currency). The DB-level CHECK
 # constraint (app/Funds/share_class.py) allows all three regardless of
 # product; this is the narrower, per-product allow-list these routes enforce.
-CURRENCIES_BY_PRODUCT = {FUNDS: ("KES", "USD"), SHARES: ("NGN",)}
+# Task 12: defined once in app/Funds/edit_service.py (shared with the edit endpoints).
+from app.Funds.edit_service import CURRENCIES_BY_PRODUCT  # noqa: E402
 
 funds_v1 = Blueprint("funds_v1", __name__, url_prefix='/')
 
@@ -39,11 +41,13 @@ def _require_super_admin():
     Check that the current JWT identity is a super_admin user.
     Returns (user, None) on success, or (None, error_response) on failure.
     """
-    from app.Admin.model import User
+    from app.Funds.edit_service import resolve_current_user
 
     try:
-        identity = get_jwt_identity()
-        user = db.session.query(User).filter(User.id == identity).first()
+        # Task 12: login tokens carry the user's EMAIL as identity
+        # (User.generate_auth_token) — comparing it to User.id raised a DB
+        # error (-> 401 -> forced logout). Resolve by id or email instead.
+        user = resolve_current_user()
         if not user:
             return None, make_response(
                 jsonify({"status": 403, "message": "User not found"}), 403
@@ -54,6 +58,7 @@ def _require_super_admin():
             )
         return user, None
     except Exception as e:
+        db.session.rollback()
         return None, make_response(
             jsonify({"status": 401, "message": f"Authentication error: {str(e)}"}), 401
         )
@@ -76,16 +81,28 @@ def _create_fund_impl(product):
             return make_response(jsonify({"status": 400, "message": "fund_name is required"}), 400)
 
         fund_name = data['fund_name'].strip()
-        fund_code = data.get('fund_code', fund_name[:3].upper()).strip()
+        fund_code = (data.get('fund_code') or fund_name[:3]).strip().upper()
+        description = (str(data.get('description') or '').strip() or None)
 
         # Check if fund already exists
         existing = db.session.query(CoreFund).filter(
             db.func.lower(CoreFund.fund_name) == fund_name.lower()
         ).first()
         if existing:
-            return make_response(jsonify({"status": 409, "message": "Fund already exists"}), 409)
+            return make_response(jsonify({"status": 409, "message": "Fund already exists",
+                                          "errors": {"fund_name": "A fund or share with this name already exists."}}), 409)
 
-        fund = CoreFund(fund_name=fund_name, fund_code=fund_code, is_active=True, product_type=product)
+        # Task 12: code must be unique within the product (same rule as edit).
+        code_taken = db.session.query(CoreFund.id).filter(
+            db.func.upper(CoreFund.fund_code) == fund_code,
+            CoreFund.product_type == product,
+        ).first()
+        if code_taken:
+            return make_response(jsonify({"status": 409, "message": "Code already in use",
+                                          "errors": {"fund_code": "Another fund/share in this product already uses this code."}}), 409)
+
+        fund = CoreFund(fund_name=fund_name, fund_code=fund_code, description=description,
+                        is_active=True, product_type=product)
         db.session.add(fund)
         db.session.commit()
 
@@ -95,6 +112,7 @@ def _create_fund_impl(product):
                 "id": fund.id,
                 "fund_name": fund.fund_name,
                 "fund_code": fund.fund_code,
+                "description": fund.description,
                 "product_type": fund.product_type,
                 "is_active": fund.is_active
             }
@@ -166,7 +184,7 @@ def _add_share_class_impl(fund_id, product):
             return error_response
 
         # Validate currency — allow-list is per-product (Funds: KES/USD,
-        # Shares: NGN — see CURRENCIES_BY_PRODUCT).
+        # Shares: USD/NGN/KES — see CURRENCIES_BY_PRODUCT).
         currency = data['currency'].upper()
         allowed_currencies = CURRENCIES_BY_PRODUCT[product]
         if currency not in allowed_currencies:
@@ -233,7 +251,7 @@ def add_share_class_for_shares(fund_id):
     """
     Add a share class to a SHARES fund (SUPER ADMIN ONLY) — Task 8 alias of
     POST /api/v1/funds/<id>/classes, with the same payload shape, scoped to
-    product=SHARES (currency must be NGN).
+    product=SHARES (currency USD, NGN or KES).
     """
     return _add_share_class_impl(fund_id, SHARES)
 
@@ -283,125 +301,32 @@ def list_share_classes_for_shares(fund_id):
 
 def _update_share_class_impl(fund_id, class_id, product):
     """
-    Update share class metadata, scoped to one product — shared by
+    Edit a share class, scoped to one product — shared by
     PATCH /api/v1/funds/<id>/classes/<id> (FUNDS) and
-    PATCH /api/v1/shares/<id>/classes/<id> (SHARES), Task 8.
-    Body supports:
-      - class_name
-      - class_code
-      - currency (allow-list from CURRENCIES_BY_PRODUCT[product])
-    product_type itself is not updatable (immutable after creation).
+    PATCH /api/v1/shares/<id>/classes/<id> (SHARES).
+    Body: class_name, class_code, currency, is_active/status, version,
+    confirm_currency_override. Task 12: currency lock, deactivation
+    blockers, optimistic concurrency and audit logging live in
+    app/Funds/edit_service.py::update_share_class. product_type is immutable.
     """
-    user, error_response = _require_super_admin()
-    if error_response:
-        return error_response
+    from app.Funds.edit_service import update_share_class as _update
+    return _update(fund_id, class_id, product)
 
-    try:
-        data = request.get_json() or {}
-        if not data:
-            return make_response(jsonify({"status": 400, "message": "Request body is required"}), 400)
 
-        fund, error_response = get_fund_scoped_or_404(fund_id, product)
-        if error_response:
-            return error_response
+@funds_v1.route('/api/v1/funds/<int:fund_id>/edit-context', methods=['GET'])
+@jwt_required()
+def get_fund_edit_context(fund_id):
+    """Task 12: fresh values + version + currency-lock info for the Edit forms (FUNDS)."""
+    from app.Funds.edit_service import get_edit_context
+    return get_edit_context(fund_id, FUNDS)
 
-        share_class = db.session.query(ShareClass).filter(
-            ShareClass.id == class_id,
-            ShareClass.core_fund_id == fund_id,
-            ShareClass.is_active == True
-        ).first()
-        if not share_class:
-            return make_response(jsonify({"status": 404, "message": "Share class not found"}), 404)
 
-        changed = False
-        old_currency = (share_class.currency or "").upper().strip()
-
-        if "class_name" in data and data["class_name"] is not None:
-            class_name = str(data["class_name"]).strip()
-            if not class_name:
-                return make_response(jsonify({"status": 400, "message": "class_name cannot be empty"}), 400)
-            share_class.class_name = class_name
-            changed = True
-
-        if "class_code" in data and data["class_code"] is not None:
-            class_code = str(data["class_code"]).strip().upper()
-            if not class_code:
-                return make_response(jsonify({"status": 400, "message": "class_code cannot be empty"}), 400)
-
-            existing_code = db.session.query(ShareClass).filter(
-                ShareClass.class_code == class_code,
-                ShareClass.id != share_class.id
-            ).first()
-            if existing_code:
-                return make_response(jsonify({"status": 409, "message": "Class code already exists"}), 409)
-
-            share_class.class_code = class_code
-            changed = True
-
-            # Keep linked investments aligned with class code representation.
-            db.session.query(Investment).filter(
-                Investment.share_class_id == share_class.id
-            ).update(
-                {Investment.share_series: class_code},
-                synchronize_session=False
-            )
-
-        if "currency" in data and data["currency"] is not None:
-            currency = str(data["currency"]).upper().strip()
-            allowed_currencies = CURRENCIES_BY_PRODUCT[product]
-            if currency not in allowed_currencies:
-                return make_response(jsonify({
-                    "status": 400,
-                    "message": f"Currency must be one of: {', '.join(allowed_currencies)}",
-                }), 400)
-            share_class.currency = currency
-            changed = True
-
-            # Keep linked investment + pending-email currency aligned with class
-            # currency — Investment.currency_type is a USD/KES-only DB enum (a
-            # FUNDS-only field; SHARES deposits don't use it), so only propagate
-            # there when the new currency is one it can actually hold.
-            if currency != old_currency:
-                inv_ids = [row[0] for row in db.session.query(Investment.id).filter(
-                    Investment.share_class_id == share_class.id
-                ).all()]
-                if currency in ("USD", "KES"):
-                    db.session.query(Investment).filter(
-                        Investment.share_class_id == share_class.id
-                    ).update(
-                        {Investment.currency_type: currency},
-                        synchronize_session=False
-                    )
-                    if inv_ids:
-                        db.session.query(PendingEmail).filter(
-                            PendingEmail.investor_id.in_(inv_ids),
-                            PendingEmail.status.in_(("Pending_Confirmation", "Suppressed"))
-                        ).update(
-                            {PendingEmail.currency_type: currency},
-                            synchronize_session=False
-                        )
-
-        if not changed:
-            return make_response(jsonify({"status": 400, "message": "No updatable fields provided"}), 400)
-
-        db.session.add(share_class)
-        db.session.commit()
-
-        return make_response(jsonify({
-            "status": 200,
-            "message": "Share class updated",
-            "data": {
-                "id": share_class.id,
-                "core_fund_id": share_class.core_fund_id,
-                "class_name": share_class.class_name,
-                "class_code": share_class.class_code,
-                "currency": share_class.currency,
-                "product_type": share_class.product_type,
-            }
-        }), 200)
-    except Exception as e:
-        db.session.rollback()
-        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+@funds_v1.route('/api/v1/shares/<int:fund_id>/edit-context', methods=['GET'])
+@jwt_required()
+def get_share_edit_context(fund_id):
+    """Task 12: fresh values + version + currency-lock info for the Edit forms (SHARES)."""
+    from app.Funds.edit_service import get_edit_context
+    return get_edit_context(fund_id, SHARES)
 
 
 @funds_v1.route('/api/v1/funds/<int:fund_id>/classes/<int:class_id>', methods=['PATCH'])
@@ -959,6 +884,7 @@ def compute_funds_summary_data(session=None, product=FUNDS):
                 "class_name": cls.class_name,
                 "class_code": cls.class_code,
                 "currency": cls.currency,
+                "valuation_currency": cls.valuation_currency,
                 "is_active": cls.is_active,
                 "total_shares": float_2dp(total_shares),
                 "prev_nav": prev_nav,
@@ -982,31 +908,32 @@ def compute_funds_summary_data(session=None, product=FUNDS):
                 ],
             })
 
-            # Aggregate by currency
-            if cls.currency not in fund_totals_by_currency:
-                fund_totals_by_currency[cls.currency] = 0
-            if cls.currency not in fund_invested_by_currency:
-                fund_invested_by_currency[cls.currency] = 0
-            if cls.currency not in fund_gain_by_currency:
-                fund_gain_by_currency[cls.currency] = 0
-            if cls.currency not in fund_gross_deposited_by_currency:
-                fund_gross_deposited_by_currency[cls.currency] = 0
-            if cls.currency not in fund_net_principal_after_refund_by_currency:
-                fund_net_principal_after_refund_by_currency[cls.currency] = 0
-            if cls.currency not in fund_withdrawals_by_currency:
-                fund_withdrawals_by_currency[cls.currency] = 0
-            if cls.currency not in fund_refunds_by_currency:
-                fund_refunds_by_currency[cls.currency] = 0
+            # Aggregate by currency. NAV-based figures (current value, cost
+            # basis, gain) are in the class's valuation currency; deposit-side
+            # figures (deposits, refunds, withdrawals) in the class currency.
+            # They're the same for FUNDS; for SHARES/DPRP deposits are USD
+            # and everything after deployment is NGN.
+            val_ccy = cls.valuation_currency
+            dep_ccy = cls.currency
+            for bucket in (fund_totals_by_currency, fund_invested_by_currency, fund_gain_by_currency):
+                bucket.setdefault(val_ccy, 0)
+            for bucket in (
+                fund_gross_deposited_by_currency,
+                fund_net_principal_after_refund_by_currency,
+                fund_withdrawals_by_currency,
+                fund_refunds_by_currency,
+            ):
+                bucket.setdefault(dep_ccy, 0)
             if total_nav:
-                fund_totals_by_currency[cls.currency] += total_nav
+                fund_totals_by_currency[val_ccy] += total_nav
             if cost_basis:
-                fund_invested_by_currency[cls.currency] += float(cost_basis or 0)
+                fund_invested_by_currency[val_ccy] += float(cost_basis or 0)
             if unrealized_gain is not None:
-                fund_gain_by_currency[cls.currency] += float(unrealized_gain or 0)
-            fund_gross_deposited_by_currency[cls.currency] += float(gross_deposited or 0)
-            fund_net_principal_after_refund_by_currency[cls.currency] += float(net_principal_after_refund_sum or 0)
-            fund_withdrawals_by_currency[cls.currency] += float(withdrawal_sum or 0)
-            fund_refunds_by_currency[cls.currency] += float(refund_sum or 0)
+                fund_gain_by_currency[val_ccy] += float(unrealized_gain or 0)
+            fund_gross_deposited_by_currency[dep_ccy] += float(gross_deposited or 0)
+            fund_net_principal_after_refund_by_currency[dep_ccy] += float(net_principal_after_refund_sum or 0)
+            fund_withdrawals_by_currency[dep_ccy] += float(withdrawal_sum or 0)
+            fund_refunds_by_currency[dep_ccy] += float(refund_sum or 0)
 
         # Net Holdings = net principal after refund (gross deposited minus
         # transfer cost, entry fee, and any oversubscription refund — see
@@ -1029,13 +956,18 @@ def compute_funds_summary_data(session=None, product=FUNDS):
         # above (that field is left untouched for anything else that reads it —
         # e.g. the per-class "unrealized_gain" values keep their existing
         # meaning). This overwrites the fund-level aggregate specifically.
-        fund_gain_by_currency = {
-            currency: float_2dp(
-                Decimal(str(fund_totals_by_currency.get(currency, 0)))
-                - Decimal(str(fund_net_holdings_by_currency.get(currency, 0)))
-            )
-            for currency in set(fund_totals_by_currency) | set(fund_net_holdings_by_currency)
-        }
+        # Only where value and holdings share a currency, though: for SHARES
+        # the value is NGN and holdings are USD, so its gain stays the
+        # NGN cost-basis gain (value vs. shares x deployment price) from above.
+        same_currency = all(c.valuation_currency == c.currency for c in classes)
+        if same_currency:
+            fund_gain_by_currency = {
+                currency: float_2dp(
+                    Decimal(str(fund_totals_by_currency.get(currency, 0)))
+                    - Decimal(str(fund_net_holdings_by_currency.get(currency, 0)))
+                )
+                for currency in set(fund_totals_by_currency) | set(fund_net_holdings_by_currency)
+            }
         
         # Calculate weighted performance for this fund
         weighted_perf = None

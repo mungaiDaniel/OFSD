@@ -1,6 +1,17 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, CoreFund, FundsSummaryResponse, FundShareClass, ProductType } from "@/lib/types";
+import type {
+  ApiResponse,
+  CoreFund,
+  FundsSummaryResponse,
+  FundShareClass,
+  ProductType,
+  FundEditContext,
+  FundEditFund,
+  FundUpdatePayload,
+  ShareClassEditInfo,
+  ShareClassUpdatePayload,
+} from "@/lib/types";
 
 /** Task 9: /api/v1/funds and /api/v1/shares are the same endpoints, scoped by
  * product (see Task 8) — every fundService method takes an optional
@@ -49,10 +60,16 @@ export const fundService = {
     return res.data;
   },
 
-  async createFund(fundName: string, fundCode: string, product: ProductType = "FUNDS"): Promise<CoreFund> {
+  async createFund(
+    fundName: string,
+    fundCode: string,
+    product: ProductType = "FUNDS",
+    description?: string
+  ): Promise<CoreFund> {
     const res = await api.post<ApiResponse<CoreFund>>(basePath(product), {
       fund_name: fundName,
       fund_code: fundCode.toUpperCase(),
+      ...(description ? { description } : {}),
     });
     return (res.data as any).data ?? res.data;
   },
@@ -75,17 +92,34 @@ export const fundService = {
     return (res.data as any).data ?? res.data;
   },
 
+  /** Task 12: fresh values + version + currency-lock info for the Edit forms. */
+  async getEditContext(fundId: number | string, product: ProductType = "FUNDS"): Promise<FundEditContext> {
+    const res = await api.get<ApiResponse<FundEditContext>>(`${basePath(product)}/${fundId}/edit-context`);
+    return res.data.data as FundEditContext;
+  },
+
+  /** Task 12: edit a fund/share (PATCH). Send the `version` from getEditContext. */
+  async updateFund(
+    fundId: number | string,
+    data: FundUpdatePayload,
+    product: ProductType = "FUNDS"
+  ): Promise<FundEditFund> {
+    const payload = { ...data, fund_code: data.fund_code ? data.fund_code.toUpperCase() : undefined };
+    const res = await api.patch<ApiResponse<FundEditFund>>(`${basePath(product)}/${fundId}`, payload);
+    return res.data.data as FundEditFund;
+  },
+
   async updateClass(
     fundId: number | string,
     classId: number | string,
-    data: Partial<{ class_name: string; class_code: string; currency: string }>,
+    data: ShareClassUpdatePayload,
     product: ProductType = "FUNDS"
-  ): Promise<FundShareClass> {
+  ): Promise<ShareClassEditInfo> {
     const payload = {
       ...data,
       class_code: data.class_code ? data.class_code.toUpperCase() : undefined,
     };
-    const res = await api.patch<ApiResponse<FundShareClass>>(
+    const res = await api.patch<ApiResponse<ShareClassEditInfo>>(
       `${classesPath(fundId, product)}/${classId}`,
       payload
     );

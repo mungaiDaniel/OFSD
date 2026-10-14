@@ -43,7 +43,7 @@ class Investment(Base, db.Model):
     current_market_value = Column(Numeric(20, 2), nullable=True)
     shares_owned = Column(Numeric(24, 4), nullable=True)
     share_series = Column(String(100), nullable=True)
-    currency_type = Column(Enum("USD", "KES", name="currency_type_enum"), nullable=True)
+    currency_type = Column(Enum("USD", "KES", "NGN", name="currency_type_enum"), nullable=True)
     opening_market_value = Column(Numeric(20, 2), nullable=True)  # shares_owned × nav_per_share at deployment
     previous_nav_price = Column(Numeric(20, 6), nullable=True)  # Previous NAV for display on investor detail
     rounding_adjustment = Column(Numeric(20, 4), nullable=True, default=Decimal("0.0000"))  # Adjustment for official value reconciliation

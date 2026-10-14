@@ -16,6 +16,10 @@ import { DepositsWithdrawalsBarChart } from "@/components/charts/DepositsWithdra
 import { NAVLineChart } from "@/components/charts/NAVLineChart";
 import type {
   CoreFund,
+  FundEditContext,
+  FundUpdatePayload,
+  ShareClassEditInfo,
+  ShareClassUpdatePayload,
   FundShareClass,
   FundsSummaryResponse,
   ReportSummary,
@@ -24,14 +28,29 @@ import type {
   ProductType,
 } from "@/lib/types";
 import { toast } from "sonner";
-import { ArrowLeft, Landmark, Coins, Layers, ChevronDown, ChevronUp, Users } from "lucide-react";
+import { ArrowLeft, Landmark, Coins, Layers, ChevronDown, ChevronUp, Users, Pencil, RefreshCw } from "lucide-react";
+import { getUserRole } from "@/lib/auth";
+import { FundForm, type FundFormValues } from "@/components/funds/FundForm";
+import { ShareClassForm, type ShareClassFormValues } from "@/components/funds/ShareClassForm";
+import { CurrencyOverrideDialog } from "@/components/funds/CurrencyOverrideDialog";
+import { parseApiError, type ApiFormError } from "@/components/funds/formStyles";
+import { useNgnUsdView, NgnUsdViewControl } from "@/components/shares/NgnUsdView";
 
-// Task 9: currencies available per product — Funds keep KES/USD, Shares
-// (DPRP) is NGN-valued (Task 7/8). Mirrors FundListPage's own copy.
-const CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
+// Currencies the AUM cards / NAV charts are grouped by. Funds: KES/USD;
+// Shares (DPRP) are valued in NGN after deployment, whatever the deposit
+// currency (see FundClassSummary.valuation_currency).
+const VALUATION_CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
   FUNDS: ["KES", "USD"],
   SHARES: ["NGN"],
 };
+// Share class (deposit) currencies offered by the Edit Share Class form until
+// the server's edit-context allow-list loads. Mirrors FundListPage's copy.
+const CLASS_CURRENCIES_BY_PRODUCT: Record<ProductType, string[]> = {
+  FUNDS: ["KES", "USD"],
+  SHARES: ["USD", "NGN", "KES"],
+};
+const valuationCurrencyOf = (c: { currency?: string; valuation_currency?: string }) =>
+  c.valuation_currency ?? c.currency;
 
 const CURRENCY_COLOR_VAR: Record<string, string> = {
   KES: "--color-kes",
@@ -142,7 +161,8 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
   const isShares = product === "SHARES";
   const noun = isShares ? "share" : "fund";
   const listPath = isShares ? ROUTES.SHARES : ROUTES.FUNDS;
-  const currencies = CURRENCIES_BY_PRODUCT[product];
+  const currencies = VALUATION_CURRENCIES_BY_PRODUCT[product];
+  const ngnView = useNgnUsdView();
 
   const [fund, setFund] = useState<CoreFund | null>(null);
   const [fundClasses, setFundClasses] = useState<FundShareClass[]>([]);
@@ -156,12 +176,24 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchInvestorSearch, setBatchInvestorSearch] = useState("");
 
-  // Edit Share Class State
+  // Task 12: Edit fund/share + Edit share class (same forms as creation).
+  // Editing is limited to the role that can create funds (super_admin); the
+  // server enforces this on every edit endpoint regardless of the UI.
+  const canEdit = getUserRole() === "super_admin";
+  const [editContext, setEditContext] = useState<FundEditContext | null>(null);
+  const [editContextLoading, setEditContextLoading] = useState(false);
+
+  const [showEditFund, setShowEditFund] = useState(false);
+  const [fundSaving, setFundSaving] = useState(false);
+  const [fundErrors, setFundErrors] = useState<Record<string, string>>({});
+  const [fundConflict, setFundConflict] = useState<ApiFormError | null>(null);
+
   const [editingClassId, setEditingClassId] = useState<number | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editCode, setEditCode] = useState("");
-  const [editCurrency, setEditCurrency] = useState(currencies[0]!);
-  const [editSaving, setEditSaving] = useState(false);
+  const [classSaving, setClassSaving] = useState(false);
+  const [classErrors, setClassErrors] = useState<Record<string, string>>({});
+  const [classConflict, setClassConflict] = useState<ApiFormError | null>(null);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideConfirmed, setOverrideConfirmed] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -212,17 +244,20 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
   // back to the product's full currency list so the card still renders
   // (showing "—") before any class/summary data has loaded.
   const currenciesInUse = useMemo(() => {
-    const present = new Set((fundSummary?.classes ?? []).map((c) => c.currency));
+    const present = new Set((fundSummary?.classes ?? []).map(valuationCurrencyOf));
     return currencies.filter((c) => present.size === 0 || present.has(c));
   }, [fundSummary, currencies]);
 
   const classesWithNavByCurrency = (currency: string) =>
-    (fundSummary?.classes ?? []).filter((c) => c.currency === currency && c.current_nav != null);
+    (fundSummary?.classes ?? []).filter((c) => valuationCurrencyOf(c) === currency && c.current_nav != null);
 
   const totalByCurrency = (currency: string) => fundSummary?.totals_by_currency?.[currency] ?? 0;
   const investedByCurrency = (currency: string) => fundSummary?.invested_by_currency?.[currency] ?? 0;
   const gainByCurrency = (currency: string) => fundSummary?.gain_by_currency?.[currency] ?? 0;
   const currencyPrefix = (currency: string | undefined) => (currency === "USD" ? "$ " : currency === "NGN" ? "₦ " : `${currency ?? ""} `);
+  // NGN (Shares) figures follow the "View in NGN / USD" control; others pass through.
+  const shownCurrency = (currency: string | undefined) => (currency === "NGN" ? ngnView.displayCurrency : currency);
+  const shownAmount = (currency: string | undefined, amount: number) => (currency === "NGN" ? ngnView.convert(amount) : amount);
 
   const linkedBatches = useMemo(() => {
     if (!fund) return [];
@@ -321,38 +356,182 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
     [sortedReports]
   );
 
-  const startEditClass = (cls: any) => {
-    setEditingClassId(cls.id);
-    setEditName(cls.class_name ?? "");
-    setEditCode(cls.class_code ?? "");
-    setEditCurrency(cls.currency ?? "KES");
+  // ── Task 12: edit fund / share and share classes ──
+
+  const loadEditContext = async (): Promise<FundEditContext | null> => {
+    setEditContextLoading(true);
+    try {
+      const ctx = await fundService.getEditContext(fundId, product);
+      setEditContext(ctx);
+      return ctx;
+    } catch (err: unknown) {
+      toast.error(parseApiError(err, "Could not load the latest values").message);
+      return null;
+    } finally {
+      setEditContextLoading(false);
+    }
   };
 
-  const handleSaveClass = async (classId: number) => {
-    if (!editName.trim()) {
-      toast.error("Class name is required");
+  // Load once for super admins so inactive share classes can be shown/re-activated.
+  useEffect(() => {
+    if (canEdit && fundId && !Number.isNaN(fundId)) loadEditContext();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fundId, product, canEdit]);
+
+  const refreshAfterEdit = async () => {
+    await Promise.all([reloadClassesAndFund(), loadEditContext()]);
+  };
+
+  const openEditFund = async () => {
+    setEditingClassId(null);
+    setFundErrors({});
+    setFundConflict(null);
+    // Always fetch fresh values + version when the form opens.
+    const ctx = await loadEditContext();
+    if (ctx) setShowEditFund(true);
+  };
+
+  const closeEditFund = () => {
+    setShowEditFund(false);
+    setFundErrors({});
+    setFundConflict(null);
+  };
+
+  const handleSaveFund = async (values: FundFormValues) => {
+    if (!editContext) return;
+    const current = editContext.fund;
+    const payload: FundUpdatePayload = { version: current.version };
+    if (values.fund_name !== current.fund_name) payload.fund_name = values.fund_name;
+    if (values.fund_code !== (current.fund_code ?? "")) payload.fund_code = values.fund_code;
+    if ((values.description || null) !== (current.description || null)) payload.description = values.description || null;
+    if (values.is_active !== current.is_active) payload.is_active = values.is_active;
+    if (Object.keys(payload).length === 1) {
+      toast.info?.("No changes to save");
+      closeEditFund();
       return;
     }
-    if (!editCode.trim()) {
-      toast.error("Class code is required");
-      return;
-    }
-    setEditSaving(true);
+    setFundSaving(true);
+    setFundErrors({});
+    setFundConflict(null);
     try {
-      await fundService.updateClass(fundId, classId, {
-        class_name: editName.trim(),
-        class_code: editCode.trim().toUpperCase(),
-        currency: editCurrency,
-      }, product);
-      toast.success("Share class updated");
-      setEditingClassId(null);
-      await reloadClassesAndFund();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || "Failed to update share class");
+      await fundService.updateFund(fundId, payload, product);
+      toast.success(`${isShares ? "Share" : "Fund"} updated`);
+      closeEditFund();
+      await refreshAfterEdit();
+    } catch (err: unknown) {
+      const e = parseApiError(err, `Failed to update ${noun}`);
+      if (e.code === "VERSION_CONFLICT") setFundConflict(e);
+      setFundErrors(e.errors);
+      toast.error(e.message);
     } finally {
-      setEditSaving(false);
+      setFundSaving(false);
     }
   };
+
+  const editingClass: ShareClassEditInfo | null =
+    editContext?.share_classes.find((c) => c.id === editingClassId) ?? null;
+
+  const openEditClass = async (classId: number) => {
+    setShowEditFund(false);
+    setClassErrors({});
+    setClassConflict(null);
+    setOverrideConfirmed(false);
+    const ctx = await loadEditContext();
+    if (ctx?.share_classes.some((c) => c.id === classId)) setEditingClassId(classId);
+    else if (ctx) toast.error("Share class not found — it may have been removed.");
+  };
+
+  const closeEditClass = () => {
+    setEditingClassId(null);
+    setClassErrors({});
+    setClassConflict(null);
+    setOverrideConfirmed(false);
+  };
+
+  const handleSaveClass = async (values: ShareClassFormValues) => {
+    if (!editingClass) return;
+    const payload: ShareClassUpdatePayload = { version: editingClass.version };
+    if (values.class_name !== editingClass.class_name) payload.class_name = values.class_name;
+    if (values.class_code !== editingClass.class_code) payload.class_code = values.class_code;
+    if (values.currency !== editingClass.currency) {
+      payload.currency = values.currency;
+      if (editingClass.currency_locked && overrideConfirmed) payload.confirm_currency_override = true;
+    }
+    if (values.is_active !== editingClass.is_active) payload.is_active = values.is_active;
+    if (Object.keys(payload).length === 1) {
+      toast.info?.("No changes to save");
+      closeEditClass();
+      return;
+    }
+    setClassSaving(true);
+    setClassErrors({});
+    setClassConflict(null);
+    try {
+      await fundService.updateClass(fundId, editingClass.id, payload, product);
+      toast.success("Share class updated");
+      closeEditClass();
+      await refreshAfterEdit();
+    } catch (err: unknown) {
+      const e = parseApiError(err, "Failed to update share class");
+      if (e.code === "VERSION_CONFLICT") setClassConflict(e);
+      if (e.code === "CURRENCY_LOCKED") {
+        // The class picked up deposits/valuations after the form was opened.
+        await loadEditContext();
+        if (e.canOverride) setOverrideOpen(true);
+      }
+      setClassErrors(e.errors);
+      toast.error(e.message);
+    } finally {
+      setClassSaving(false);
+    }
+  };
+
+  const conflictBanner = (conflict: ApiFormError | null, onReload: () => void) =>
+    conflict ? (
+      <div
+        role="alert"
+        style={{
+          marginTop: "8px",
+          padding: "10px 14px",
+          borderRadius: "10px",
+          background: "rgba(245,158,11,0.08)",
+          border: "1px solid rgba(245,158,11,0.3)",
+          color: "#fcd34d",
+          fontSize: "12px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "12px",
+        }}
+      >
+        <span>{conflict.message}</span>
+        <button
+          type="button"
+          onClick={onReload}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "6px 10px",
+            borderRadius: "8px",
+            border: "1px solid rgba(245,158,11,0.45)",
+            background: "transparent",
+            color: "#fbbf24",
+            fontSize: "11px",
+            fontWeight: 600,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <RefreshCw size={12} /> Reload latest
+        </button>
+      </div>
+    ) : null;
+
+  const inactiveClasses = (editContext?.share_classes ?? []).filter((c) => !c.is_active);
+  const classCurrencies = Array.from(
+    new Set((editContext?.share_classes ?? []).filter((c) => c.is_active).map((c) => c.currency))
+  );
 
   const handleDeleteFund = async () => {
     if (!fundId || !fund) return;
@@ -503,23 +682,87 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleDeleteFund}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={openEditFund}
+              disabled={editContextLoading}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "8px 14px",
+                fontSize: "12px",
+                fontWeight: 600,
+                borderRadius: "10px",
+                cursor: editContextLoading ? "wait" : "pointer",
+                border: "1px solid rgba(59,130,246,0.35)",
+                background: "rgba(59,130,246,0.14)",
+                color: "#60A5FA",
+              }}
+            >
+              <Pencil size={13} /> {isShares ? "Edit share" : "Edit fund"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleDeleteFund}
+            style={{
+              padding: "8px 14px",
+              fontSize: "12px",
+              fontWeight: 600,
+              borderRadius: "10px",
+              cursor: "pointer",
+              border: "1px solid rgba(239,68,68,0.45)",
+              background: "rgba(239,68,68,0.08)",
+              color: "#f87171",
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+
+      {fund?.description && !showEditFund && (
+        <p
           style={{
-            padding: "8px 14px",
-            fontSize: "12px",
-            fontWeight: 600,
-            borderRadius: "10px",
-            cursor: "pointer",
-            border: "1px solid rgba(239,68,68,0.45)",
-            background: "rgba(239,68,68,0.08)",
-            color: "#f87171",
+            fontSize: "13px",
+            color: "var(--color-text-secondary)",
+            marginTop: "-12px",
+            marginBottom: "18px",
+            maxWidth: "820px",
+            whiteSpace: "pre-wrap",
           }}
         >
-          Delete
-        </button>
-      </div>
+          {fund.description}
+        </p>
+      )}
+
+      {showEditFund && editContext && (
+        <FundForm
+          mode="edit"
+          product={product}
+          initial={{
+            fund_name: editContext.fund.fund_name,
+            fund_code: editContext.fund.fund_code ?? "",
+            description: editContext.fund.description ?? "",
+            is_active: editContext.fund.is_active,
+          }}
+          submitting={fundSaving}
+          errors={fundErrors}
+          banner={conflictBanner(fundConflict, async () => {
+            setFundConflict(null);
+            setFundErrors({});
+            await loadEditContext();
+          })}
+          onSubmit={handleSaveFund}
+          onCancel={closeEditFund}
+          classCurrencies={classCurrencies}
+          renameLocked={editContext.rename_locked}
+          openBatches={editContext.open_batches}
+        />
+      )}
 
       {/* Subtitle / Source info */}
       <p
@@ -537,6 +780,12 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
           : "Summary unavailable — some metrics may be incomplete"}
       </p>
 
+      {isShares && (
+        <div style={{ marginBottom: "12px" }}>
+          <NgnUsdViewControl view={ngnView} />
+        </div>
+      )}
+
       {/* KPI Grid — one AUM card per currency in use, plus Performance + Investors/Batches */}
       <div
         style={{
@@ -549,11 +798,12 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
       >
         {/* AUM card(s) — one per currency in use */}
         {currenciesInUse.map((currency) => {
-          const total = totalByCurrency(currency);
-          const invested = investedByCurrency(currency);
-          const gain = gainByCurrency(currency);
+          const total = shownAmount(currency, totalByCurrency(currency));
+          const invested = shownAmount(currency, investedByCurrency(currency));
+          const gain = shownAmount(currency, gainByCurrency(currency));
           const classesWithNav = classesWithNavByCurrency(currency);
           const color = currencyColor(currency);
+          const shown = shownCurrency(currency);
           return (
             <div key={currency} style={{ ...glassCardStyle, padding: "18px 22px" }}>
               <div
@@ -566,7 +816,8 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                   marginBottom: "8px",
                 }}
               >
-                Total <span style={{ color, marginLeft: "4px" }}>{currency}</span>
+                Total <span style={{ color, marginLeft: "4px" }}>{shown}</span>
+                {shown !== currency && <span style={{ marginLeft: "4px", textTransform: "none" }}>(from {currency})</span>}
               </div>
               <div
                 style={{
@@ -578,7 +829,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                 }}
               >
                 {total > 0
-                  ? `${currencyPrefix(currency)}${total.toLocaleString("en-US", {
+                  ? `${currencyPrefix(shown)}${total.toLocaleString("en-US", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}`
@@ -600,7 +851,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                 <span style={{ fontFamily: "var(--font-mono)" }}>
                   Invested:{" "}
                   {invested > 0
-                    ? `${currencyPrefix(currency)}${invested.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+                    ? `${currencyPrefix(shown)}${invested.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
                     : "—"}
                 </span>
               </div>
@@ -615,7 +866,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                 Gain/Loss:{" "}
                 {total > 0 || invested > 0
                   ? (gain >= 0 ? "+" : "") +
-                    `${currencyPrefix(currency)}${Math.abs(gain).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+                    `${currencyPrefix(shown)}${Math.abs(gain).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
                   : "—"}
               </div>
             </div>
@@ -724,7 +975,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
           {currenciesInUse.map((currency) => (
             <div key={currency} style={{ ...glassCardStyle, padding: "20px 24px" }}>
               <NAVLineChart
-                classes={fundSummary?.classes?.filter((c) => c.currency === currency) ?? []}
+                classes={fundSummary?.classes?.filter((c) => valuationCurrencyOf(c) === currency) ?? []}
                 currency={currency}
                 title={`${currency} classes — NAV / share`}
                 asOfDate={summary?.as_of_date}
@@ -790,7 +1041,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                                 fontFamily: "var(--font-mono)",
                                 fontSize: "10px",
                                 fontWeight: 700,
-                                color: currencyColor(c.currency),
+                                color: currencyColor(valuationCurrencyOf(c)),
                               }}
                             >
                               {c.class_code}
@@ -804,7 +1055,9 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                               color: "var(--color-text-primary)",
                             }}
                           >
-                            {formatNumber(c.current_nav)}
+                            {c.current_nav != null
+                              ? formatNumber(shownAmount(valuationCurrencyOf(c), c.current_nav))
+                              : "—"}
                           </td>
                           <td
                             style={{
@@ -815,8 +1068,8 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                             }}
                           >
                             {c.total_nav != null
-                              ? currencyPrefix(c.currency) +
-                                c.total_nav.toLocaleString("en-US", { maximumFractionDigits: 0 })
+                              ? currencyPrefix(shownCurrency(valuationCurrencyOf(c))) +
+                                shownAmount(valuationCurrencyOf(c), c.total_nav).toLocaleString("en-US", { maximumFractionDigits: 0 })
                               : "—"}
                           </td>
                           <td
@@ -989,6 +1242,36 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
           </span>
         </div>
 
+        {editingClass && (
+          <ShareClassForm
+            mode="edit"
+            product={product}
+            currencies={editContext?.allowed_currencies ?? CLASS_CURRENCIES_BY_PRODUCT[product]}
+            initial={{
+              class_name: editingClass.class_name,
+              class_code: editingClass.class_code,
+              currency: editingClass.currency,
+              is_active: editingClass.is_active,
+            }}
+            submitting={classSaving}
+            errors={classErrors}
+            banner={conflictBanner(classConflict, async () => {
+              setClassConflict(null);
+              setClassErrors({});
+              setOverrideConfirmed(false);
+              await loadEditContext();
+            })}
+            onSubmit={handleSaveClass}
+            onCancel={closeEditClass}
+            currencyLocked={editingClass.currency_locked}
+            currencyLockReasons={editingClass.currency_lock_reasons}
+            canOverrideCurrency={!!editContext?.can_override_currency}
+            onRequestCurrencyOverride={() => setOverrideOpen(true)}
+            currencyOverrideConfirmed={overrideConfirmed}
+            openBatches={editingClass.open_batches}
+          />
+        )}
+
         {displayClasses.length === 0 ? (
           <div
             style={{
@@ -1014,95 +1297,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                 key={cls.id ?? cls.class_code}
                 style={{ ...glassCardStyle, padding: "20px 22px" }}
               >
-                {editingClassId === cls.id ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                    <input
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      placeholder="Class name"
-                      style={{
-                        width: "100%",
-                        background: "rgba(255,255,255,0.05)",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        borderRadius: "8px",
-                        padding: "8px 10px",
-                        color: "var(--color-text-primary)",
-                        fontSize: "12px",
-                      }}
-                    />
-                    <input
-                      value={editCode}
-                      onChange={(e) => setEditCode(e.target.value.toUpperCase())}
-                      placeholder="Class code"
-                      style={{
-                        width: "100%",
-                        background: "rgba(255,255,255,0.05)",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        borderRadius: "8px",
-                        padding: "8px 10px",
-                        color: "var(--color-text-primary)",
-                        fontSize: "12px",
-                        fontFamily: "var(--font-mono)",
-                        textTransform: "uppercase",
-                      }}
-                    />
-                    <select
-                      value={editCurrency}
-                      onChange={(e) => setEditCurrency(e.target.value)}
-                      style={{
-                        width: "100%",
-                        background: "rgba(255,255,255,0.05)",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        borderRadius: "8px",
-                        padding: "8px 10px",
-                        color: "var(--color-text-primary)",
-                        fontSize: "12px",
-                      }}
-                    >
-                      {currencies.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                    <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-                      <button
-                        type="button"
-                        onClick={() => setEditingClassId(null)}
-                        disabled={editSaving}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid rgba(255,255,255,0.18)",
-                          background: "transparent",
-                          color: "var(--color-text-secondary)",
-                          fontSize: "11px",
-                          cursor: editSaving ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSaveClass(cls.id)}
-                        disabled={editSaving}
-                        style={{
-                          padding: "6px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid rgba(59,130,246,0.35)",
-                          background: "rgba(59,130,246,0.14)",
-                          color: "#60A5FA",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          cursor: editSaving ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        Save
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
+                <>
                     <div
                       style={{
                         display: "flex",
@@ -1121,9 +1316,10 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                       >
                         {cls.class_name}
                       </h3>
+                      {canEdit && cls.id != null && (
                       <button
                         type="button"
-                        onClick={() => startEditClass(cls)}
+                        onClick={() => openEditClass(cls.id)}
                         style={{
                           padding: "4px 8px",
                           borderRadius: "8px",
@@ -1136,6 +1332,7 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                       >
                         Edit
                       </button>
+                      )}
                     </div>
                     <div
                       style={{
@@ -1177,13 +1374,70 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
                         </span>
                       </div>
                     )}
-                  </>
-                )}
+                </>
               </div>
             ))}
           </div>
         )}
+
+        {canEdit && inactiveClasses.length > 0 && (
+          <div style={{ marginTop: "14px" }}>
+            <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginBottom: "8px" }}>
+              Inactive share classes
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {inactiveClasses.map((c) => (
+                <div
+                  key={c.id}
+                  style={{
+                    ...glassCardStyle,
+                    padding: "10px 14px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    opacity: 0.75,
+                  }}
+                >
+                  <span style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                    {c.class_name} · {c.class_code} · {c.currency}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => openEditClass(c.id)}
+                    style={{
+                      padding: "4px 8px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(255,255,255,0.16)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: "var(--color-text-secondary)",
+                      fontSize: "10px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+
+      <CurrencyOverrideDialog
+        open={overrideOpen && !!editingClass}
+        className={editingClass ? `${editingClass.class_name} (${editingClass.class_code})` : ""}
+        reasons={editingClass?.currency_lock_reasons ?? []}
+        onClose={() => setOverrideOpen(false)}
+        onConfirm={() => {
+          setOverrideOpen(false);
+          setOverrideConfirmed(true);
+          setClassErrors((prev) => {
+            const next = { ...prev };
+            delete next.currency;
+            return next;
+          });
+        }}
+      />
 
       {/* Deposits vs Withdrawals Bar Chart (if epoch reports exist) */}
       {sortedReports.length > 0 && (

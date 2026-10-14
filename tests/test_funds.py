@@ -158,15 +158,23 @@ class TestCoreFoundUpdate:
     """Test updating fund information"""
     
     def test_update_fund_status(self, client, auth_token, app):
-        """Test updating fund status"""
+        """Test updating fund status (Task 12: editing now requires the same
+        super_admin role as creating — see tests/test_fund_edit.py)."""
+        from flask_jwt_extended import create_access_token
+        from app.Admin.model import User
+
         with app.app_context():
             fund = CoreFund(
                 fund_name='Update Test Fund',
                 fund_code='UPDATE-TEST',
             )
             db.session.add(fund)
+            user = User(name='Super Admin', email='update_status_super@example.com', role='super_admin', status='active')
+            user.password = User.generate_password_hash('Test1234!')
+            db.session.add(user)
             db.session.commit()
             fund_id = fund.id
+            auth_token = create_access_token(identity=user.email, additional_claims={'admin': 2})
         
         payload = {
             'status': 'inactive'

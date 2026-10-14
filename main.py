@@ -105,7 +105,9 @@ def create_app(config_filename):
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS rounding_adjustment NUMERIC(20, 4) DEFAULT 0.0000"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS official_receipt_value NUMERIC(20, 2)"))
             db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS deployment_total_nav NUMERIC(20, 2)"))
-            db.session.execute(text("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'currency_type_enum') THEN CREATE TYPE currency_type_enum AS ENUM ('USD','KES'); END IF; END $$;"))
+            db.session.execute(text("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'currency_type_enum') THEN CREATE TYPE currency_type_enum AS ENUM ('USD','KES','NGN'); END IF; END $$;"))
+            # SHARES/DPRP investments are NGN-valued (see migration 020/021) - make sure older DBs accept it.
+            db.session.execute(text("ALTER TYPE currency_type_enum ADD VALUE IF NOT EXISTS 'NGN'"))
             db.session.execute(text("ALTER TABLE investments ADD COLUMN IF NOT EXISTS currency_type currency_type_enum"))
             db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS cached_total_capital NUMERIC(20, 2)"))
             db.session.execute(text("ALTER TABLE batches ADD COLUMN IF NOT EXISTS cached_total_capital_at TIMESTAMPTZ"))
@@ -202,6 +204,8 @@ def create_app(config_filename):
             # migration 020_add_fund_product_type for the documented/reversible
             # Alembic-script equivalent of this same change.
             db.session.execute(text("ALTER TABLE core_funds ADD COLUMN IF NOT EXISTS product_type product_type_enum"))
+            # Task 12: optional fund/share description (editable on the detail page).
+            db.session.execute(text("ALTER TABLE core_funds ADD COLUMN IF NOT EXISTS description TEXT"))
             db.session.execute(text("""
                 UPDATE core_funds
                 SET product_type = 'SHARES'
@@ -227,18 +231,13 @@ def create_app(config_filename):
             db.session.execute(text("ALTER TABLE share_classes ALTER COLUMN product_type SET DEFAULT 'FUNDS'"))
             db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_share_classes_product_type ON share_classes (product_type)"))
 
-            # Currency: SHARES share classes may be NGN now (Task 7 established
-            # DPRP is NGN-valued); FUNDS share classes stay KES/USD — widen the
-            # CHECK constraint, then correct DPRP's own share class(es), which
-            # Task 3 had set to 'USD' only because NGN wasn't a legal value yet.
+            # Currency: share classes may be KES/USD/NGN (SHARES classes may use
+            # any of them, FUNDS stay KES/USD — enforced per product in
+            # app/Funds/edit_service.py::CURRENCIES_BY_PRODUCT). SHARES deposits
+            # are USD; the one-time NGN -> USD relabel is migration 023, so the
+            # class currency is no longer forced here on every start.
             db.session.execute(text("ALTER TABLE share_classes DROP CONSTRAINT IF EXISTS _currency_check"))
             db.session.execute(text("ALTER TABLE share_classes ADD CONSTRAINT _currency_check CHECK (currency IN ('KES', 'USD', 'NGN'))"))
-            db.session.execute(text("""
-                UPDATE share_classes sc
-                SET currency = 'NGN'
-                FROM core_funds cf
-                WHERE sc.core_fund_id = cf.id AND cf.product_type = 'SHARES' AND sc.currency != 'NGN'
-            """))
 
             # Commit everything above before the optional legacy-column backfill below, so that
             # if it fails it can't silently discard all the schema-sync statements that already

@@ -1,8 +1,13 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint, Index, CheckConstraint, Numeric, event, text
 from app.database.database import db
-from app.database.product_type import ProductTypeEnum, FUNDS
+from app.database.product_type import ProductTypeEnum, FUNDS, SHARES
 from base_model import Base
 from datetime import datetime, timezone
+
+
+# SHARES deployment (app/logic/shares_deployment_service.py) always converts
+# deposits into NGN shares, so SHARES NAV-based figures are NGN.
+SHARES_VALUATION_CURRENCY = "NGN"
 
 
 class ShareClass(Base, db.Model):
@@ -45,6 +50,16 @@ class ShareClass(Base, db.Model):
         Index("ix_share_classes_active", "is_active"),
         Index("ix_share_classes_product_type", "product_type"),
     )
+
+    @property
+    def valuation_currency(self):
+        """
+        Currency the class's NAV / valuations / shares are priced in. For FUNDS
+        it is the class currency. For SHARES (DPRP) the class currency is the
+        deposit currency (USD) — deployment converts each deposit to NGN and
+        every NAV-based figure from then on is NGN.
+        """
+        return SHARES_VALUATION_CURRENCY if self.product_type == SHARES else self.currency
 
     def __repr__(self):
         return f"<ShareClass {self.class_code} ({self.currency}) fund={self.core_fund_id} product={self.product_type} active={self.is_active}>"

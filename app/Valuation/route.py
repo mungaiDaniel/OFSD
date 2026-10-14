@@ -7,7 +7,8 @@ from app.database.database import db
 from app.logic.valuation_service import PortfolioValuationService as LegacyValuationService
 from app.logic.nav_valuation_service import PortfolioValuationService, NavInput
 from app.Investments.model import Investment, EpochLedger, Withdrawal, FINAL_WITHDRAWAL_STATUSES, WITHDRAWAL_STATUS_EXECUTED
-from app.Funds.share_class import ShareClass
+from app.Funds.share_class import ShareClass, SHARES_VALUATION_CURRENCY
+from app.database.product_type import SHARES
 from sqlalchemy import and_, func, or_, select, insert
 from app.Batch.core_fund import CoreFund
 from app.Batch.model import Batch
@@ -272,6 +273,7 @@ def list_nav_valuation_runs():
                 InvestorShares.share_class_id.label("share_class_id"),
                 ShareClass.class_code.label("share_class_code"),
                 ShareClass.currency.label("currency"),
+                CoreFund.product_type.label("product_type"),
                 ShareClass.core_fund_id.label("core_fund_id"),
                 CoreFund.fund_name.label("fund_name"),
                 ValuationSnapshot.valuation_date.label("valuation_date"),
@@ -291,6 +293,7 @@ def list_nav_valuation_runs():
                 InvestorShares.share_class_id,
                 ShareClass.class_code,
                 ShareClass.currency,
+                CoreFund.product_type,
                 ShareClass.core_fund_id,
                 CoreFund.fund_name,
                 ValuationSnapshot.valuation_date,
@@ -309,7 +312,9 @@ def list_nav_valuation_runs():
                     "share_class_code": r.share_class_code,
                     "core_fund_id": int(r.core_fund_id),
                     "fund_name": r.fund_name,
-                    "currency": (r.currency or "USD").upper(),
+                    # NAV currency: SHARES (DPRP) classes are deposited in
+                    # USD but valued in NGN (ShareClass.valuation_currency).
+                    "currency": SHARES_VALUATION_CURRENCY if r.product_type == SHARES else (r.currency or "USD").upper(),
                     "valuation_date": r.valuation_date.isoformat(),
                     "nav_per_share": float(Decimal(str(r.nav_per_share)).quantize(Decimal("0.0001"))),
                     "closing_aum": float(Decimal(str(r.closing_aum)).quantize(Decimal("0.01"))),

@@ -71,7 +71,7 @@ describe("Shares page (/shares)", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers NGN as the only share class currency", async () => {
+  it("offers USD (default), NGN and KES as share class currencies", async () => {
     const user = userEvent.setup();
     renderWith(<SharesListPage />);
     await screen.findByText(/Dangote/i);
@@ -85,6 +85,6 @@ describe("Shares page (/shares)", () => {
     const options = within(currencySelect)
       .getAllByRole("option")
       .map((o) => o.textContent);
-    expect(options).toEqual(["NGN"]);
+    expect(options).toEqual(["USD", "NGN", "KES"]);
   });
 });

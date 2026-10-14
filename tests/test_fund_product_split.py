@@ -390,3 +390,45 @@ class TestFundSummaryByProduct:
             finally:
                 db.session.remove()
                 db.drop_all()
+
+
+@pytest.mark.unit
+class TestDeleteFundWithShareClasses:
+    """DELETE /api/v1/shares/<id> used to fail with a share_classes FK violation."""
+
+    def test_deletes_fund_and_its_empty_share_class(self, client, super_admin_token, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                fund, share_class = _make_fund_and_class(
+                    "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP", class_code="DPRP-DEL", currency="USD"
+                )
+                db.session.commit()
+                fund_id, class_id = fund.id, share_class.id
+
+                resp = client.delete(f"/api/v1/shares/{fund_id}", headers=get_auth_headers(super_admin_token))
+                assert resp.status_code == 200, resp.get_json()
+                assert db.session.get(CoreFund, fund_id) is None
+                assert db.session.get(ShareClass, class_id) is None
+            finally:
+                db.session.remove()
+                db.drop_all()
+
+    def test_refuses_when_share_class_has_a_batch(self, client, super_admin_token, app):
+        with app.app_context():
+            db.create_all()
+            try:
+                fund, share_class = _make_fund_and_class(
+                    "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP", class_code="DPRP-KEEP", currency="USD"
+                )
+                db.session.add(Batch(batch_name="DPRP Batch", share_class_id=share_class.id, is_active=True))
+                db.session.commit()
+                fund_id = fund.id
+
+                resp = client.delete(f"/api/v1/shares/{fund_id}", headers=get_auth_headers(super_admin_token))
+                assert resp.status_code == 409
+                assert "linked batch" in resp.get_json()["message"]
+                assert db.session.get(CoreFund, fund_id) is not None
+            finally:
+                db.session.remove()
+                db.drop_all()

@@ -454,6 +454,8 @@ export interface CoreFund {
   id: number;
   fund_name: string;
   fund_code?: string;
+  /** Task 12: optional free-text description (editable on the detail page). */
+  description?: string | null;
   // FUNDS vs SHARES (see app/database/product_type.py) — computed server-side from
   // fund identity (resolve_product_type); SHARES today means DPRP specifically.
   product_type?: ProductType;
@@ -473,11 +475,67 @@ export interface FundShareClass {
   current_nav?: number | null;
 }
 
+/** Task 12: GET /{funds|shares}/:id/edit-context — fresh values for the Edit
+ * forms, plus the optimistic-concurrency `version` and currency-lock info. */
+export interface FundEditFund {
+  id: number;
+  fund_name: string;
+  fund_code?: string | null;
+  description?: string | null;
+  product_type: ProductType;
+  is_active: boolean;
+  version: string;
+}
+
+export interface ShareClassEditInfo {
+  id: number;
+  core_fund_id: number;
+  class_name: string;
+  class_code: string;
+  currency: string;
+  product_type: ProductType;
+  is_active: boolean;
+  version: string;
+  currency_locked: boolean;
+  currency_lock_reasons: string[];
+  open_batches: string[];
+}
+
+export interface FundEditContext {
+  fund: FundEditFund;
+  allowed_currencies: string[];
+  can_override_currency: boolean;
+  open_batches: string[];
+  rename_locked: boolean;
+  share_classes: ShareClassEditInfo[];
+}
+
+export interface FundUpdatePayload {
+  fund_name?: string;
+  fund_code?: string;
+  description?: string | null;
+  is_active?: boolean;
+  version?: string;
+}
+
+export interface ShareClassUpdatePayload {
+  class_name?: string;
+  class_code?: string;
+  currency?: string;
+  is_active?: boolean;
+  version?: string;
+  confirm_currency_override?: boolean;
+}
+
 export interface FundClassSummary {
   id?: number;
   class_name: string;
   class_code?: string;
+  /** Deposit currency. Same as valuation_currency for FUNDS; for SHARES (DPRP)
+   * deposits are USD while NAV/value figures are NGN. */
   currency?: string;
+  /** Currency the NAV, total_nav, total_invested and unrealized_gain are in. */
+  valuation_currency?: string;
   is_active?: boolean;
   total_shares?: number;
   prev_nav?: number | null;

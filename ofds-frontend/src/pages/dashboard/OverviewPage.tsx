@@ -8,6 +8,7 @@ import ClientActivitySection from "@/components/overview/ClientActivitySection";
 import { ROUTES } from "@/lib/constants";
 import type { FundClassSummary, FundSummaryItem, FundsSummaryResponse, Batch, ProductType } from "@/lib/types";
 import { ProductToggle, OVERVIEW_PRODUCT_OPTIONS, type ProductFilterValue } from "@/components/ui/ProductToggle";
+import { useNgnUsdView, NgnUsdViewControl, type NgnUsdView } from "@/components/shares/NgnUsdView";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // OVERVIEW PAGE — Production-matching layout
@@ -51,6 +52,9 @@ const SECTION_LABEL: React.CSSProperties = {
   color: "var(--color-text-tertiary)",
   marginBottom: "12px",
 };
+
+// Shares (DPRP) classes are valued in NGN whatever their deposit currency.
+const valuationCurrencyOf = (c: FundClassSummary) => c.valuation_currency ?? c.currency;
 
 // ── Currency color/prefix lookups (KES/USD/NGN) ──────────────────────────────
 const CURRENCY_COLOR_VAR: Record<string, string> = { KES: "--color-kes", USD: "--color-usd", NGN: "--color-ngn" };
@@ -156,6 +160,12 @@ interface CurrencyKpiCardProps {
   /** When provided, gates the Gain/Loss line with an extra "Not valued yet"
    * state (Task 10, NGN/Shares only — see FundClassSummary.is_valued). */
   anyValued?: boolean;
+  /** Currency of the deposit-side lines (Net Holdings, Gross, Withdrawn,
+   * Refunds) when it differs from the card's value currency — Shares are
+   * valued in NGN but deposited/refunded in USD. Defaults to `currency`. */
+  depositCurrency?: string;
+  /** Shares only: "View in NGN / USD" for the NGN value lines. */
+  ngnView?: NgnUsdView;
 }
 
 function CurrencyKpiCard({
@@ -171,11 +181,20 @@ function CurrencyKpiCard({
   hasExposure,
   entityNoun,
   anyValued,
+  depositCurrency,
+  ngnView,
 }: CurrencyKpiCardProps) {
   const colorVar = currencyColorVar(currency);
   const color = `var(${colorVar})`;
-  const prefix = currencyPrefix(currency);
   const deployed = total > 0;
+  // Value lines (Total, Gain) may be shown converted; deposit lines never are.
+  const shownCurrency = ngnView && currency === "NGN" ? ngnView.displayCurrency : currency;
+  if (ngnView && currency === "NGN") {
+    total = ngnView.convert(total);
+    gain = ngnView.convert(gain);
+  }
+  const prefix = currencyPrefix(shownCurrency);
+  const depositPrefix = currencyPrefix(depositCurrency ?? currency);
   const gainLabel = !deployed
     ? "Not deployed yet"
     : anyValued === false
@@ -194,8 +213,14 @@ function CurrencyKpiCard({
           marginBottom: "8px",
         }}
       >
-        Total <span style={{ color, marginLeft: "4px" }}>{currency}</span>
+        Total <span style={{ color, marginLeft: "4px" }}>{shownCurrency}</span>
+        {shownCurrency !== currency && <span style={{ marginLeft: "4px", textTransform: "none" }}>(from {currency})</span>}
       </div>
+      {ngnView && currency === "NGN" && (
+        <div style={{ marginBottom: "8px" }}>
+          <NgnUsdViewControl view={ngnView} compact />
+        </div>
+      )}
       {scopedToThisEntity && !hasExposure ? (
         <div style={{ fontSize: "13px", color: "var(--color-text-tertiary)", padding: "6px 0" }}>
           No {currency} exposure for this {entityNoun}
@@ -226,20 +251,20 @@ function CurrencyKpiCard({
             }}
           >
             Net Holdings:{" "}
-            {netHoldings !== 0 ? `${prefix}${netHoldings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+            {netHoldings !== 0 ? `${depositPrefix}${netHoldings.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
           </div>
           <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
             Gross Invested:{" "}
-            {gross > 0 ? `${prefix}${gross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+            {gross > 0 ? `${depositPrefix}${gross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
           </div>
           {withdrawn > 0 && (
             <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}>
-              Withdrawn: -{prefix}{withdrawn.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              Withdrawn: -{depositPrefix}{withdrawn.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           )}
           {refunds > 0 && (
             <div style={{ fontSize: "11px", color: "#F59E0B", fontFamily: "var(--font-mono)" }}>
-              Pending Refunds: {prefix}{refunds.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              Pending Refunds: {depositPrefix}{refunds.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           )}
           <div
@@ -439,7 +464,7 @@ export default function OverviewPage() {
     [fundsClasses]
   );
   const ngnClasses = useMemo(
-    () => sharesClasses.filter((c) => c.currency === "NGN" && c.current_nav != null),
+    () => sharesClasses.filter((c) => valuationCurrencyOf(c) === "NGN" && c.current_nav != null),
     [sharesClasses]
   );
 
@@ -450,7 +475,11 @@ export default function OverviewPage() {
   // genuinely nothing yet).
   const fundHasKES = useMemo(() => fundsClasses.some((c) => c.currency === "KES"), [fundsClasses]);
   const fundHasUSD = useMemo(() => fundsClasses.some((c) => c.currency === "USD"), [fundsClasses]);
-  const shareHasNGN = useMemo(() => sharesClasses.some((c) => c.currency === "NGN"), [sharesClasses]);
+  const shareHasNGN = useMemo(() => sharesClasses.some((c) => valuationCurrencyOf(c) === "NGN"), [sharesClasses]);
+  // Shares deposits/refunds/withdrawals are in the share classes' deposit
+  // currency (USD for DPRP), not the NGN they're valued in after deployment.
+  const sharesDepositCurrency = sharesClasses.find((c) => c.currency)?.currency ?? "USD";
+  const ngnView = useNgnUsdView();
 
   // Task 10: "Not valued yet" (deployed with only a deployment-NAV fallback
   // price, see FundClassSummary.is_valued) vs "Not deployed yet" (nothing
@@ -482,24 +511,24 @@ export default function OverviewPage() {
   // GROSS INVESTED — total ever deposited, unadjusted.
   const grossKES = useMemo(() => sumByCurrencyFor(fundsEntities, "gross_deposited_by_currency", "KES"), [fundsEntities]);
   const grossUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "gross_deposited_by_currency", "USD"), [fundsEntities]);
-  const grossNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "gross_deposited_by_currency", "NGN"), [sharesEntities]);
+  const grossShares = useMemo(() => sumByCurrencyFor(sharesEntities, "gross_deposited_by_currency", sharesDepositCurrency), [sharesEntities, sharesDepositCurrency]);
 
   // Withdrawn — shown as its own line so the Gross → Net gap is visible.
   const withdrawnKES = useMemo(() => sumByCurrencyFor(fundsEntities, "withdrawals_by_currency", "KES"), [fundsEntities]);
   const withdrawnUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "withdrawals_by_currency", "USD"), [fundsEntities]);
-  const withdrawnNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "withdrawals_by_currency", "NGN"), [sharesEntities]);
+  const withdrawnShares = useMemo(() => sumByCurrencyFor(sharesEntities, "withdrawals_by_currency", sharesDepositCurrency), [sharesEntities, sharesDepositCurrency]);
 
   // Pending/processed oversubscription refunds.
   const refundsKES = useMemo(() => sumByCurrencyFor(fundsEntities, "refunds_by_currency", "KES"), [fundsEntities]);
   const refundsUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "refunds_by_currency", "USD"), [fundsEntities]);
-  const refundsNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "refunds_by_currency", "NGN"), [sharesEntities]);
+  const refundsShares = useMemo(() => sumByCurrencyFor(sharesEntities, "refunds_by_currency", sharesDepositCurrency), [sharesEntities, sharesDepositCurrency]);
 
   // NET HOLDINGS — net principal minus withdrawals, computed server-side.
   // Deliberately NOT the same number as totalKES/USD/NGN above (current
   // market value) — this is "what's still actually committed".
   const netHoldingsKES = useMemo(() => sumByCurrencyFor(fundsEntities, "net_holdings_by_currency", "KES"), [fundsEntities]);
   const netHoldingsUSD = useMemo(() => sumByCurrencyFor(fundsEntities, "net_holdings_by_currency", "USD"), [fundsEntities]);
-  const netHoldingsNGN = useMemo(() => sumByCurrencyFor(sharesEntities, "net_holdings_by_currency", "NGN"), [sharesEntities]);
+  const netHoldingsShares = useMemo(() => sumByCurrencyFor(sharesEntities, "net_holdings_by_currency", sharesDepositCurrency), [sharesEntities, sharesDepositCurrency]);
 
   // Gain/Loss — current value vs. Net Holdings, computed server-side.
   const gainKES = useMemo(
@@ -594,21 +623,24 @@ export default function OverviewPage() {
           currency: "NGN",
           total: totalNGN,
           activeClassesCount: ngnClasses.length,
-          netHoldings: netHoldingsNGN,
-          gross: grossNGN,
-          withdrawn: withdrawnNGN,
-          refunds: refundsNGN,
+          netHoldings: netHoldingsShares,
+          gross: grossShares,
+          withdrawn: withdrawnShares,
+          refunds: refundsShares,
           gain: gainNGN,
           scopedToThisEntity: scopedProduct === "SHARES",
           hasExposure: shareHasNGN,
           anyValued: ngnAnyValued,
+          depositCurrency: sharesDepositCurrency,
+          ngnView,
         },
       ].filter(Boolean) as (CurrencyKpiCardProps & { currency: string })[],
     [
       showFundsGroup, showSharesGroup, scopedProduct,
       totalKES, kesClasses, netHoldingsKES, grossKES, withdrawnKES, refundsKES, gainKES, fundHasKES,
       totalUSD, usdClasses, netHoldingsUSD, grossUSD, withdrawnUSD, refundsUSD, gainUSD, fundHasUSD,
-      totalNGN, ngnClasses, netHoldingsNGN, grossNGN, withdrawnNGN, refundsNGN, gainNGN, shareHasNGN, ngnAnyValued,
+      totalNGN, ngnClasses, netHoldingsShares, grossShares, withdrawnShares, refundsShares, gainNGN, shareHasNGN, ngnAnyValued,
+      sharesDepositCurrency, ngnView,
     ]
   );
 
@@ -695,6 +727,7 @@ export default function OverviewPage() {
           {(showFundsGroup || showSharesGroup) && (
             <div>
               <label
+                htmlFor="overview-entity-select"
                 style={{
                   display: "block",
                   fontSize: "10px",
@@ -708,6 +741,7 @@ export default function OverviewPage() {
                 {dropdownLabel}
               </label>
               <select
+                id="overview-entity-select"
                 value={selectedFundId}
                 onChange={(e) => handleEntitySelect(e.target.value)}
                 style={{
