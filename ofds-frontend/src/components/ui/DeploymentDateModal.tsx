@@ -26,10 +26,14 @@ export interface DeploymentOversubscription {
   allocationRate: number; // percentage, e.g. 60 = 60%
 }
 
+export type DeploymentNavMode = "manual" | "class";
+
 export interface DeploymentConfirmPayload {
   dateString: string;
   classes: DeploymentClassBreakdown[];
   oversubscription?: DeploymentOversubscription;
+  /** mode="manual" only: each investor's own NAV per share, keyed by investment id. */
+  investorNavs?: Record<number, number>;
 }
 
 interface DeploymentDateModalProps {
@@ -74,9 +78,25 @@ function groupByClass(investments: DeploymentInvestment[]): ClassGroup[] {
 
 const PREVIEW_ROW_LIMIT = 50;
 
+const classKeyOf = (inv: DeploymentInvestment) =>
+  inv.share_class_id != null ? String(inv.share_class_id) : `code-${inv.class_code ?? "unknown"}`;
+
+const fmt2 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt4 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+
+/**
+ * Deploy-to-Active: two ways to set the NAV each client buys in at —
+ * - Manual (per client): type in each investor's own NAV per share (with an
+ *   "apply to all" shortcut), same idea as the manual Transfer stage.
+ * - One NAV per class: the original single NAV applied to every investor in
+ *   a share class — unchanged.
+ */
 export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = false, investments, isDprpFund = false }: DeploymentDateModalProps) {
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [mode, setMode] = useState<DeploymentNavMode>("manual");
   const [navByClass, setNavByClass] = useState<Record<string, string>>({});
+  const [navByInvestor, setNavByInvestor] = useState<Record<number, string>>({});
+  const [applyAllNav, setApplyAllNav] = useState<string>("");
 
   // ── DPRP oversubscription pro-rata allocation ──
   const [isOversubscribed, setIsOversubscribed] = useState(false);
@@ -103,24 +123,86 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
 
   if (!open) return null;
 
-  const validCount = classGroups.filter((g) => Number(navByClass[g.key]) > 0).length;
-  const allValid = classGroups.length > 0 && validCount === classGroups.length && allocationRateValid;
+  // ── Manual (per client) mode math ──
+  const manualRows = investments
+    .filter((inv): inv is DeploymentInvestment & { id: number } => inv.id != null)
+    .map((inv) => {
+      const nav = Number(navByInvestor[inv.id]) || 0;
+      const deployedAmount = (inv.main_balance ?? 0) * allocationFraction;
+      const shares = nav > 0 ? deployedAmount / nav : 0;
+      return { inv, nav, deployedAmount, shares };
+    });
+  // Investors with nothing to deploy get zero shares server-side regardless of
+  // NAV, so they don't block confirming.
+  const manualValidCount = manualRows.filter((r) => r.nav > 0 || r.deployedAmount <= 0).length;
 
-  const sumTotalShares = classGroups.reduce((sum, g) => {
-    const nav = Number(navByClass[g.key]);
-    const deployedAmount = g.netDeployedAmount * allocationFraction;
-    return sum + (nav > 0 ? deployedAmount / nav : 0);
-  }, 0);
-  const sumTotalNav = classGroups.reduce((sum, g) => {
-    const nav = Number(navByClass[g.key]);
-    return sum + (nav > 0 ? g.netDeployedAmount * allocationFraction : 0);
-  }, 0);
+  // Per-class totals in manual mode: shares/NAV summed from each client's own
+  // NAV; the class "NAV per share" becomes the weighted average (total NAV /
+  // total shares), kept for the batch-level display cards.
+  const manualClassTotals = new Map<string, { shares: number; nav: number }>();
+  for (const r of manualRows) {
+    if (r.nav <= 0) continue;
+    const key = classKeyOf(r.inv);
+    const t = manualClassTotals.get(key) ?? { shares: 0, nav: 0 };
+    t.shares += r.shares;
+    t.nav += r.deployedAmount;
+    manualClassTotals.set(key, t);
+  }
+
+  const validCount = classGroups.filter((g) => Number(navByClass[g.key]) > 0).length;
+  const allValid =
+    allocationRateValid &&
+    (mode === "manual"
+      ? manualRows.length > 0 && manualValidCount === manualRows.length
+      : classGroups.length > 0 && validCount === classGroups.length);
+
+  const sumTotalShares =
+    mode === "manual"
+      ? manualRows.reduce((sum, r) => sum + r.shares, 0)
+      : classGroups.reduce((sum, g) => {
+          const nav = Number(navByClass[g.key]);
+          const deployedAmount = g.netDeployedAmount * allocationFraction;
+          return sum + (nav > 0 ? deployedAmount / nav : 0);
+        }, 0);
+  const sumTotalNav =
+    mode === "manual"
+      ? manualRows.reduce((sum, r) => sum + (r.nav > 0 ? r.deployedAmount : 0), 0)
+      : classGroups.reduce((sum, g) => {
+          const nav = Number(navByClass[g.key]);
+          return sum + (nav > 0 ? g.netDeployedAmount * allocationFraction : 0);
+        }, 0);
 
   const totalDeployedPreview = totalPreAllocationNet * allocationFraction;
   const totalRefundPreview = totalPreAllocationNet - totalDeployedPreview;
 
+  const applyNavToAll = () => {
+    if (!(Number(applyAllNav) > 0)) return;
+    setNavByInvestor(Object.fromEntries(manualRows.map((r) => [r.inv.id, applyAllNav])));
+  };
+
   const handleConfirm = async () => {
     if (!selectedDate || !allValid) return;
+    const oversubscription = isOversubscribed ? { isOversubscribed: true, allocationRate: Number(allocationRate.toFixed(4)) } : undefined;
+
+    if (mode === "manual") {
+      const investorNavs: Record<number, number> = {};
+      for (const r of manualRows) {
+        if (r.nav > 0) investorNavs[r.inv.id] = r.nav;
+      }
+      const classes: DeploymentClassBreakdown[] = classGroups.map((g) => {
+        const t = manualClassTotals.get(g.key) ?? { shares: 0, nav: 0 };
+        return {
+          share_class_id: g.share_class_id,
+          class_code: g.class_code,
+          navPerShare: t.shares > 0 ? Number((t.nav / t.shares).toFixed(6)) : 0,
+          totalShares: Number(t.shares.toFixed(4)),
+          totalNav: Number(t.nav.toFixed(2)),
+        };
+      });
+      await onConfirm({ dateString: new Date(selectedDate).toISOString(), classes, oversubscription, investorNavs });
+      return;
+    }
+
     const classes: DeploymentClassBreakdown[] = classGroups.map((g) => {
       const nav = Number(navByClass[g.key]);
       const deployedAmount = g.netDeployedAmount * allocationFraction;
@@ -133,11 +215,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
         totalNav: Number(deployedAmount.toFixed(2)),
       };
     });
-    await onConfirm({
-      dateString: new Date(selectedDate).toISOString(),
-      classes,
-      oversubscription: isOversubscribed ? { isOversubscribed: true, allocationRate: Number(allocationRate.toFixed(4)) } : undefined,
-    });
+    await onConfirm({ dateString: new Date(selectedDate).toISOString(), classes, oversubscription });
   };
 
   const overlayStyle: React.CSSProperties = {
@@ -200,6 +278,25 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
     background: "rgba(255, 255, 255, 0.08)",
   };
 
+  const smallInputStyle: React.CSSProperties = {
+    width: "120px", background: "rgba(255, 255, 255, 0.05)", border: "1px solid rgba(255, 255, 255, 0.1)",
+    borderRadius: "6px", color: "#fff", padding: "6px 10px", fontSize: "12px", outline: "none",
+    fontFamily: "var(--font-mono)", colorScheme: "dark", textAlign: "right",
+  };
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: "9px 12px",
+    borderRadius: "8px",
+    border: active ? "1px solid rgba(59,111,212,0.5)" : "1px solid rgba(255,255,255,0.08)",
+    background: active ? "rgba(59,111,212,0.15)" : "transparent",
+    color: active ? "#93B4F5" : "#94A3B8",
+    fontSize: "12px",
+    fontWeight: 600,
+    cursor: isLoading ? "not-allowed" : "pointer",
+    transition: "all 0.15s",
+  });
+
   const labelStyle: React.CSSProperties = { fontSize: "12px", color: "#94A3B8", fontWeight: 500 };
   const classCardStyle: React.CSSProperties = {
     padding: "18px",
@@ -247,6 +344,15 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
           <p style={{ margin: 0, fontSize: "14px", color: "rgba(255,255,255,0.7)", lineHeight: 1.5 }}>
             Configure deployment details. This marks the batch as Active and stores NAV totals for each share class.
           </p>
+
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button type="button" style={tabStyle(mode === "manual")} disabled={isLoading} onClick={() => setMode("manual")}>
+              Manual — NAV per client
+            </button>
+            <button type="button" style={tabStyle(mode === "class")} disabled={isLoading} onClick={() => setMode("class")}>
+              One NAV for everyone
+            </button>
+          </div>
 
           {/* Deployment Date */}
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -439,8 +545,102 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
             </div>
           )}
 
-          {/* Per-class NAV entry */}
-          {classGroups.map((g) => {
+          {/* Manual: per-client NAV entry */}
+          {mode === "manual" && (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                <label style={labelStyle}>APPLY ONE NAV TO ALL CLIENTS (OPTIONAL)</label>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    placeholder="e.g., 1389.5737"
+                    style={inputStyle}
+                    value={applyAllNav}
+                    onChange={(e) => setApplyAllNav(e.target.value)}
+                    disabled={isLoading}
+                  />
+                  <button
+                    type="button"
+                    onClick={applyNavToAll}
+                    disabled={isLoading || !(Number(applyAllNav) > 0)}
+                    style={{
+                      whiteSpace: "nowrap", padding: "0 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600,
+                      border: "1px solid rgba(59,111,212,0.5)", background: "rgba(59,111,212,0.15)", color: "#93B4F5",
+                      cursor: isLoading || !(Number(applyAllNav) > 0) ? "not-allowed" : "pointer",
+                      opacity: Number(applyAllNav) > 0 ? 1 : 0.5,
+                    }}
+                  >
+                    Apply to all
+                  </button>
+                </div>
+                <p style={{ margin: 0, fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
+                  Fills every client's NAV below — you can still adjust individual clients afterwards.
+                </p>
+              </div>
+
+              <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", overflow: "hidden" }}>
+                <div style={{ maxHeight: "320px", overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                    <thead style={{ position: "sticky", top: 0, background: "#111a33" }}>
+                      <tr>
+                        {["Client", "Class", `Net Deployed${isOversubscribed ? " (Allocated)" : ""}`, "NAV per Share", "Shares"].map((h, i) => (
+                          <th
+                            key={h}
+                            style={{ padding: "8px 10px", textAlign: i < 2 ? "left" : "right", color: "#94A3B8", fontWeight: 600, whiteSpace: "nowrap" }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualRows.map(({ inv, deployedAmount, shares }) => (
+                        <tr key={inv.id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                          <td style={{ padding: "6px 10px" }}>
+                            <div style={{ color: "#fff", fontWeight: 500 }}>{inv.investor_name ?? "—"}</div>
+                            <div style={{ color: "rgba(255,255,255,0.4)", fontFamily: "var(--font-mono)", fontSize: "10px" }}>
+                              {inv.internal_client_code}
+                            </div>
+                          </td>
+                          <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.6)" }}>{inv.class_code ?? "—"}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "rgba(255,255,255,0.7)", fontFamily: "var(--font-mono)" }}>
+                            {fmt2(deployedAmount)}
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                            <input
+                              type="number"
+                              step="0.0001"
+                              min="0"
+                              aria-label={`NAV per share for ${inv.investor_name ?? inv.internal_client_code ?? inv.id}`}
+                              style={smallInputStyle}
+                              value={navByInvestor[inv.id] ?? ""}
+                              onChange={(e) => setNavByInvestor((prev) => ({ ...prev, [inv.id]: e.target.value }))}
+                              disabled={isLoading}
+                            />
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#86EFAC", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                            {fmt4(shares)}
+                          </td>
+                        </tr>
+                      ))}
+                      {manualRows.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ padding: "16px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                            No clients in this batch.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* One NAV per class */}
+          {mode === "class" && classGroups.map((g) => {
             const nav = Number(navByClass[g.key]) || 0;
             const deployedAmount = g.netDeployedAmount * allocationFraction;
             const totalShares = nav > 0 ? deployedAmount / nav : 0;
@@ -491,8 +691,12 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
           {classGroups.length > 0 && (
             <div style={classCardStyle}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", ...labelStyle }}>
-                <span>Total across all classes</span>
-                <span>{validCount}/{classGroups.length} valid</span>
+                <span>{mode === "manual" ? "Total across all clients" : "Total across all classes"}</span>
+                <span>
+                  {mode === "manual"
+                    ? `${manualValidCount}/${manualRows.length} clients priced`
+                    : `${validCount}/${classGroups.length} valid`}
+                </span>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>

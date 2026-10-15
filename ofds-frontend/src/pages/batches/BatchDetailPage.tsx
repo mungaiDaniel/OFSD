@@ -422,7 +422,7 @@ export default function BatchDetailPage() {
     }
   };
 
-  const handleDeployDateConfirm = async ({ dateString, classes, oversubscription }: DeploymentConfirmPayload) => {
+  const handleDeployDateConfirm = async ({ dateString, classes, oversubscription, investorNavs }: DeploymentConfirmPayload) => {
     setIsDeploying(true);
     const totalShares = classes.reduce((sum, c) => sum + c.totalShares, 0);
     const totalNav = classes.reduce((sum, c) => sum + c.totalNav, 0);
@@ -434,6 +434,8 @@ export default function BatchDetailPage() {
       total_shares: totalShares,
       total_nav: totalNav,
       deployment_breakdown: classes,
+      // Manual per-client NAVs (keyed by investment id) — omitted in one-NAV-per-class mode.
+      ...(investorNavs ? { deployment_navs: investorNavs } : {}),
     };
     if (oversubscription?.isOversubscribed) {
       patchData.is_oversubscribed = true;

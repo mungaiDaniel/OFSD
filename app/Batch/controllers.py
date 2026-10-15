@@ -1143,13 +1143,24 @@ class BatchController:
             pass
 
     @classmethod
-    def _deploy_shares_for_batch(cls, batch, session):
+    def _deploy_shares_for_batch(cls, batch, session, navs_by_investment=None):
         """
         Create or update InvestorShares for deployed batch investments —
         FUNDS (NAV-based) only. SHARES batches are deployed by
         SharesDeploymentService (Task 3), which computes whole shares from a
         price-per-share/exchange-rate, not a NAV.
+
+        `navs_by_investment` ({investment_id: nav_per_share}) is the manual
+        per-client mode: each listed investor is deployed at their own typed
+        NAV instead of their class's single NAV. Investors missing from the map
+        (or with a non-positive value) fall back to the class/batch NAV. Classes
+        containing any manually-priced investor skip the total-shares rescale
+        below, since there's no single class NAV for it to reconcile against.
         """
+        navs_by_investment = {
+            int(k): Decimal(str(v)) for k, v in (navs_by_investment or {}).items()
+            if v is not None and Decimal(str(v)) > 0
+        }
         if batch is None or batch.date_deployed is None:
             return
 
@@ -1196,7 +1207,7 @@ class BatchController:
                 targets_by_code = {}
 
         use_breakdown = bool(breakdown_by_id or breakdown_by_code)
-        if not use_breakdown and (batch.deployment_nav is None or batch.deployment_nav <= 0):
+        if not use_breakdown and not navs_by_investment and (batch.deployment_nav is None or batch.deployment_nav <= 0):
             return
 
         computed_totals = {}
@@ -1211,8 +1222,9 @@ class BatchController:
                 continue
 
             share_class_id = inv.share_class_id if inv.share_class_id is not None else batch.share_class_id
-            nav_per_share = None
-            if use_breakdown:
+            nav_per_share = navs_by_investment.get(inv.id)
+            is_manual_nav = nav_per_share is not None
+            if nav_per_share is None and use_breakdown:
                 if share_class_id is not None and share_class_id in breakdown_by_id:
                     nav_per_share = breakdown_by_id[share_class_id]
                 elif inv.share_class and inv.share_class.class_code in breakdown_by_code:
@@ -1244,13 +1256,18 @@ class BatchController:
                     "nav": Decimal('0'),
                     "nav_per_share": nav_per_share,
                     "investments": [],
+                    "has_manual_nav": False,
                 }
 
+            if is_manual_nav:
+                computed_totals[class_key]["has_manual_nav"] = True
             computed_totals[class_key]["shares"] += shares
             computed_totals[class_key]["nav"] += inv.opening_market_value
             computed_totals[class_key]["investments"].append(inv)
 
         for class_key, bucket in computed_totals.items():
+            if bucket["has_manual_nav"]:
+                continue
             target = None
             if isinstance(class_key, int) and class_key in targets_by_id:
                 target = targets_by_id[class_key]
@@ -1272,9 +1289,10 @@ class BatchController:
                     bucket["nav"] = adjusted_nav
 
         batch.total_shares = sum((bucket["shares"] for bucket in computed_totals.values()), Decimal('0'))
-        if use_breakdown:
+        if use_breakdown or navs_by_investment:
             # Use computed class NAV totals to avoid double-counting when both
-            # share_class_id and class_code reference the same class.
+            # share_class_id and class_code reference the same class (and
+            # because per-client NAVs have no single batch NAV to multiply by).
             batch.deployment_total_nav = sum((bucket["nav"] for bucket in computed_totals.values()), Decimal('0'))
         else:
             batch.deployment_total_nav = (batch.total_shares * batch.deployment_nav).quantize(Decimal('0.01'))
@@ -2039,6 +2057,17 @@ class BatchController:
                     int(k): v for k, v in data['transfer_amounts_received'].items()
                 }
                 transfer_settings_changed = True
+            # Manual per-investor deployment NAVs: {investment_id: nav_per_share}.
+            # When present, each investor is deployed at their own NAV instead of
+            # their class's single NAV (see _deploy_shares_for_batch). FUNDS only.
+            deployment_navs = None
+            if data.get('deployment_navs') is not None:
+                try:
+                    deployment_navs = {int(k): Decimal(str(v)) for k, v in data['deployment_navs'].items()}
+                except (AttributeError, TypeError, ValueError, ArithmeticError):
+                    return make_response(jsonify({"status": 400, "message": "deployment_navs must map investment ids to numbers"}), 400)
+                if any(v <= 0 for v in deployment_navs.values()):
+                    return make_response(jsonify({"status": 400, "message": "Every NAV per share must be greater than zero"}), 400)
 
             # SHARES deployment validation MUST happen before any field below is
             # mutated (same reasoning as the transfer-fee check below it) — a 400
@@ -2301,7 +2330,7 @@ class BatchController:
                         else:
                             EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy_shares")
                     else:
-                        cls._deploy_shares_for_batch(batch, session)
+                        cls._deploy_shares_for_batch(batch, session, navs_by_investment=deployment_navs)
                         session.commit()
                         cls.refresh_cached_total_capital(batch, session)
                         EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy")
