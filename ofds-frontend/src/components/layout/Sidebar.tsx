@@ -165,12 +165,12 @@ export function Sidebar() {
         >
           <div style={{ position: "relative", height: "36px", width: "auto", display: "flex", alignItems: "center" }}>
             <img
-              alt="OFSD"
-              src="/logo.webp"
+              alt="AXYS Investment Bank"
+              src="/axys-logo.webp"
               style={{
-                height: "28px",
+                height: "34px",
                 width: "auto",
-                maxWidth: "160px",
+                maxWidth: "180px",
                 objectFit: "contain",
                 opacity: isMobile || !sidebarCollapsed ? 1 : 0,
                 transition: "opacity 0.25s",
@@ -180,8 +180,8 @@ export function Sidebar() {
               }}
             />
             <img
-              alt="OFSD"
-              src="/emblem.webp"
+              alt="AXYS Investment Bank"
+              src="/axys-emblem.webp"
               style={{
                 height: "34px",
                 width: "34px",

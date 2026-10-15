@@ -106,9 +106,9 @@ export default function RegisterPage() {
       >
         <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
           <img
-            src="/logo.webp"
-            alt="AIB AXYS Africa"
-            style={{ height: "36px", objectFit: "contain" }}
+            src="/axys-logo.webp"
+            alt="AXYS Investment Bank"
+            style={{ height: "48px", objectFit: "contain" }}
           />
         </div>
 
