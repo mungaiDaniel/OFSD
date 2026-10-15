@@ -221,10 +221,11 @@ class StatusUpdateController:
           aggregate transfer_cost_total is split proportional to each
           investor's share of the batch's total deposits.
 
-        Order of operations (both modes):
-        A) net_after_transaction = amount actually received after the bank's cut
-        B) entry_fee_usd = net_after_transaction * entry_fee_percent
-           main_balance = net_after_transaction - entry_fee_usd
+        Deductions (both modes) — BOTH are taken off the initial deposit:
+        A) transaction cost: net_after_transaction = amount_deposited - transfer cost
+        B) entry_fee_usd = amount_deposited * entry_fee_percent  (always on the
+           initial deposit, never on what's left after the transaction cost)
+           main_balance = amount_deposited - transfer cost - entry_fee_usd
         """
         from app.Investments.model import Investment
 
@@ -241,7 +242,9 @@ class StatusUpdateController:
             return {"total_transaction_fee_usd": Decimal("0.00"), "total_entry_fee_usd": Decimal("0.00"), "total_main_balance": Decimal("0.00")}
 
         def _finalize_row(investment, net_after_transaction, investor_fee, amount_received=None):
-            entry_fee_usd = (net_after_transaction * entry_fee_ratio).quantize(quant)
+            # Entry fee is charged on the initial deposit, not the post-transfer amount.
+            investor_principal = Decimal(str(investment.amount_deposited or 0))
+            entry_fee_usd = (investor_principal * entry_fee_ratio).quantize(quant)
             if entry_fee_usd < Decimal("0"):
                 entry_fee_usd = Decimal("0.00")
             date_transferred = investment.date_transferred

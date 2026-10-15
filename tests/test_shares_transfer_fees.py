@@ -390,11 +390,11 @@ class TestSharesTransferApi:
 
                 db.session.expire_all()
                 a = db.session.get(Investment, a.id)
-                # FUNDS order: transaction cost first (proportional to raw deposit),
-                # THEN entry fee on what's left — the OPPOSITE of SHARES.
-                # a: tx cost = 1000/4000*40 = 10.00; net_after_tx = 990.00; entry fee = 990*2% = 19.80
+                # FUNDS: transaction cost (proportional to raw deposit) and entry
+                # fee are BOTH taken off the initial deposit.
+                # a: tx cost = 1000/4000*40 = 10.00; entry fee = 1000*2% = 20.00
                 assert a.transfer_fee_deducted == Decimal("10.00")
-                assert a.deployment_fee_deducted == Decimal("19.80")
+                assert a.deployment_fee_deducted == Decimal("20.00")
                 assert a.balance_after_entry_fee_usd is None  # FUNDS never populates this
             finally:
                 db.session.remove()

@@ -52,8 +52,8 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
     await user.clear(entryFeeInput);
     await user.type(entryFeeInput, "2");
 
-    // Total received = 1800 + 3000 = 4800; entry fee 2% = 96; net = 4704.00
-    expect(screen.getByText("$4,704.00")).toBeInTheDocument();
+    // Deposited 5000; transfer 200; entry fee 2% of the 5000 deposit = 100; net = 4700.00
+    expect(screen.getByText("$4,700.00")).toBeInTheDocument();
   });
 
   it("confirms in manual mode with an amountsReceived map, null transaction cost, plus the entry fee %", async () => {
@@ -79,7 +79,7 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
 });
 
 describe("TransferCostModal — per-client Transfer Amount and Entry Fee columns", () => {
-  it("shows each client's transfer amount (deposited − received) and entry fee (on received)", async () => {
+  it("shows each client's transfer amount (deposited − received) and entry fee (on the deposit)", async () => {
     const user = userEvent.setup();
     render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
 
@@ -94,10 +94,10 @@ describe("TransferCostModal — per-client Transfer Amount and Entry Fee columns
     await user.type(aliceInput, "1900");
 
     const aliceRow = aliceInput.closest("tr")!;
-    // Transfer amount 2000 - 1900 = 100.00; entry fee 10% of 1900 = 190.00; net 1710.00
+    // Transfer amount 2000 - 1900 = 100.00; entry fee 10% of the 2000 deposit = 200.00; net 1700.00
     expect(aliceRow).toHaveTextContent("100.00");
-    expect(aliceRow).toHaveTextContent("190.00");
-    expect(aliceRow).toHaveTextContent("1,710.00");
+    expect(aliceRow).toHaveTextContent("200.00");
+    expect(aliceRow).toHaveTextContent("1,700.00");
 
     // Bob still at 0 received: his whole 3000 deposit shows as the transfer amount.
     const bobRow = screen.getByLabelText("Amount received for Bob Smith").closest("tr")!;
@@ -131,8 +131,8 @@ describe("TransferCostModal — whole batch at once (aggregate mode)", () => {
     await user.clear(entryFeeInput);
     await user.type(entryFeeInput, "2");
 
-    // Deposited 5000 - cost 100 = 4900; entry fee 2% of 4900 = 98; net = 4802.00
-    expect(screen.getByText("$4,802.00")).toBeInTheDocument();
+    // Deposited 5000 - cost 100 - entry fee 2% of 5000 (100) = 4800.00
+    expect(screen.getByText("$4,800.00")).toBeInTheDocument();
   });
 
   it("confirms in aggregate mode with a transactionCostUsd, null amountsReceived, plus the entry fee %", async () => {

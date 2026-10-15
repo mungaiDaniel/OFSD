@@ -91,7 +91,8 @@ class TestManualTransferAmounts:
             # B: bank took 200 -> transfer_fee_deducted reflects that gap exactly.
             assert b.transfer_amount_received == Decimal("2800.00")
             assert b.transfer_fee_deducted == Decimal("200.00")
-            assert b.deployment_fee_deducted == Decimal("56.00")  # 2% of 2800
+            assert b.deployment_fee_deducted == Decimal("60.00")  # 2% of the 3000 deposit, not the 2800 received
+            assert b.net_principal == Decimal("2740.00")  # 3000 - 200 transfer - 60 entry fee
 
     def test_investor_missing_from_map_defaults_to_full_deposit(self, client, auth_token, app):
         with app.app_context():
@@ -140,3 +141,25 @@ class TestManualTransferAmounts:
             # Legacy mode never touches the new column.
             assert a.transfer_amount_received is None
             assert b.transfer_amount_received is None
+
+    def test_aggregate_mode_entry_fee_charged_on_initial_deposit(self, client, auth_token, app):
+        with app.app_context():
+            batch, investments = _make_funds_batch_with_investments(["2000.00", "6000.00"])
+            inv_a, _ = investments
+
+            payload = {
+                "is_transferred": True,
+                "transfer_transaction_cost": "80",
+                "entry_fee_percentage": "2",
+            }
+            resp = client.patch(
+                f"/api/v1/batches/{batch.id}",
+                data=json.dumps(payload),
+                headers={**get_auth_headers(auth_token), "Content-Type": "application/json"},
+            )
+            assert resp.status_code == 200
+
+            a = db.session.get(Investment, inv_a.id)
+            assert a.transfer_fee_deducted == Decimal("20.00")   # 2000/8000 * 80
+            assert a.deployment_fee_deducted == Decimal("40.00")  # 2% of 2000 deposit (not of 1980)
+            assert a.net_principal == Decimal("1940.00")

@@ -670,7 +670,8 @@ def deploy_batch_nav(batch_id):
                 allocated_transfer += transfer_cost_share
 
             net_after_transfer = principal - transfer_cost_share
-            entry_fee = (net_after_transfer * entry_fee_percent / Decimal('100')).quantize(cent)
+            # Entry fee is always charged on the initial deposit, not the post-transfer amount.
+            entry_fee = (principal * entry_fee_percent / Decimal('100')).quantize(cent)
             net_amount = (net_after_transfer - entry_fee).quantize(cent)
             if net_amount < Decimal('0.00'):
                 net_amount = Decimal('0.00')

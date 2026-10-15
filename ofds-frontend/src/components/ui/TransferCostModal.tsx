@@ -68,12 +68,13 @@ export function TransferCostModal({
 
   const entryFeeRate = (parseFloat(entryFeePercent) || 0) / 100;
 
-  // ── Manual mode math ──
+  // ── Manual mode math ── both deductions come off the initial deposit:
+  // transfer amount = deposited − received; entry fee = deposited × rate.
   const rows = investments.map((inv) => {
     const received = Math.max(0, parseFloat(amounts[inv.id] ?? "") || 0);
     const bankDeduction = Math.max(0, inv.amount_deposited - received);
-    const entryFee = received * entryFeeRate;
-    const net = Math.max(0, received - entryFee);
+    const entryFee = inv.amount_deposited * entryFeeRate;
+    const net = Math.max(0, inv.amount_deposited - bankDeduction - entryFee);
     return { inv, received, bankDeduction, entryFee, net };
   });
   const totalDeposited = rows.reduce((s, r) => s + r.inv.amount_deposited, 0);
@@ -82,13 +83,12 @@ export function TransferCostModal({
   const totalEntryFeeManual = rows.reduce((s, r) => s + r.entryFee, 0);
   const totalNetManual = rows.reduce((s, r) => s + r.net, 0);
 
-  // ── Aggregate (whole batch at once) mode math — same formula as before
-  // this feature existed: one transaction cost off the top, then entry fee
-  // on what's left. The actual per-investor split still happens server-side.
+  // ── Aggregate (whole batch at once) mode math — one transaction cost and
+  // the entry fee, both taken off the initial deposit. The actual
+  // per-investor split still happens server-side.
   const transactionCostUsd = parseFloat(transactionCost) || 0;
-  const netAfterTransactionCost = Math.max(0, totalDeposited - transactionCostUsd);
-  const entryFeeAggregate = Math.max(0, netAfterTransactionCost * entryFeeRate);
-  const totalNetAggregate = Math.max(0, netAfterTransactionCost - entryFeeAggregate);
+  const entryFeeAggregate = Math.max(0, totalDeposited * entryFeeRate);
+  const totalNetAggregate = Math.max(0, totalDeposited - transactionCostUsd - entryFeeAggregate);
 
   const setAmount = (id: number, value: string) => setAmounts((prev) => ({ ...prev, [id]: value }));
 
@@ -208,7 +208,8 @@ export function TransferCostModal({
             <>
               <p style={{ margin: 0, fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
                 Enter the amount each client's wire actually landed as (starts at 0). Transfer Amount is
-                what the transfer cost them (deposited − received); Entry Fee is charged on what was received.
+                what the transfer cost them (deposited − received); Entry Fee is charged on the initial deposit.
+                Both are deducted from the deposit.
               </p>
 
               <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", overflow: "hidden" }}>
@@ -305,8 +306,8 @@ export function TransferCostModal({
           ) : (
             <>
               <p style={{ margin: 0, fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
-                Apply deductions in order: Transaction Cost (USD), then Entry Fee (%) — split pro-rata across
-                every client's deposit share.
+                Transaction Cost (USD) and Entry Fee (%) are both deducted from the initial deposit — the cost is
+                split pro-rata across every client's deposit share, and the entry fee is charged on each deposit.
               </p>
 
               <div>
