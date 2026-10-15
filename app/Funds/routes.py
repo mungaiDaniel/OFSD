@@ -665,6 +665,7 @@ def compute_funds_summary_data(session=None, product=FUNDS):
         # the more explicit name here to avoid confusing the two.
         fund_gross_deposited_by_currency = {}
         fund_net_principal_after_refund_by_currency = {}
+        fund_deployed_net_principal_by_currency = {}
         fund_withdrawals_by_currency = {}
         fund_refunds_by_currency = {}
         fund_performances = []
@@ -790,6 +791,26 @@ def compute_funds_summary_data(session=None, product=FUNDS):
             ).filter(Investment.share_class_id == cls.id).scalar()
             net_principal_after_refund_sum = float_2dp(net_principal_after_refund_result) if net_principal_after_refund_result else 0.0
 
+            # Same net principal, restricted to DEPLOYED batches — the money
+            # that's actually in the NAV total. Gain/Loss is measured against
+            # this, so deposits still waiting to be deployed (stage 1/2, no
+            # shares and no value yet) don't show up as a loss.
+            deployed_net_principal_result = session.query(
+                func.coalesce(
+                    func.sum(
+                        Investment.amount_deposited
+                        - func.coalesce(Investment.transfer_fee_deducted, 0)
+                        - func.coalesce(Investment.deployment_fee_deducted, 0)
+                        - func.coalesce(Investment.oversubscription_refund_amount, 0)
+                    ),
+                    0,
+                )
+            ).join(Batch, Investment.batch_id == Batch.id).filter(
+                Investment.share_class_id == cls.id,
+                Batch.date_deployed.isnot(None),
+            ).scalar()
+            deployed_net_principal_sum = float_2dp(deployed_net_principal_result) if deployed_net_principal_result else 0.0
+
             # Refunds (DPRP-style oversubscription pro-rata) displayed on the
             # Overview dashboard as "Pending Refunds" — so this must count only
             # STILL-Pending ones. Once a refund's Withdrawal row is Approved
@@ -894,6 +915,7 @@ def compute_funds_summary_data(session=None, product=FUNDS):
                 "total_invested": cost_basis,
                 "gross_deposited": gross_deposited,
                 "net_principal_after_refund": net_principal_after_refund_sum,
+                "deployed_net_principal": deployed_net_principal_sum,
                 "refunds": refund_sum,
                 "unrealized_gain": unrealized_gain,
                 "withdrawals": withdrawal_sum,
@@ -920,6 +942,7 @@ def compute_funds_summary_data(session=None, product=FUNDS):
             for bucket in (
                 fund_gross_deposited_by_currency,
                 fund_net_principal_after_refund_by_currency,
+                fund_deployed_net_principal_by_currency,
                 fund_withdrawals_by_currency,
                 fund_refunds_by_currency,
             ):
@@ -932,6 +955,7 @@ def compute_funds_summary_data(session=None, product=FUNDS):
                 fund_gain_by_currency[val_ccy] += float(unrealized_gain or 0)
             fund_gross_deposited_by_currency[dep_ccy] += float(gross_deposited or 0)
             fund_net_principal_after_refund_by_currency[dep_ccy] += float(net_principal_after_refund_sum or 0)
+            fund_deployed_net_principal_by_currency[dep_ccy] += float(deployed_net_principal_sum or 0)
             fund_withdrawals_by_currency[dep_ccy] += float(withdrawal_sum or 0)
             fund_refunds_by_currency[dep_ccy] += float(refund_sum or 0)
 
@@ -951,11 +975,16 @@ def compute_funds_summary_data(session=None, product=FUNDS):
             )
             for currency in fund_net_principal_after_refund_by_currency
         }
-        # Gain/Loss on this page is current value (total_nav) vs. Net Holdings,
-        # not the cost_basis-based fund_gain_by_currency computed per-class
-        # above (that field is left untouched for anything else that reads it —
+        # Gain/Loss on this page is current value (total_nav) vs. the DEPLOYED
+        # part of Net Holdings (deployed net principal minus withdrawals), not
+        # the cost_basis-based fund_gain_by_currency computed per-class above
+        # (that field is left untouched for anything else that reads it —
         # e.g. the per-class "unrealized_gain" values keep their existing
         # meaning). This overwrites the fund-level aggregate specifically.
+        # Undeployed deposits are excluded: they're in Net Holdings but have no
+        # value in total_nav yet, so including them reported them as a loss
+        # (e.g. the Overview showing a negative USD gain while every fund page
+        # showed a positive one).
         # Only where value and holdings share a currency, though: for SHARES
         # the value is NGN and holdings are USD, so its gain stays the
         # NGN cost-basis gain (value vs. shares x deployment price) from above.
@@ -964,9 +993,12 @@ def compute_funds_summary_data(session=None, product=FUNDS):
             fund_gain_by_currency = {
                 currency: float_2dp(
                     Decimal(str(fund_totals_by_currency.get(currency, 0)))
-                    - Decimal(str(fund_net_holdings_by_currency.get(currency, 0)))
+                    - (
+                        Decimal(str(fund_deployed_net_principal_by_currency.get(currency, 0)))
+                        - Decimal(str(fund_withdrawals_by_currency.get(currency, 0)))
+                    )
                 )
-                for currency in set(fund_totals_by_currency) | set(fund_net_holdings_by_currency)
+                for currency in set(fund_totals_by_currency) | set(fund_deployed_net_principal_by_currency)
             }
         
         # Calculate weighted performance for this fund
