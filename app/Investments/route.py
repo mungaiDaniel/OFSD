@@ -1850,8 +1850,111 @@ def _generate_oversubscription_notice_pdf_bytes(client_code, fund_id):
         return None
 
 
-def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of_dt, period_only, theme, pdf_styles, body_font, body_font_bold, statement_date):
+def _filter_statement_rows_to_class(rows, client_code, fund_id, share_class_id, include_unassigned_withdrawals):
     """
+    Keep only the statement rows belonging to one share class: deposit and
+    valuation rows by their batch, withdrawals by the withdrawal's batch.
+    Withdrawals with no batch go to the section that asked for them
+    (include_unassigned_withdrawals) so they're shown exactly once.
+    """
+    from app.Investments.model import Withdrawal
+
+    class_batch_ids = {
+        bid for (bid,) in db.session.query(Investment.batch_id).filter(
+            func.lower(Investment.internal_client_code) == func.lower(client_code),
+            Investment.fund_id == fund_id,
+            Investment.share_class_id == share_class_id,
+        ).distinct()
+    }
+    withdrawal_ids = [r.get("withdrawal_id") for r in rows if r.get("type") == "WITHDRAWAL" and r.get("withdrawal_id")]
+    withdrawal_batch = dict(
+        db.session.query(Withdrawal.id, Withdrawal.batch_id).filter(Withdrawal.id.in_(withdrawal_ids)).all()
+    ) if withdrawal_ids else {}
+
+    kept = []
+    for r in rows:
+        if r.get("type") == "WITHDRAWAL":
+            wd_batch = withdrawal_batch.get(r.get("withdrawal_id"))
+            if (wd_batch in class_batch_ids) if wd_batch is not None else include_unassigned_withdrawals:
+                kept.append(r)
+        elif r.get("batch_id") in class_batch_ids:
+            kept.append(r)
+    return kept
+
+
+def _combine_same_day_valuation_rows(rows):
+    """
+    Display-only: merge the per-deposit "Valuation Report" rows that share a
+    valuation date (and NAV, i.e. the same share class) into ONE row, so a
+    client with three deposits sees one valuation per date instead of three.
+
+    Each deposit is its own holding with its own balance timeline, so the
+    statement data has one VALUATION row per holding per date. Nothing about
+    those figures changes here — the combined row is just their sum:
+    shares, previous value, gain/loss and current value are added up, NAV is
+    the shared class NAV, and Perf % is combined gain / combined previous
+    value. Deposit, withdrawal and monthly rows pass through untouched.
+    Input order is preserved (the combined row takes the first row's place).
+    """
+    combined = []
+    groups = {}
+    for row in rows:
+        if row.get("type") != "VALUATION":
+            combined.append(row)
+            continue
+        date_key = str(row.get("date") or "")[:10]
+        nav_key = row.get("nav_per_share")
+        key = (date_key, str(row.get("currency") or "").upper(), None if nav_key is None else round(float(nav_key), 6))
+        group = groups.get(key)
+        if group is None:
+            group = {
+                "type": "VALUATION",
+                "date": row.get("date"),
+                "label": "Valuation Report",
+                "fund_name": row.get("fund_name"),
+                "currency": row.get("currency"),
+                "nav_per_share": row.get("nav_per_share"),
+                "shares": Decimal("0"),
+                "opening_balance": Decimal("0"),
+                "deposits": 0.0,
+                "withdrawals": 0.0,
+                "profit": Decimal("0"),
+                "end_balance": Decimal("0"),
+                "_has_shares": False,
+            }
+            groups[key] = group
+            combined.append(group)
+        shares_raw = row.get("shares") if row.get("shares") is not None else row.get("shares_at_deployment")
+        if shares_raw is not None:
+            group["shares"] += Decimal(str(shares_raw))
+            group["_has_shares"] = True
+        group["opening_balance"] += Decimal(str(row.get("opening_balance") or 0))
+        group["profit"] += Decimal(str(row.get("profit") or 0))
+        group["end_balance"] += Decimal(str(row.get("end_balance") or 0))
+
+    for group in groups.values():
+        opening = group["opening_balance"]
+        group["performance_rate"] = (
+            float((group["profit"] / opening * Decimal("100")).quantize(Decimal("0.01"))) if opening else None
+        )
+        group["shares"] = float(group["shares"]) if group.pop("_has_shares") else None
+        group["opening_balance"] = float(opening)
+        group["profit"] = float(group["profit"])
+        group["end_balance"] = float(group["end_balance"])
+    return combined
+
+
+def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of_dt, period_only, theme, pdf_styles, body_font, body_font_bold, statement_date,
+                                   share_class_id=None, class_label=None, include_unassigned_withdrawals=True):
+    """
+    `share_class_id` / `class_label`: when a client holds more than one class
+    of the same fund (e.g. JH_BT and JH_GT), the caller renders this section
+    once per class so each gets its own Account Summary (its own shares and
+    real NAV) and its own Statements table — instead of one blended summary
+    and one table mixing both classes' rows with no class shown. Withdrawals
+    not tied to a batch can't be attributed to a class; they're shown in the
+    section where `include_unassigned_withdrawals` is True (the first class).
+
     Renders one fund's worth of statement content (Account Summary +
     Statements history table + the conditional DPRP oversubscription block)
     into the shared `story` list. This is the single rendering path used for
@@ -1891,7 +1994,8 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             func.lower(Investment.internal_client_code) == func.lower(client_code),
             Investment.fund_id == fund_id,
             Investment.date_deposited.isnot(None),
-            Investment.date_deposited <= as_of_dt
+            Investment.date_deposited <= as_of_dt,
+            *([Investment.share_class_id == share_class_id] if share_class_id is not None else []),
         ).all()
 
         total_principal = sum((Decimal(str(inv.net_principal or 0)) for inv in investments_as_of), Decimal("0.00"))
@@ -1908,7 +2012,9 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             .all()
         )
 
-        if epochs_as_of:
+        # EpochLedger is per fund, not per class — a class sub-section relies on
+        # its own class-filtered statement rows below instead.
+        if epochs_as_of and share_class_id is None:
             total_deposits = sum((Decimal(str(r.deposits or 0)) for r in epochs_as_of), Decimal("0.00"))
             total_withdrawals = sum((Decimal(str(r.withdrawals or 0)) for r in epochs_as_of), Decimal("0.00"))
             total_current_value = sum((Decimal(str(r.end_balance or 0)) for r in epochs_as_of), Decimal("0.00"))
@@ -1919,7 +2025,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
     timeline_statements = []
     period_statement_override = None
     try:
-        if period_only and as_of_dt is not None:
+        if period_only and as_of_dt is not None and share_class_id is None:
             target_year = as_of_dt.year
             target_month = as_of_dt.month
             month_rows = db.session.query(EpochLedger).filter(
@@ -1963,6 +2069,8 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             # get_investor_statements() is unscoped by fund — filter to this
             # section's fund by name (rows carry fund_name, not fund_id).
             rows = [r for r in rows if str(r.get("fund_name") or "").strip().lower() == fund_name.strip().lower()]
+            if share_class_id is not None:
+                rows = _filter_statement_rows_to_class(rows, client_code, fund_id, share_class_id, include_unassigned_withdrawals)
             if as_of_dt is not None:
                 filtered_rows = []
                 for row in rows:
@@ -2104,6 +2212,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
         all_investments_for_acct = db.session.query(Investment).filter(
             func.lower(Investment.internal_client_code) == func.lower(client_code),
             Investment.fund_id == fund_id,
+            *([Investment.share_class_id == share_class_id] if share_class_id is not None else []),
         ).all()
         section_investments = all_investments_for_acct
 
@@ -2297,20 +2406,27 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             ('FONTNAME', (0, profit_row_idx), (1, profit_row_idx), body_font_bold),
         ]))
 
+    summary_title = (
+        f'Account Summary ({class_label}, {acct_currency or "USD"})' if class_label
+        else f'Account Summary ({acct_currency or "USD"})'
+    )
     if theme.is_jh:
-        story.append(build_orange_banner_table(f'Account Summary ({acct_currency or "USD"})', theme, body_font_bold, font_size=10))
+        story.append(build_orange_banner_table(summary_title, theme, body_font_bold, font_size=10))
         story.append(Spacer(1, 0.06 * inch))
     else:
-        story.append(Paragraph(f'Account Summary ({acct_currency or "USD"})', section_heading_style))
+        story.append(Paragraph(summary_title, section_heading_style))
         story.append(Spacer(1, 0.10 * inch))
     story.append(header_summary_table)
     story.append(summary_table)
     story.append(Spacer(1, 0.20 * inch))
 
     # Statements timeline grouped by currency (KES/USD)
-    story.append(Paragraph('Statements', section_heading_style))
+    story.append(Paragraph(f'Statements ({class_label})' if class_label else 'Statements', section_heading_style))
 
     def _render_statements_table(rows_for_currency, currency_label):
+        # One valuation row per date (display only — see the helper's docstring).
+        rows_for_currency = _combine_same_day_valuation_rows(rows_for_currency)
+
         def _fmt_money(amount: Decimal | None) -> str:
             if amount is None:
                 return "—"
@@ -2997,10 +3113,35 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
                     story.append(Paragraph(fund_name_for_section.upper(), section_heading_style))
                     story.append(Spacer(1, 0.08 * inch))
 
-                _append_fund_statement_section(
-                    story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
-                    theme, pdf_styles, body_font, body_font_bold, statement_date,
+                # A client holding several classes of this fund (e.g. JH_BT and
+                # JH_GT) gets one sub-section per class, each with its own
+                # summary and statements; a single-class holding is unchanged.
+                client_classes = (
+                    db.session.query(ShareClass.id, ShareClass.class_code)
+                    .join(Investment, Investment.share_class_id == ShareClass.id)
+                    .filter(
+                        func.lower(Investment.internal_client_code) == func.lower(client_code),
+                        Investment.fund_id == section_fund_id,
+                    )
+                    .distinct()
+                    .order_by(ShareClass.class_code.asc())
+                    .all()
                 )
+                if len(client_classes) > 1:
+                    for class_idx, (class_id, class_code) in enumerate(client_classes):
+                        if class_idx > 0:
+                            story.append(Spacer(1, 0.14 * inch))
+                        _append_fund_statement_section(
+                            story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                            theme, pdf_styles, body_font, body_font_bold, statement_date,
+                            share_class_id=class_id, class_label=class_code,
+                            include_unassigned_withdrawals=(class_idx == 0),
+                        )
+                else:
+                    _append_fund_statement_section(
+                        story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                        theme, pdf_styles, body_font, body_font_bold, statement_date,
+                    )
 
         # Task 5: one "SHARES (DANGOTE PETROLEUM REFINERY IPO)" section, omitted
         # entirely when the investor has no Shares holdings. Never mixes its
