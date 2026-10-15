@@ -150,7 +150,7 @@ class TestInvestorRegistry:
 class TestInvestorProfile:
     """Test updating investor profiles"""
     
-    def test_update_investor_profile(self, client, auth_token, sample_investments, app):
+    def test_update_investor_profile(self, client, super_admin_auth_token, sample_investments, app):
         """Test updating investor profile details"""
         with app.app_context():
             inv = Investment.query.first()
@@ -164,12 +164,12 @@ class TestInvestorProfile:
         response = client.patch(
             f'/api/v1/investors/{client_code}',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
         
         assert response.status_code in [200, 204]
     
-    def test_update_investor_wealth_manager(self, client, auth_token, sample_investments, app):
+    def test_update_investor_wealth_manager(self, client, super_admin_auth_token, sample_investments, app):
         """Test updating investor wealth manager"""
         with app.app_context():
             inv = Investment.query.first()
@@ -182,12 +182,12 @@ class TestInvestorProfile:
         response = client.patch(
             f'/api/v1/investors/{client_code}',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
         
         assert response.status_code in [200, 204]
     
-    def test_update_nonexistent_investor(self, client, auth_token):
+    def test_update_nonexistent_investor(self, client, super_admin_auth_token):
         """Test updating non-existent investor"""
         payload = {
             'investor_email': 'new@example.com'
@@ -196,7 +196,7 @@ class TestInvestorProfile:
         response = client.patch(
             '/api/v1/investors/NONEXISTENT',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
         
         assert response.status_code in [404, 200]

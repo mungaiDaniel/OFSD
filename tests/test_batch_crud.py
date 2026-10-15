@@ -420,11 +420,11 @@ class TestBatchRetrieval:
         assert data['count'] == 1
         assert data['data'][0]['status'] == 'Failed'
 
-    def test_delete_batch_success(self, client, auth_token, sample_batch):
+    def test_delete_batch_success(self, client, super_admin_auth_token, sample_batch):
         """Test deleting a batch."""
         response = client.delete(
             f'/api/v1/batches/{sample_batch.id}',
-            headers=get_auth_headers(auth_token)
+            headers=get_auth_headers(super_admin_auth_token)
         )
         assert response.status_code == 200
 
@@ -460,7 +460,7 @@ class TestBatchRetrieval:
 class TestBatchUpdate:
     """Test updating batch information"""
     
-    def test_update_batch_name(self, client, auth_token, sample_batch):
+    def test_update_batch_name(self, client, super_admin_auth_token, sample_batch):
         """Test updating batch name via PUT"""
         payload = {
             'batch_name': 'UPDATED-BATCH-NAME'
@@ -469,7 +469,7 @@ class TestBatchUpdate:
         response = client.put(
             f'/api/v1/batches/{sample_batch.id}',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
         
         assert response.status_code in [200, 204]
@@ -477,7 +477,7 @@ class TestBatchUpdate:
         updated_batch = db.session.get(Batch, sample_batch.id)
         assert updated_batch.batch_name == 'UPDATED-BATCH-NAME'
 
-    def test_update_batch_name_conflict(self, client, auth_token, sample_batch):
+    def test_update_batch_name_conflict(self, client, super_admin_auth_token, sample_batch):
         """Test editing to a batch name that already exists"""
         other = Batch(batch_name='ALREADY_EXISTS')
         db.session.add(other)
@@ -487,13 +487,13 @@ class TestBatchUpdate:
         response = client.put(
             f'/api/v1/batches/{sample_batch.id}',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
 
         assert response.status_code == 409
         assert 'already exists' in response.get_json().get('message', '').lower()
     
-    def test_update_batch_multiple_fields(self, client, auth_token, sample_batch):
+    def test_update_batch_multiple_fields(self, client, super_admin_auth_token, sample_batch):
         """Test updating multiple batch fields"""
         payload = {
             'batch_name': 'APR-2026-OFFSHORE',
@@ -504,7 +504,7 @@ class TestBatchUpdate:
         response = client.put(
             f'/api/v1/batches/{sample_batch.id}',
             data=json.dumps(payload),
-            headers={**get_auth_headers(auth_token), 'Content-Type': 'application/json'}
+            headers={**get_auth_headers(super_admin_auth_token), 'Content-Type': 'application/json'}
         )
         
         assert response.status_code in [200, 204]
@@ -564,13 +564,13 @@ class TestBatchToggleOperations:
         updated_batch = db.session.get(Batch, sample_batch.id)
         assert updated_batch.is_active != initial_status
     
-    def test_toggle_transferred_status(self, client, auth_token, sample_batch):
+    def test_toggle_transferred_status(self, client, super_admin_auth_token, sample_batch):
         """Test toggling batch transferred status"""
         initial_status = sample_batch.is_transferred
         
         response = client.patch(
             f'/api/v1/batches/{sample_batch.id}/toggle-transferred',
-            headers=get_auth_headers(auth_token)
+            headers=get_auth_headers(super_admin_auth_token)
         )
         
         assert response.status_code in [200, 204]
@@ -595,11 +595,11 @@ class TestBatchToggleOperations:
 class TestBatchNotifications:
     """Test batch notification operations"""
     
-    def test_notify_transfer(self, client, auth_token, sample_batch, sample_investments):
+    def test_notify_transfer(self, client, super_admin_auth_token, sample_batch, sample_investments):
         """Test sending transfer notification"""
         response = client.patch(
             f'/api/v1/batches/{sample_batch.id}/notify-transfer',
-            headers=get_auth_headers(auth_token)
+            headers=get_auth_headers(super_admin_auth_token)
         )
         
         # Should succeed if investors are present
