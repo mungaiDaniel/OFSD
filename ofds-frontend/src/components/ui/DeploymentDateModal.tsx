@@ -34,6 +34,8 @@ export interface DeploymentConfirmPayload {
   oversubscription?: DeploymentOversubscription;
   /** mode="manual" only: each investor's own NAV per share, keyed by investment id. */
   investorNavs?: Record<number, number>;
+  /** mode="manual" only: each investor's own deployment date (ISO), keyed by investment id. */
+  investorDates?: Record<number, string>;
 }
 
 interface DeploymentDateModalProps {
@@ -86,10 +88,12 @@ const fmt4 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 4
 
 /**
  * Deploy-to-Active: two ways to set the NAV each client buys in at —
- * - Manual (per client): type in each investor's own NAV per share (with an
- *   "apply to all" shortcut), same idea as the manual Transfer stage.
- * - One NAV per class: the original single NAV applied to every investor in
- *   a share class — unchanged.
+ * - Manual (per client): each investor has their own deployment date and the
+ *   NAV per share on that date (with an "apply to all" shortcut), same idea
+ *   as the manual Transfer stage. The batch's deployment date becomes the
+ *   earliest client date.
+ * - One NAV for everyone: one deployment date for the whole batch and the
+ *   original single NAV per share class — unchanged.
  */
 export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = false, investments, isDprpFund = false }: DeploymentDateModalProps) {
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -97,6 +101,8 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
   const [navByClass, setNavByClass] = useState<Record<string, string>>({});
   const [navByInvestor, setNavByInvestor] = useState<Record<number, string>>({});
   const [applyAllNav, setApplyAllNav] = useState<string>("");
+  const [dateByInvestor, setDateByInvestor] = useState<Record<number, string>>({});
+  const [applyAllDate, setApplyAllDate] = useState<string>("");
 
   // ── DPRP oversubscription pro-rata allocation ──
   const [isOversubscribed, setIsOversubscribed] = useState(false);
@@ -128,13 +134,20 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
     .filter((inv): inv is DeploymentInvestment & { id: number } => inv.id != null)
     .map((inv) => {
       const nav = Number(navByInvestor[inv.id]) || 0;
+      const date = dateByInvestor[inv.id] ?? "";
       const deployedAmount = (inv.main_balance ?? 0) * allocationFraction;
       const shares = nav > 0 ? deployedAmount / nav : 0;
-      return { inv, nav, deployedAmount, shares };
+      return { inv, nav, date, deployedAmount, shares };
     });
   // Investors with nothing to deploy get zero shares server-side regardless of
-  // NAV, so they don't block confirming.
-  const manualValidCount = manualRows.filter((r) => r.nav > 0 || r.deployedAmount <= 0).length;
+  // NAV/date, so they don't block confirming.
+  const manualValidCount = manualRows.filter((r) => (r.nav > 0 && r.date) || r.deployedAmount <= 0).length;
+  // Batch-level deployment date in manual mode = the earliest client date.
+  const earliestManualDate = manualRows
+    .map((r) => r.date)
+    .filter(Boolean)
+    .sort()[0] ?? "";
+  const batchDate = mode === "manual" ? earliestManualDate : selectedDate;
 
   // Per-class totals in manual mode: shares/NAV summed from each client's own
   // NAV; the class "NAV per share" becomes the weighted average (total NAV /
@@ -175,19 +188,28 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
   const totalDeployedPreview = totalPreAllocationNet * allocationFraction;
   const totalRefundPreview = totalPreAllocationNet - totalDeployedPreview;
 
-  const applyNavToAll = () => {
-    if (!(Number(applyAllNav) > 0)) return;
-    setNavByInvestor(Object.fromEntries(manualRows.map((r) => [r.inv.id, applyAllNav])));
+  const canApplyAll = Number(applyAllNav) > 0 || Boolean(applyAllDate);
+  const applyToAll = () => {
+    if (Number(applyAllNav) > 0) {
+      setNavByInvestor(Object.fromEntries(manualRows.map((r) => [r.inv.id, applyAllNav])));
+    }
+    if (applyAllDate) {
+      setDateByInvestor(Object.fromEntries(manualRows.map((r) => [r.inv.id, applyAllDate])));
+    }
   };
 
+  const canConfirm = Boolean(batchDate) && allValid;
+
   const handleConfirm = async () => {
-    if (!selectedDate || !allValid) return;
+    if (!canConfirm) return;
     const oversubscription = isOversubscribed ? { isOversubscribed: true, allocationRate: Number(allocationRate.toFixed(4)) } : undefined;
 
     if (mode === "manual") {
       const investorNavs: Record<number, number> = {};
+      const investorDates: Record<number, string> = {};
       for (const r of manualRows) {
         if (r.nav > 0) investorNavs[r.inv.id] = r.nav;
+        if (r.date) investorDates[r.inv.id] = new Date(r.date).toISOString();
       }
       const classes: DeploymentClassBreakdown[] = classGroups.map((g) => {
         const t = manualClassTotals.get(g.key) ?? { shares: 0, nav: 0 };
@@ -199,7 +221,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
           totalNav: Number(t.nav.toFixed(2)),
         };
       });
-      await onConfirm({ dateString: new Date(selectedDate).toISOString(), classes, oversubscription, investorNavs });
+      await onConfirm({ dateString: new Date(earliestManualDate).toISOString(), classes, oversubscription, investorNavs, investorDates });
       return;
     }
 
@@ -234,7 +256,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
     background: "#0B1228",
     borderRadius: "16px",
     width: "100%",
-    maxWidth: "680px",
+    maxWidth: "900px",
     border: "1px solid rgba(255, 255, 255, 0.08)",
     boxShadow: "0 24px 48px rgba(0, 0, 0, 0.4)",
     overflow: "hidden auto",
@@ -354,7 +376,8 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
             </button>
           </div>
 
-          {/* Deployment Date */}
+          {/* Deployment Date — one date for everyone; manual mode sets it per client below */}
+          {mode === "class" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <label style={{ display: "block", ...labelStyle }}>
               DEPLOYMENT DATE <span style={{ color: "#EF4444" }}>*</span>
@@ -370,6 +393,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
               Official date when funds are deployed and active
             </p>
           </div>
+          )}
 
           {/* DPRP oversubscription pro-rata allocation */}
           {isDprpFund && (
@@ -549,8 +573,16 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
           {mode === "manual" && (
             <>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                <label style={labelStyle}>APPLY ONE NAV TO ALL CLIENTS (OPTIONAL)</label>
+                <label style={labelStyle}>APPLY ONE DATE / NAV TO ALL CLIENTS (OPTIONAL)</label>
                 <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="date"
+                    aria-label="Deployment date for all clients"
+                    style={{ ...inputStyle, maxWidth: "200px" }}
+                    value={applyAllDate}
+                    onChange={(e) => setApplyAllDate(e.target.value)}
+                    disabled={isLoading}
+                  />
                   <input
                     type="number"
                     step="0.0001"
@@ -563,20 +595,22 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                   />
                   <button
                     type="button"
-                    onClick={applyNavToAll}
-                    disabled={isLoading || !(Number(applyAllNav) > 0)}
+                    onClick={applyToAll}
+                    disabled={isLoading || !canApplyAll}
                     style={{
                       whiteSpace: "nowrap", padding: "0 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600,
                       border: "1px solid rgba(59,111,212,0.5)", background: "rgba(59,111,212,0.15)", color: "#93B4F5",
-                      cursor: isLoading || !(Number(applyAllNav) > 0) ? "not-allowed" : "pointer",
-                      opacity: Number(applyAllNav) > 0 ? 1 : 0.5,
+                      cursor: isLoading || !canApplyAll ? "not-allowed" : "pointer",
+                      opacity: canApplyAll ? 1 : 0.5,
                     }}
                   >
                     Apply to all
                   </button>
                 </div>
                 <p style={{ margin: 0, fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
-                  Fills every client's NAV below — you can still adjust individual clients afterwards.
+                  Each client can be deployed on a different date at that date's NAV. This fills every
+                  client below — you can still adjust individual clients afterwards. The batch's deployment
+                  date is the earliest client date.
                 </p>
               </div>
 
@@ -585,7 +619,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                     <thead style={{ position: "sticky", top: 0, background: "#111a33" }}>
                       <tr>
-                        {["Client", "Class", `Net Deployed${isOversubscribed ? " (Allocated)" : ""}`, "NAV per Share", "Shares"].map((h, i) => (
+                        {["Client", "Class", `Net Deployed${isOversubscribed ? " (Allocated)" : ""}`, "Deployment Date", "NAV per Share", "Shares"].map((h, i) => (
                           <th
                             key={h}
                             style={{ padding: "8px 10px", textAlign: i < 2 ? "left" : "right", color: "#94A3B8", fontWeight: 600, whiteSpace: "nowrap" }}
@@ -610,6 +644,16 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                           </td>
                           <td style={{ padding: "6px 10px", textAlign: "right" }}>
                             <input
+                              type="date"
+                              aria-label={`Deployment date for ${inv.investor_name ?? inv.internal_client_code ?? inv.id}`}
+                              style={{ ...smallInputStyle, width: "140px", textAlign: "left" }}
+                              value={dateByInvestor[inv.id] ?? ""}
+                              onChange={(e) => setDateByInvestor((prev) => ({ ...prev, [inv.id]: e.target.value }))}
+                              disabled={isLoading}
+                            />
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                            <input
                               type="number"
                               step="0.0001"
                               min="0"
@@ -627,7 +671,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                       ))}
                       {manualRows.length === 0 && (
                         <tr>
-                          <td colSpan={5} style={{ padding: "16px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                          <td colSpan={6} style={{ padding: "16px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                             No clients in this batch.
                           </td>
                         </tr>
@@ -694,7 +738,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                 <span>{mode === "manual" ? "Total across all clients" : "Total across all classes"}</span>
                 <span>
                   {mode === "manual"
-                    ? `${manualValidCount}/${manualRows.length} clients priced`
+                    ? `${manualValidCount}/${manualRows.length} clients dated & priced`
                     : `${validCount}/${classGroups.length} valid`}
                 </span>
               </div>
@@ -747,7 +791,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
 
           <button
             onClick={handleConfirm}
-            disabled={isLoading || !selectedDate || !allValid}
+            disabled={isLoading || !canConfirm}
             style={{
               background: "#3B6FD4",
               border: "none",
@@ -756,14 +800,14 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
               borderRadius: "6px",
               fontSize: "13px",
               fontWeight: 500,
-              cursor: (isLoading || !selectedDate || !allValid) ? "not-allowed" : "pointer",
-              opacity: (!selectedDate || !allValid || isLoading) ? 0.6 : 1,
+              cursor: (isLoading || !canConfirm) ? "not-allowed" : "pointer",
+              opacity: (!canConfirm || isLoading) ? 0.6 : 1,
               display: "flex",
               alignItems: "center",
               gap: "6px",
               transition: "all 0.2s"
             }}
-            onMouseOver={e => !isLoading && selectedDate && allValid && (e.currentTarget.style.background = "#2D5BB8")}
+            onMouseOver={e => !isLoading && canConfirm && (e.currentTarget.style.background = "#2D5BB8")}
             onMouseOut={e => e.currentTarget.style.background = "#3B6FD4"}
           >
             {isLoading ? <Loader2 size={14} className="spin" /> : <Check size={14} />}

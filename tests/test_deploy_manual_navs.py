@@ -132,3 +132,31 @@ class TestManualDeploymentNavs:
 
             assert db.session.get(Investment, inv_a.id).shares_owned == Decimal("10.0000")
             assert db.session.get(Investment, inv_b.id).shares_owned == Decimal("30.0000")
+
+    def test_each_investor_gets_their_own_deployment_date(self, client, auth_token, app):
+        from datetime import date
+        from app.Funds.investor_shares import InvestorShares
+
+        with app.app_context():
+            batch, share_class, (inv_a, inv_b) = _make_transferred_batch(["1000.00", "3000.00"])
+
+            payload = _deploy_payload(
+                share_class, nav=114.2857, total_shares=35, total_nav=4000,
+                deployment_navs={str(inv_a.id): 100, str(inv_b.id): 120},
+            )
+            payload["deployment_dates"] = {str(inv_a.id): "2026-10-01", str(inv_b.id): "2026-10-08"}
+            resp = client.patch(f"/api/v1/batches/{batch.id}", data=json.dumps(payload), headers=get_auth_headers(auth_token))
+            assert resp.status_code == 200
+
+            assert db.session.get(Investment, inv_a.id).date_transferred.date() == date(2026, 10, 1)
+            assert db.session.get(Investment, inv_b.id).date_transferred.date() == date(2026, 10, 8)
+            shares_b = db.session.query(InvestorShares).filter(InvestorShares.investment_id == inv_b.id).one()
+            assert shares_b.deployment_date == date(2026, 10, 8)
+
+    def test_invalid_deployment_date_rejected(self, client, auth_token, app):
+        with app.app_context():
+            batch, share_class, (inv_a,) = _make_transferred_batch(["1000.00"])
+            payload = _deploy_payload(share_class, nav=100, total_shares=10, total_nav=1000, deployment_navs={str(inv_a.id): 100})
+            payload["deployment_dates"] = {str(inv_a.id): "not-a-date"}
+            resp = client.patch(f"/api/v1/batches/{batch.id}", data=json.dumps(payload), headers=get_auth_headers(auth_token))
+            assert resp.status_code == 400

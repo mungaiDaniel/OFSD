@@ -1143,7 +1143,7 @@ class BatchController:
             pass
 
     @classmethod
-    def _deploy_shares_for_batch(cls, batch, session, navs_by_investment=None):
+    def _deploy_shares_for_batch(cls, batch, session, navs_by_investment=None, dates_by_investment=None):
         """
         Create or update InvestorShares for deployed batch investments —
         FUNDS (NAV-based) only. SHARES batches are deployed by
@@ -1156,7 +1156,14 @@ class BatchController:
         (or with a non-positive value) fall back to the class/batch NAV. Classes
         containing any manually-priced investor skip the total-shares rescale
         below, since there's no single class NAV for it to reconcile against.
+
+        `dates_by_investment` ({investment_id: datetime}) goes with the manual
+        mode: a different NAV per client means that client was deployed on a
+        different date. It becomes that investor's date_transferred (what
+        valuation uses as their start date) and InvestorShares.deployment_date.
+        Investors missing from it use the batch's deployment date.
         """
+        dates_by_investment = dates_by_investment or {}
         navs_by_investment = {
             int(k): Decimal(str(v)) for k, v in (navs_by_investment or {}).items()
             if v is not None and Decimal(str(v)) > 0
@@ -1217,7 +1224,7 @@ class BatchController:
                 inv.shares_owned = Decimal('0')
                 inv.opening_market_value = Decimal('0')
                 inv.previous_nav_price = batch.deployment_nav
-                inv.date_transferred = batch.date_deployed
+                inv.date_transferred = dates_by_investment.get(inv.id, batch.date_deployed)
                 session.add(inv)
                 continue
 
@@ -1240,7 +1247,7 @@ class BatchController:
             shares = (inv_net / nav_per_share).quantize(Decimal('0.0001'))
             inv.shares_owned = shares
             inv.previous_nav_price = nav_per_share
-            inv.date_transferred = batch.date_deployed
+            inv.date_transferred = dates_by_investment.get(inv.id, batch.date_deployed)
             inv.opening_market_value = (shares * nav_per_share).quantize(Decimal('0.01'))
             if inv.share_class_id is None and batch.share_class_id:
                 inv.share_class_id = batch.share_class_id
@@ -1315,7 +1322,7 @@ class BatchController:
             if investor_share:
                 investor_share.shares_owned = inv.shares_owned
                 investor_share.deployment_nav = inv.previous_nav_price
-                investor_share.deployment_date = deployment_date
+                investor_share.deployment_date = cls._investor_deployment_date(inv, dates_by_investment, deployment_date)
                 investor_share.is_active = True
                 session.add(investor_share)
             else:
@@ -1325,13 +1332,18 @@ class BatchController:
                     "batch_id": batch.id,
                     "shares_owned": inv.shares_owned,
                     "deployment_nav": inv.previous_nav_price,
-                    "deployment_date": deployment_date,
+                    "deployment_date": cls._investor_deployment_date(inv, dates_by_investment, deployment_date),
                     "is_active": True,
                     "created_at": datetime.now(timezone.utc),
                 })
 
         if new_share_rows:
             session.execute(insert(InvestorShares), new_share_rows)
+
+    @staticmethod
+    def _investor_deployment_date(inv, dates_by_investment, default_date):
+        dt = dates_by_investment.get(inv.id)
+        return dt.date() if dt is not None else default_date
 
     @classmethod
     def deploy_batch(cls, batch_id, data, session):
@@ -2068,6 +2080,18 @@ class BatchController:
                     return make_response(jsonify({"status": 400, "message": "deployment_navs must map investment ids to numbers"}), 400)
                 if any(v <= 0 for v in deployment_navs.values()):
                     return make_response(jsonify({"status": 400, "message": "Every NAV per share must be greater than zero"}), 400)
+            # Per-investor deployment dates that go with deployment_navs:
+            # {investment_id: ISO date/datetime}. A different NAV per client
+            # means a different deployment date per client.
+            deployment_dates = None
+            if data.get('deployment_dates') is not None:
+                try:
+                    deployment_dates = {
+                        int(k): datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+                        for k, v in data['deployment_dates'].items()
+                    }
+                except (AttributeError, TypeError, ValueError):
+                    return make_response(jsonify({"status": 400, "message": "deployment_dates must map investment ids to dates"}), 400)
 
             # SHARES deployment validation MUST happen before any field below is
             # mutated (same reasoning as the transfer-fee check below it) — a 400
@@ -2330,7 +2354,11 @@ class BatchController:
                         else:
                             EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy_shares")
                     else:
-                        cls._deploy_shares_for_batch(batch, session, navs_by_investment=deployment_navs)
+                        cls._deploy_shares_for_batch(
+                            batch, session,
+                            navs_by_investment=deployment_navs,
+                            dates_by_investment=deployment_dates,
+                        )
                         session.commit()
                         cls.refresh_cached_total_capital(batch, session)
                         EmailService.send_investment_active_batch(batch, trigger_source="batch.patch.stage_3_deploy")
