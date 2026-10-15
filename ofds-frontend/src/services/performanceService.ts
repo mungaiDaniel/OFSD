@@ -1,6 +1,6 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, CreatePerformanceRequest } from "@/lib/types";
+import type { ApiResponse, CreatePerformanceRequest, BatchDistributionRow } from "@/lib/types";
 
 export const performanceService = {
   async getByBatch(batchId: number, fundName?: string): Promise<ApiResponse> {
@@ -30,5 +30,27 @@ export const performanceService = {
       headers: { "Content-Type": "multipart/form-data" },
     });
     return res.data;
+  },
+
+  /**
+   * Already-computed pro-rata distributions for a batch — read-only, runs no
+   * calculation. The API groups rows by fund name instead of repeating it
+   * per row; flattened here with fund_name attached to each row. A batch
+   * that's never had pro-rata run returns 404 ("run it first") — that's a
+   * normal empty state here, not an error, so it resolves to [].
+   */
+  async getDistributions(batchId: number): Promise<BatchDistributionRow[]> {
+    try {
+      const res = await api.get<{ funds?: Record<string, Omit<BatchDistributionRow, "fund_name">[]> }>(
+        API.BATCH_DISTRIBUTIONS(batchId)
+      );
+      const funds = res.data.funds || {};
+      return Object.entries(funds).flatMap(([fundName, rows]) =>
+        rows.map((row) => ({ ...row, fund_name: fundName }))
+      );
+    } catch (err: any) {
+      if (err?.response?.status === 404) return [];
+      throw err;
+    }
   },
 };

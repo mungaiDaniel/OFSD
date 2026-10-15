@@ -9,6 +9,7 @@ import type {
   NavValuationRunItem,
   ValuationJobStatus,
   ProductType,
+  BatchValuationHistoryPoint,
 } from "@/lib/types";
 
 export const valuationService = {
@@ -69,6 +70,12 @@ export const valuationService = {
     const res = await api.get<ApiResponse<NavValuationRunItem[]>>(
       `${API.VALUATION_NAV_RUNS}?${params.toString()}`
     );
+    return res.data.data ?? [];
+  },
+
+  /** Already-committed NAV valuation history for one batch — read-only, triggers no calculation. */
+  async getBatchValuationHistory(batchId: number): Promise<BatchValuationHistoryPoint[]> {
+    const res = await api.get<ApiResponse<BatchValuationHistoryPoint[]>>(API.VALUATION_BATCH_HISTORY(batchId));
     return res.data.data ?? [];
   },
 };

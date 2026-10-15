@@ -631,6 +631,36 @@ export interface ProRataDistribution {
   calculation_date: string;
 }
 
+/** One row of GET /batches/<id>/distributions — already-computed pro-rata
+ * allocations, read-only (fund_name is attached client-side since the API
+ * groups rows by fund key rather than repeating it per row). */
+export interface BatchDistributionRow {
+  distribution_id: number;
+  investment_id: number;
+  investor_name: string;
+  investor_email: string;
+  internal_client_code: string;
+  amount_deposited: number;
+  days_active: number;
+  weighted_capital: number;
+  profit_share_percentage: number;
+  profit_allocated: number;
+  fund_name: string;
+}
+
+/** One row of GET /valuation/batch/<id> — real, already-committed NAV
+ * valuation history for a batch (not a new calculation). */
+export interface BatchValuationHistoryPoint {
+  id: number;
+  period_end_date: string;
+  balance_at_end_of_period: number;
+  performance_rate: number;
+  total_principal: number;
+  total_profit: number;
+  total_withdrawals: number;
+  created_at: string;
+}
+
 // ── Valuation ──
 
 export interface ValuationRun {

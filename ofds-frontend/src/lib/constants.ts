@@ -164,6 +164,7 @@ export const API = {
   // Performance
   BATCH_PERFORMANCE: (batchId: number) => `/batches/${batchId}/performance`,
   BATCH_PRO_RATA: (batchId: number) => `/batches/${batchId}/calculate-pro-rata`,
+  BATCH_DISTRIBUTIONS: (batchId: number) => `/batches/${batchId}/distributions`,
   PERFORMANCE_UPLOAD_EXCEL: "/performance/upload-excel",
 
   // Valuation
@@ -175,6 +176,7 @@ export const API = {
   VALUATION_NAV: "/valuation/nav",
   VALUATION_JOBS: "/valuation/jobs",
   VALUATION_NAV_RUNS: "/valuation/nav/runs",
+  VALUATION_BATCH_HISTORY: (batchId: number) => `/valuation/batch/${batchId}`,
 
   // Reports
   REPORTS: "/reports",
