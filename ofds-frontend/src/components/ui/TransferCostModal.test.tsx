@@ -10,7 +10,7 @@ const INVESTORS: BatchInvestorLight[] = [
 ];
 
 describe("TransferCostModal — manual per-client amounts (Transfer stage)", () => {
-  it("lists every client, defaulting each input to their full deposited amount", () => {
+  it("lists every client, with each amount received starting at 0", () => {
     render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
 
     expect(screen.getByText("Alice Johnson")).toBeInTheDocument();
@@ -19,10 +19,10 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
     const inputs = screen.getAllByRole("spinbutton").filter((el) => el.getAttribute("step") === "0.01" && el.getAttribute("min") === "0") as HTMLInputElement[];
     // First spinbutton is the entry-fee field; the rest are per-client amounts.
     const amountInputs = inputs.slice(1);
-    expect(amountInputs.map((i) => i.value)).toEqual(["2000", "3000"]);
+    expect(amountInputs.map((i) => i.value)).toEqual(["0", "0"]);
   });
 
-  it("re-seeds amounts from investments once the real list arrives after the modal first mounts empty", () => {
+  it("re-seeds a 0 amount for every client once the real list arrives after the modal first mounts empty", () => {
     // Reproduces the production bug: the modal is in the tree before the
     // investor list has loaded (investments=[]), then `open` flips true once
     // the real list is ready. A one-time useState initializer would freeze
@@ -33,7 +33,7 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
 
     const inputs = screen.getAllByRole("spinbutton").filter((el) => el.getAttribute("step") === "0.01" && el.getAttribute("min") === "0") as HTMLInputElement[];
     const amountInputs = inputs.slice(1);
-    expect(amountInputs.map((i) => i.value)).toEqual(["2000", "3000"]);
+    expect(amountInputs.map((i) => i.value)).toEqual(["0", "0"]);
   });
 
   it("recomputes Total Active Principal live as amounts and entry fee change", async () => {
@@ -44,9 +44,11 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
     const entryFeeInput = inputs[0]!;
     const aliceInput = inputs[1]!;
 
-    // Bank only sent Alice 1800 instead of her full 2000.
+    // Bank only sent Alice 1800 instead of her full 2000; Bob's 3000 arrived in full.
     await user.clear(aliceInput);
     await user.type(aliceInput, "1800");
+    await user.clear(inputs[2]!);
+    await user.type(inputs[2]!, "3000");
     await user.clear(entryFeeInput);
     await user.type(entryFeeInput, "2");
 
@@ -65,12 +67,41 @@ describe("TransferCostModal — manual per-client amounts (Transfer stage)", () 
 
     await user.clear(aliceInput);
     await user.type(aliceInput, "1800");
+    await user.clear(inputs[2]!);
+    await user.type(inputs[2]!, "3000");
     await user.clear(entryFeeInput);
     await user.type(entryFeeInput, "2");
 
     await user.click(screen.getByRole("button", { name: "Confirm & Transfer" }));
 
     expect(onConfirm).toHaveBeenCalledWith("manual", { 1: 1800, 2: 3000 }, null, 2);
+  });
+});
+
+describe("TransferCostModal — per-client Transfer Amount and Entry Fee columns", () => {
+  it("shows each client's transfer amount (deposited − received) and entry fee (on received)", async () => {
+    const user = userEvent.setup();
+    render(<TransferCostModal open investments={INVESTORS} onConfirm={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Transfer Amount")).toBeInTheDocument();
+    expect(screen.getByText("Entry Fee")).toBeInTheDocument();
+
+    const inputs = screen.getAllByRole("spinbutton") as HTMLInputElement[];
+    await user.clear(inputs[0]!);
+    await user.type(inputs[0]!, "10");
+    const aliceInput = screen.getByLabelText("Amount received for Alice Johnson");
+    await user.clear(aliceInput);
+    await user.type(aliceInput, "1900");
+
+    const aliceRow = aliceInput.closest("tr")!;
+    // Transfer amount 2000 - 1900 = 100.00; entry fee 10% of 1900 = 190.00; net 1710.00
+    expect(aliceRow).toHaveTextContent("100.00");
+    expect(aliceRow).toHaveTextContent("190.00");
+    expect(aliceRow).toHaveTextContent("1,710.00");
+
+    // Bob still at 0 received: his whole 3000 deposit shows as the transfer amount.
+    const bobRow = screen.getByLabelText("Amount received for Bob Smith").closest("tr")!;
+    expect(bobRow).toHaveTextContent("3,000.00");
   });
 });
 

@@ -27,8 +27,10 @@ interface TransferCostModalProps {
 
 const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Every client starts at 0 received — the real amount is typed in as each
+// wire is confirmed, rather than assuming the full deposit arrived.
 function seedAmounts(investments: BatchInvestorLight[]): Record<number, string> {
-  return Object.fromEntries(investments.map((inv) => [inv.id, String(inv.amount_deposited)]));
+  return Object.fromEntries(investments.map((inv) => [inv.id, "0"]));
 }
 
 /**
@@ -111,7 +113,7 @@ export function TransferCostModal({
   };
 
   const modalStyle: React.CSSProperties = {
-    background: "#0B1228", borderRadius: "16px", width: "100%", maxWidth: "820px",
+    background: "#0B1228", borderRadius: "16px", width: "100%", maxWidth: "960px",
     border: "1px solid rgba(255, 255, 255, 0.08)", boxShadow: "0 24px 48px rgba(0, 0, 0, 0.4)",
     overflow: "hidden auto", display: "flex", flexDirection: "column",
     color: "#fff", fontFamily: "var(--font-sans)", maxHeight: "90vh",
@@ -205,7 +207,8 @@ export function TransferCostModal({
           {mode === "manual" ? (
             <>
               <p style={{ margin: 0, fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
-                Enter the amount each client's wire actually landed as — defaults to their full deposit.
+                Enter the amount each client's wire actually landed as (starts at 0). Transfer Amount is
+                what the transfer cost them (deposited − received); Entry Fee is charged on what was received.
               </p>
 
               <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: "10px", overflow: "hidden" }}>
@@ -213,7 +216,7 @@ export function TransferCostModal({
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                     <thead style={{ position: "sticky", top: 0, background: "#111a33" }}>
                       <tr>
-                        {["Client", "Deposited (USD)", "Amount Received (USD)", "Net"].map((h, i) => (
+                        {["Client", "Deposited (USD)", "Amount Received (USD)", "Transfer Amount", "Entry Fee", "Net"].map((h, i) => (
                           <th
                             key={h}
                             style={{ padding: "8px 10px", textAlign: i === 0 ? "left" : "right", color: "#94A3B8", fontWeight: 600, whiteSpace: "nowrap" }}
@@ -224,7 +227,7 @@ export function TransferCostModal({
                       </tr>
                     </thead>
                     <tbody>
-                      {rows.map(({ inv, net }) => (
+                      {rows.map(({ inv, bankDeduction, entryFee, net }) => (
                         <tr key={inv.id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                           <td style={{ padding: "6px 10px" }}>
                             <div style={{ color: "#fff", fontWeight: 500 }}>{inv.investor_name}</div>
@@ -244,7 +247,14 @@ export function TransferCostModal({
                               value={amounts[inv.id] ?? ""}
                               onChange={(e) => setAmount(inv.id, e.target.value)}
                               disabled={isLoading}
+                              aria-label={`Amount received for ${inv.investor_name ?? inv.internal_client_code}`}
                             />
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#FCA5A5", fontFamily: "var(--font-mono)" }}>
+                            {fmt(bankDeduction)}
+                          </td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#FBBF24", fontFamily: "var(--font-mono)" }}>
+                            {fmt(entryFee)}
                           </td>
                           <td style={{ padding: "6px 10px", textAlign: "right", color: "#86EFAC", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
                             {fmt(net)}
@@ -253,7 +263,7 @@ export function TransferCostModal({
                       ))}
                       {rows.length === 0 && (
                         <tr>
-                          <td colSpan={4} style={{ padding: "16px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                          <td colSpan={6} style={{ padding: "16px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
                             No clients in this batch.
                           </td>
                         </tr>
@@ -279,7 +289,7 @@ export function TransferCostModal({
                   <span>${fmt(totalReceived)}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", color: "#FCA5A5" }}>
-                  <span>Bank Deduction (implied)</span>
+                  <span>Total Transfer Amount</span>
                   <span>-${fmt(totalBankDeduction)}</span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", color: "#FBBF24" }}>
