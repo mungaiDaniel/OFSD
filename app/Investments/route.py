@@ -1339,10 +1339,16 @@ def update_investment(investment_id):
 @investment_v1.route('/api/v1/investments/<int:investment_id>', methods=['DELETE'])
 @jwt_required()
 def delete_investment(investment_id):
-    """Delete an investment"""
+    """Permanently delete one investment (deposit) — super_admin only (destructive, see InvestmentController.delete_investment)."""
+    from app.Funds.edit_service import require_role
+
+    user, error_response = require_role(roles=("super_admin",))
+    if error_response:
+        return error_response
+
     try:
         session = db.session
-        return InvestmentController.delete_investment(investment_id, session)
+        return InvestmentController.delete_investment(investment_id, session, actor_user=user)
     except Exception as e:
         return make_response(jsonify({
             "status": 500,

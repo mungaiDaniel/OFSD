@@ -1,4 +1,4 @@
-from app.Investments.model import Investment
+from app.Investments.model import Investment, PendingEmail, EmailLog
 from app.Batch.model import Batch
 from app.database.database import db
 from flask import jsonify, make_response
@@ -348,32 +348,97 @@ class InvestmentController:
             }), 500)
 
     @classmethod
-    def delete_investment(cls, investment_id, session):
+    def delete_investment(cls, investment_id, session, actor_user=None):
         """
-        Delete an investment.
-        
+        Permanently delete one investment (deposit) row — super-admin-only
+        destructive action, triggered from the batch "Show all" investor
+        list. Mirrors the cleanup BatchController.delete_batch does for a
+        whole batch, scoped to this single investment: several tables FK to
+        investments.id WITHOUT ondelete=CASCADE (pending_emails, email_logs,
+        statements, report_recipients, investment_batch_valuations,
+        pro_rata_distribution) and would raise a FK violation on a bare
+        session.delete() once any of those rows exist for this investor.
+        investor_shares.investment_id IS ondelete=CASCADE at the DB level,
+        but it's still deleted explicitly here rather than relied upon, for
+        the same reason delete_batch does: production schema drift in this
+        app has a history of not matching what the models declare.
+
         Args:
             investment_id: ID of the investment
             session: database session
-        
+            actor_user: the super_admin User performing the delete (for the audit log)
+
         Returns:
             tuple: (json_response, status_code)
         """
+        from app.Valuation.model import Statement, InvestmentBatchValuation
+        from app.Reports.model import ReportRecipient, ReportRun
+        from app.Performance.pro_rata_distribution import ProRataDistribution
+        from app.Funds.investor_shares import InvestorShares
+        from app.Batch.controllers import BatchController
+        from app.utils.audit_log import create_audit_log
+
         try:
             investment = session.query(Investment).filter(Investment.id == investment_id).first()
-            
+
             if not investment:
                 return make_response(jsonify({
                     "status": 404,
                     "message": "Investment not found"
                 }), 404)
 
+            snapshot = {
+                "investor_name": investment.investor_name,
+                "internal_client_code": investment.internal_client_code,
+                "batch_id": investment.batch_id,
+                "fund_id": investment.fund_id,
+                "amount_deposited": float(investment.amount_deposited) if investment.amount_deposited is not None else None,
+                "shares_owned": float(investment.shares_owned) if investment.shares_owned else None,
+            }
+            batch_id = investment.batch_id
+
+            session.query(PendingEmail).filter(PendingEmail.investor_id == investment_id).delete(synchronize_session=False)
+            session.query(EmailLog).filter(EmailLog.investor_id == investment_id).delete(synchronize_session=False)
+            session.query(Statement).filter(Statement.investor_id == investment_id).delete(synchronize_session=False)
+
+            touched_run_ids = [
+                rid for (rid,) in session.query(ReportRecipient.report_run_id)
+                .filter(ReportRecipient.investor_id == investment_id)
+                .distinct()
+                .all()
+            ]
+            session.query(ReportRecipient).filter(ReportRecipient.investor_id == investment_id).delete(synchronize_session=False)
+            for run_id in touched_run_ids:
+                remaining = session.query(ReportRecipient.id).filter(ReportRecipient.report_run_id == run_id).first()
+                if not remaining:
+                    session.query(ReportRun).filter(ReportRun.id == run_id).delete(synchronize_session=False)
+
+            session.query(InvestmentBatchValuation).filter(InvestmentBatchValuation.investment_id == investment_id).delete(synchronize_session=False)
+            session.query(ProRataDistribution).filter(ProRataDistribution.investment_id == investment_id).delete(synchronize_session=False)
+            session.query(InvestorShares).filter(InvestorShares.investment_id == investment_id).delete(synchronize_session=False)
+
             session.delete(investment)
             session.commit()
+
+            if batch_id is not None:
+                BatchController.refresh_cached_total_capital(batch_id, session, commit=True)
+
+            create_audit_log(
+                action="DELETE_INVESTMENT",
+                target_type="investment",
+                target_id=investment_id,
+                target_name=snapshot["investor_name"],
+                description=f"Deleted investment {investment_id} ({snapshot['internal_client_code']}) from batch {batch_id}",
+                old_value=snapshot,
+                actor_user_id=getattr(actor_user, "id", None),
+                actor_user_email=getattr(actor_user, "email", None),
+                actor_user_name=getattr(actor_user, "name", None),
+            )
 
             return make_response('', 204)
 
         except Exception as e:
+            session.rollback()
             return make_response(jsonify({
                 "status": 500,
                 "message": f"Error deleting investment: {str(e)}"
