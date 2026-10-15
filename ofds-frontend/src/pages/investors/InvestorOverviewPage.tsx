@@ -17,6 +17,7 @@ import { batchService } from "@/services/batchService";
 import { reportService } from "@/services/reportService";
 import { NAVLineChart } from "@/components/charts/NAVLineChart";
 import { ROUTES } from "@/lib/constants";
+import { getUserRole } from "@/lib/auth";
 import type { InvestorOverviewData, InvestorPosition, FundClassSummary, CoreFund, FundShareClass, Batch } from "@/lib/types";
 
 interface HistoryPoint {
@@ -883,6 +884,8 @@ export default function InvestorOverviewPage() {
           </div>
 
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {/* Editing an investor is super_admin-only (enforced server-side too). */}
+            {getUserRole() === "super_admin" && (
             <button
               onClick={() => setEditOpen(true)}
               style={{ ...actionBtnBase, background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.22)", color: "rgb(52, 211, 153)", fontWeight: 600 }}
@@ -893,6 +896,7 @@ export default function InvestorOverviewPage() {
               </svg>
               Edit
             </button>
+            )}
 
             <button
               onClick={handleGenerateStatement}

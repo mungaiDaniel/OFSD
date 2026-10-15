@@ -1,5 +1,6 @@
 from flask import request, Blueprint, jsonify, make_response, send_file, current_app
 from flask_jwt_extended import jwt_required
+from app.utils.decorators import super_admin_required
 from flask_cors import cross_origin
 from app.database.database import db
 from app.Investments.controllers import InvestmentController
@@ -16,7 +17,7 @@ from app.Investments.model import (
     WITHDRAWAL_SOURCE_INVESTOR_REQUEST,
 )
 from app.Batch.core_fund import CoreFund
-from app.Batch.model import Batch
+from app.Batch.model import Batch, deposit_status_label
 from app.Funds.share_class import ShareClass
 from app.logic.batch_management_service import BatchManagementService
 from app.Valuation.model import ValuationRun, BatchValuation
@@ -647,14 +648,19 @@ def export_investor_directory():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
-def get_total_investors_count(session=None) -> int:
+def get_total_investors_count(session=None, product_type=None) -> int:
     """
     Returns the total unique investor count matching the investor directory page.
+    `product_type` ("FUNDS"/"SHARES") limits it to investors with a deposit in
+    a batch of that product — the Overview's Funds/Shares tabs.
     """
     if session is None:
         session = db.session
     try:
-        all_investments = session.query(Investment.internal_client_code, Investment.investor_name).all()
+        query = session.query(Investment.internal_client_code, Investment.investor_name)
+        if product_type:
+            query = query.join(Batch, Investment.batch_id == Batch.id).filter(Batch.product_type == product_type)
+        all_investments = query.all()
         unique_clients = set()
         for code, name in all_investments:
             identifier = (code or "").strip()
@@ -1306,6 +1312,7 @@ def add_investment_to_batch(batch_id):
 
 @investment_v1.route('/api/v1/investments/<int:investment_id>', methods=['PUT'])
 @jwt_required()
+@super_admin_required
 def update_investment(investment_id):
     """
     Update an investment
@@ -4534,6 +4541,7 @@ def get_deployment_receipt_pdf(client_code, batch_id):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def update_investor_profile(client_code):
     """
     Update investor identity fields globally (propagates across all investments for that client_code).
@@ -4855,6 +4863,7 @@ def list_investor_deposits(client_code):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/deposits/bulk-update', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def bulk_update_investor_deposits(client_code):
     """
     Selectively update share class/currency for specific deposits (investments) of a single investor.
@@ -7024,10 +7033,11 @@ def get_recent_transactions():
             Investment.amount_deposited,
             CoreFund.fund_name,
             ShareClass.class_code,
-            ShareClass.currency
+            ShareClass.currency,
+            Batch.stage.label("batch_stage"),
         ).join(CoreFund, Investment.fund_id == CoreFund.id).join(
             ShareClass, Investment.share_class_id == ShareClass.id
-        ).order_by(Investment.date_deposited.desc()).limit(10).all()
+        ).outerjoin(Batch, Investment.batch_id == Batch.id).order_by(Investment.date_deposited.desc()).limit(10).all()
         
         for dep in deposits:
             transactions.append({
@@ -7040,7 +7050,7 @@ def get_recent_transactions():
                 "class_code": dep.class_code,
                 "currency": dep.currency,
                 "amount": float_2dp(dep.amount_deposited),
-                "status": "Completed"
+                "status": deposit_status_label(dep.batch_stage)
             })
         
         # Get withdrawals
@@ -7107,7 +7117,7 @@ def get_recent_transactions():
                 "class_code": val.class_code,
                 "currency": val.currency,
                 "amount": float_2dp(val.market_value),
-                "status": "Committed"
+                "status": "Valued"
             })
         
         # Sort all transactions by date, limit to 10
@@ -7412,6 +7422,7 @@ def get_reconciliation_review():
 
 @investment_v1.route('/api/v1/reconciliation/update/<int:investment_id>', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def update_reconciliation_value(investment_id):
     """
     Update the official receipt value for an investment.

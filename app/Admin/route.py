@@ -8,6 +8,7 @@ from flask import jsonify, make_response
 import app.utils.responses as resp
 from app.utils.responses import m_return
 from flask_jwt_extended import create_refresh_token, jwt_required, get_jwt
+from app.utils.decorators import super_admin_required
 from sqlalchemy import func
 
 user_v1 = Blueprint("user_v1", __name__, url_prefix='/')
@@ -114,6 +115,7 @@ def login():
 
 @user_v1.route('/api/v1/admin/<int:id>', methods=['PUT'])
 @jwt_required()
+@super_admin_required
 def make_assisstance(id):
     session = db.session
     admin = UserController.user_admin(id, session=session)

@@ -547,8 +547,15 @@ export default function OverviewPage() {
   // Total investors — "All" uses the same authoritative, distinct-across-the-
   // portfolio count used by the Investor Directory page (summing per-fund
   // investors_count would double-count investors holding more than one fund);
-  // a selected fund/share uses that entity's own distinct-investor count.
-  const totalInvestors = isFundScoped ? (selectedEntity?.investors_count ?? 0) : (overviewStats?.total_investors ?? 0);
+  // a selected fund/share uses that entity's own distinct-investor count, and
+  // the Funds / Shares product tabs use that product's distinct count.
+  const productInvestors =
+    productFilter === "FUNDS"
+      ? overviewStats?.total_investors_funds
+      : productFilter === "SHARES"
+        ? overviewStats?.total_investors_shares
+        : overviewStats?.total_investors;
+  const totalInvestors = isFundScoped ? (selectedEntity?.investors_count ?? 0) : (productInvestors ?? 0);
 
   // Batches — scoped to the current Product filter, then further narrowed to
   // the selected fund/share's own share classes when one is picked (Task 10:
@@ -822,7 +829,13 @@ export default function OverviewPage() {
           <div
             style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}
           >
-            {isFundScoped ? `In ${selectedEntity?.fund_name ?? `this ${entityNoun}`}` : "Across all funds"}
+            {isFundScoped
+              ? `In ${selectedEntity?.fund_name ?? `this ${entityNoun}`}`
+              : productFilter === "SHARES"
+                ? "Across all shares"
+                : productFilter === "FUNDS"
+                  ? "Across all funds"
+                  : "Across all funds & shares"}
           </div>
         </div>
 

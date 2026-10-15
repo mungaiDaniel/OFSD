@@ -4,6 +4,14 @@ from app.database.product_type import ProductTypeEnum, FUNDS
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric, ForeignKey, Date, Index, UniqueConstraint, Text, event, text
 
+# Human-readable batch stages — same labels as the frontend's STAGE_LABELS.
+BATCH_STAGE_LABELS = {1: "Deposited", 2: "Transferred", 3: "Deployed", 4: "Active"}
+
+
+def deposit_status_label(stage):
+    """Report status for a deposit: the stage its batch has actually reached."""
+    return BATCH_STAGE_LABELS.get(stage or 1, "Deposited")
+
 
 class Batch(Base, db.Model):
     __tablename__ = 'batches'

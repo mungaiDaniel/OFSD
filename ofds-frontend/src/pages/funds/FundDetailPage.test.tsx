@@ -125,11 +125,17 @@ describe("Edit fund / share (Task 12)", () => {
     expect(screen.getByDisplayValue("Shares")).toHaveAttribute("readonly");
   });
 
-  it("hides Edit for non super admins", async () => {
+  it("hides Edit and Delete for non super admins", async () => {
     localStorage.setItem("ofds_user_role", "admin");
     renderAt("/funds/1");
-    await screen.findByRole("button", { name: /^Delete$/ });
+    await screen.findByRole("heading", { name: /Axiom/i });
     expect(screen.queryByRole("button", { name: /Edit fund/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete$/ })).not.toBeInTheDocument();
+  });
+
+  it("shows Delete for super admins", async () => {
+    renderAt("/funds/1");
+    expect(await screen.findByRole("button", { name: /^Delete$/ })).toBeInTheDocument();
   });
 
   it("shows a reload prompt on a version conflict", async () => {

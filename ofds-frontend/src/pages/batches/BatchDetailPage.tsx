@@ -711,9 +711,12 @@ export default function BatchDetailPage() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, flexWrap: "wrap" }}>
-            <button title="Edit" onClick={handleEditToggle} style={iconBtn}>
-              <Pencil size={13} />
-            </button>
+            {/* Edit and delete are super_admin-only (enforced server-side too). */}
+            {isSuperAdmin && (
+              <button title="Edit" onClick={handleEditToggle} style={iconBtn}>
+                <Pencil size={13} />
+              </button>
+            )}
             <button title="Upload investors" onClick={openBatchFileSelector} style={iconBtn}>
               <Upload size={13} />
             </button>
@@ -726,9 +729,11 @@ export default function BatchDetailPage() {
             >
               {batch.is_active ? "Close" : "Open"}
             </button>
-            <button title="Delete batch" onClick={handleDelete} style={dangerIconBtn}>
-              <Trash2 size={13} />
-            </button>
+            {isSuperAdmin && (
+              <button title="Delete batch" onClick={handleDelete} style={dangerIconBtn}>
+                <Trash2 size={13} />
+              </button>
+            )}
           </div>
         </div>
         <input ref={batchFileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleBatchFileChange} />

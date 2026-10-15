@@ -182,3 +182,21 @@ class TestShareClassIsValuedFlag:
             classes = resp.get_json()["data"]["funds"][0]["classes"]
             assert classes[0]["is_valued"] is True
             assert classes[0]["current_nav"] == pytest.approx(525.0)
+
+
+@pytest.mark.unit
+class TestOverviewInvestorCountsByProduct:
+    def test_investor_counts_split_by_product(self, client, auth_token, app):
+        with app.app_context():
+            fund_batch = _make_holding("Axiom", "AXIOM-CNT", "AXIOM-CNT-I", "KES")[2]
+            fund_batch.product_type = "FUNDS"
+            shares_batch = _make_holding(
+                "Dangote Petroleum Refinery and Petrochemicals FZE", "DPRP-CNT", "DPRP-CNT-I", "USD",
+            )[2]
+            shares_batch.product_type = "SHARES"
+            db.session.commit()
+
+            data = client.get("/api/v1/stats/overview", headers=get_auth_headers(auth_token)).get_json()["data"]
+            assert data["total_investors"] == 2
+            assert data["total_investors_funds"] == 1
+            assert data["total_investors_shares"] == 1

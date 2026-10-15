@@ -1,5 +1,6 @@
 from flask import request, Blueprint, jsonify, make_response, send_file
 from flask_jwt_extended import jwt_required
+from app.utils.decorators import super_admin_required
 from flask_cors import cross_origin
 from sqlalchemy import or_
 from app.database.database import db
@@ -14,6 +15,10 @@ from io import BytesIO
 import csv
 
 batch_v1 = Blueprint("batch_v1", __name__, url_prefix='/')
+
+# PATCH /batches/<id> fields that are real edits (super_admin-only), as opposed
+# to the stage-advance workflow fields sent by the Transfer/Deploy modals.
+BATCH_EDIT_FIELDS = ("batch_name", "certificate_number")
 
 # ==================== BATCH ENDPOINTS ====================
 
@@ -167,6 +172,7 @@ def preview_shares_deployment(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>', methods=['PUT'])
 @jwt_required()
+@super_admin_required
 def update_batch(batch_id):
     """
     Update a batch
@@ -201,7 +207,7 @@ def update_batch(batch_id):
 def patch_batch(batch_id):
     """
     Patch (partially update) a batch - for two-stage creation
-    
+
     Request Body (optional fields):
     {
         "batch_name": "Updated Name",
@@ -209,7 +215,16 @@ def patch_batch(batch_id):
         "date_deployed": "2026-03-15T00:00:00",
         "is_active": true
     }
+
+    Advancing stages (transfer / deploy / activate) is normal workflow open to
+    any logged-in user, but editing the batch's name or certificate number is
+    an edit and is super_admin-only.
     """
+    if any(k in (request.get_json(silent=True) or {}) for k in BATCH_EDIT_FIELDS):
+        from app.Funds.edit_service import require_role
+        _, error_response = require_role(roles=("super_admin",))
+        if error_response:
+            return error_response
     try:
         data = request.get_json(silent=True)
         if not data:
@@ -462,6 +477,7 @@ def toggle_active(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>/toggle-transferred', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def toggle_transferred(batch_id):
     """Toggle the is_transferred status of a batch"""
     try:
@@ -476,6 +492,7 @@ def toggle_transferred(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>/update_status', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def update_batch_status(batch_id):
     """
     Update batch status and trigger automated emails for multi-stage investment lifecycle
@@ -517,6 +534,7 @@ def update_batch_status(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>', methods=['DELETE'])
 @jwt_required()
+@super_admin_required
 def delete_batch(batch_id):
     """Delete a batch and its related investments."""
     try:
@@ -531,6 +549,7 @@ def delete_batch(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>/update', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def update_batch_status_v2(batch_id):
     """
     Compatible update endpoint for checkbox-driven status update.
@@ -554,6 +573,7 @@ def update_batch_status_v2(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>/notify-transfer', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def notify_transfer(batch_id):
     """Explicit endpoint for transfer notification (stage 2)."""
     try:
@@ -613,6 +633,7 @@ def close_batch(batch_id):
 
 @batch_v1.route('/api/v1/batches/<int:batch_id>/deploy', methods=['PATCH'])
 @jwt_required()
+@super_admin_required
 def deploy_batch_nav(batch_id):
     """
     Deploy batch. Calculate shares for every investor.

@@ -186,6 +186,11 @@ def get_overview_stats():
                 db.session.query(func.count(func.distinct(Investment.internal_client_code))).scalar() or 0
             )
 
+        # Per-product investor counts for the Overview's Funds / Shares tabs.
+        from app.database.product_type import FUNDS, SHARES
+        total_investors_funds = get_total_investors_count(db.session, product_type=FUNDS)
+        total_investors_shares = get_total_investors_count(db.session, product_type=SHARES)
+
         # Authoritative batch counts matching the batches directory page
         batch_counts = BatchController.get_batches_summary_counts(db.session)
 
@@ -465,6 +470,8 @@ def get_overview_stats():
                     "gain_ngn": float_2dp(gain_ngn),
                     "total_investors": int(total_investors_count),
                     "active_investors": int(total_investors_count),
+                    "total_investors_funds": int(total_investors_funds),
+                    "total_investors_shares": int(total_investors_shares),
                     "performance_pct": float_2dp(
                         ((authoritative_total_aum - total_invested_net) / total_invested_net * 100)
                         if total_invested_net > 0
@@ -573,6 +580,8 @@ def get_overview_stats():
                         "gain_ngn": float_2dp(gain_ngn),
                         "total_investors": int(total_investors),
                         "active_investors": int(total_investors),
+                        "total_investors_funds": int(total_investors_funds),
+                        "total_investors_shares": int(total_investors_shares),
                         "performance_pct": float_2dp(performance_pct),
                         "active_batches": batch_counts["active_batches"],
                         "open_batches": batch_counts["open_batches"],

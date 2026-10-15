@@ -25,6 +25,9 @@ export interface OverviewStats {
   total_profit?: number;
   total_invested?: number;
   total_investors: number;
+  /** Distinct investors with a deposit in a FUNDS / SHARES batch (Overview product tabs). */
+  total_investors_funds?: number;
+  total_investors_shares?: number;
   performance_pct: number;
   active_batches: number;
   open_batches?: number;

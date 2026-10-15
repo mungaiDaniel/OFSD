@@ -85,6 +85,32 @@ def auth_token(client):
     return create_access_token(identity=test_user_identity, additional_claims={'admin': 1})
 
 
+def _token_for_db_user(app, role, email, admin_claim):
+    """A JWT for a real User row — routes gated by super_admin_required read the role from the DB."""
+    from flask_jwt_extended import create_access_token
+    from app.Admin.model import User
+
+    with app.app_context():
+        if not db.session.query(User).filter(User.email == email).first():
+            user = User(name=f"{role} user", email=email, role=role, status="active")
+            user.password = User.generate_password_hash("Test1234!")
+            db.session.add(user)
+            db.session.commit()
+        return create_access_token(identity=email, additional_claims={'admin': admin_claim})
+
+
+@pytest.fixture
+def super_admin_auth_token(app):
+    """JWT for a super_admin user — required for every delete and edit."""
+    return _token_for_db_user(app, "super_admin", "superadmin@example.com", 2)
+
+
+@pytest.fixture
+def admin_auth_token(app):
+    """JWT for a plain admin user (DB-backed) — can run workflow, not deletes/edits."""
+    return _token_for_db_user(app, "admin", "plainadmin@example.com", 1)
+
+
 def get_auth_headers(token):
     """Helper to create authorization headers"""
     return {'Authorization': f'Bearer {token}'}

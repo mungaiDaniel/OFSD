@@ -705,22 +705,24 @@ export default function FundDetailPage({ product = "FUNDS" }: FundDetailPageProp
               <Pencil size={13} /> {isShares ? "Edit share" : "Edit fund"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={handleDeleteFund}
-            style={{
-              padding: "8px 14px",
-              fontSize: "12px",
-              fontWeight: 600,
-              borderRadius: "10px",
-              cursor: "pointer",
-              border: "1px solid rgba(239,68,68,0.45)",
-              background: "rgba(239,68,68,0.08)",
-              color: "#f87171",
-            }}
-          >
-            Delete
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleDeleteFund}
+              style={{
+                padding: "8px 14px",
+                fontSize: "12px",
+                fontWeight: 600,
+                borderRadius: "10px",
+                cursor: "pointer",
+                border: "1px solid rgba(239,68,68,0.45)",
+                background: "rgba(239,68,68,0.08)",
+                color: "#f87171",
+              }}
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 

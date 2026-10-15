@@ -12,6 +12,7 @@ These routes handle:
 
 from flask import request, Blueprint, jsonify, make_response
 from flask_jwt_extended import jwt_required
+from app.utils.decorators import super_admin_required
 from app.database.database import db
 from app.Batch.fund_controllers import (
     FundController,
@@ -368,6 +369,7 @@ def _delete_fund_impl(fund_id, product):
 
 @fund_v1.route('/api/v1/funds/<int:fund_id>', methods=['DELETE'])
 @jwt_required()
+@super_admin_required
 def delete_core_fund(fund_id: int):
     """DELETE /api/v1/funds/<id> — FUNDS only. See _delete_fund_impl."""
     return _delete_fund_impl(fund_id, FUNDS)
@@ -375,6 +377,7 @@ def delete_core_fund(fund_id: int):
 
 @fund_v1.route('/api/v1/shares/<int:fund_id>', methods=['DELETE'])
 @jwt_required()
+@super_admin_required
 def delete_share_fund(fund_id: int):
     """DELETE /api/v1/shares/<id> — Task 8 alias of /funds/<id>, scoped to SHARES."""
     return _delete_fund_impl(fund_id, SHARES)

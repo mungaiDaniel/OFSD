@@ -22,7 +22,7 @@ from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
 
 from app.database.database import db
 from app.Investments.model import Investment, EpochLedger
-from app.Batch.model import Batch
+from app.Batch.model import Batch, deposit_status_label
 from app.Batch.core_fund import CoreFund
 from app.Funds.share_class import ShareClass
 from app.Valuation.model import ValuationRun, Statement
@@ -3466,7 +3466,7 @@ def _gather_client_activity(client_code, deposited_from=None, deposited_to=None,
             "class_code": inv.share_class.class_code if inv.share_class else None,
             "currency": inv.share_class.currency if inv.share_class else None,
             "amount": float_2dp(inv.amount_deposited),
-            "status": "Completed",
+            "status": deposit_status_label(inv.batch.stage if inv.batch else None),
         })
 
     wd_query = db.session.query(Withdrawal).filter(
@@ -3508,7 +3508,7 @@ def _gather_client_activity(client_code, deposited_from=None, deposited_to=None,
             "class_code": share_class.class_code if share_class else None,
             "currency": share_class.currency if share_class else None,
             "amount": float_2dp(snap.market_value),
-            "status": "Committed",
+            "status": "Valued",
         })
 
     type_rank = {"deposit": 0, "withdrawal": 1, "valuation": 2}
@@ -3760,7 +3760,7 @@ def _gather_daily_activity(date_from, date_to):
             "class_code": inv.share_class.class_code if inv.share_class else None,
             "currency": inv.share_class.currency if inv.share_class else None,
             "amount": float_2dp(inv.amount_deposited),
-            "status": "Completed",
+            "status": deposit_status_label(inv.batch.stage if inv.batch else None),
         }
         for inv in deposits
     ]
@@ -3809,7 +3809,7 @@ def _gather_daily_activity(date_from, date_to):
             "class_code": share_class.class_code if share_class else None,
             "currency": share_class.currency if share_class else None,
             "amount": float_2dp(snap.market_value),
-            "status": "Committed",
+            "status": "Valued",
         }
         for snap, inv, share_class, fund in valuations
     ]
@@ -3883,6 +3883,17 @@ def daily_activity_excel():
             data["events"] or [],
             columns=["type", "date", "internal_client_code", "investor_name", "fund_name", "class_code", "currency", "amount", "status"],
         )
+        # Readable export: "Deposit"/"Withdrawal"/"Valuation" rows, and a
+        # Status column whose meaning depends on the type (batch stage for a
+        # deposit, approval status for a withdrawal, "Valued" for a valuation,
+        # where Amount is the client's market value on that date).
+        df["type"] = df["type"].str.capitalize()
+        df = df.rename(columns={
+            "type": "Type", "date": "Date", "internal_client_code": "Client Code",
+            "investor_name": "Investor", "fund_name": "Fund", "class_code": "Class",
+            "currency": "Currency", "amount": "Amount (deposit / withdrawal / market value)",
+            "status": "Status (batch stage / withdrawal / valuation)",
+        })
 
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
