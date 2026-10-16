@@ -1904,7 +1904,7 @@ def _combine_same_day_valuation_rows(rows):
             continue
         date_key = str(row.get("date") or "")[:10]
         nav_key = row.get("nav_per_share")
-        key = (date_key, str(row.get("currency") or "").upper(), None if nav_key is None else round(float(nav_key), 6))
+        key = (date_key, str(row.get("currency") or "").upper(), row.get("share_class_code"), None if nav_key is None else round(float(nav_key), 6))
         group = groups.get(key)
         if group is None:
             group = {
@@ -1913,6 +1913,7 @@ def _combine_same_day_valuation_rows(rows):
                 "label": "Valuation Report",
                 "fund_name": row.get("fund_name"),
                 "currency": row.get("currency"),
+                "share_class_code": row.get("share_class_code"),
                 "nav_per_share": row.get("nav_per_share"),
                 "shares": Decimal("0"),
                 "opening_balance": Decimal("0"),
@@ -2446,6 +2447,8 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             except Exception:
                 return "â€”"
 
+        multiple_classes = len({r.get('share_class_code') for r in rows_for_currency if r.get('share_class_code')}) > 1
+
         show_performance_col = any(
             (r.get("type") in {"MONTHLY_REPORT", "VALUATION"} and (r.get("performance_rate") is not None))
             for r in rows_for_currency
@@ -2510,6 +2513,8 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
 
             # Keep event label compact so numeric columns fit in-table.
             event_label = str(label)
+            if multiple_classes and row.get('share_class_code') and row_type in {'DEPOSIT', 'DEPLOYMENT', 'VALUATION'}:
+                event_label = f"{event_label} ({row.get('share_class_code')})"
 
             shares_raw = row.get("shares") if row.get("shares") is not None else row.get("shares_at_deployment")
             nav_raw = row.get("nav_per_share") if row.get("nav_per_share") is not None else row.get("nav_at_deployment")
@@ -3043,7 +3048,26 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
         append_divider_line(story, theme)
         story.append(Spacer(1, 0.10 * inch))
 
-        fund_invested_label = ", ".join(fund_id_to_name.get(fid, "") for fid in resolved_fund_ids) or "—"
+        def _fund_label_with_classes(fid):
+            # Name the share class(es) the client actually holds, e.g.
+            # "Janus Henderson (Biotech, Global Tech)".
+            base = fund_id_to_name.get(fid, "")
+            if fid not in funds_section_ids:
+                return base
+            class_names = [
+                n for (n,) in db.session.query(ShareClass.class_name)
+                .join(Investment, Investment.share_class_id == ShareClass.id)
+                .filter(
+                    func.lower(Investment.internal_client_code) == func.lower(client_code),
+                    Investment.fund_id == fid,
+                )
+                .distinct()
+                .order_by(ShareClass.class_name.asc())
+                .all() if n
+            ]
+            return f"{base} ({', '.join(class_names)})" if class_names else base
+
+        fund_invested_label = ", ".join(_fund_label_with_classes(fid) for fid in resolved_fund_ids) or "—"
 
         if theme.is_jh:
             jh_logo_table = build_jh_logo_block(jh_logo_path)
@@ -3114,34 +3138,12 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
                     story.append(Spacer(1, 0.08 * inch))
 
                 # A client holding several classes of this fund (e.g. JH_BT and
-                # JH_GT) gets one sub-section per class, each with its own
-                # summary and statements; a single-class holding is unchanged.
-                client_classes = (
-                    db.session.query(ShareClass.id, ShareClass.class_code)
-                    .join(Investment, Investment.share_class_id == ShareClass.id)
-                    .filter(
-                        func.lower(Investment.internal_client_code) == func.lower(client_code),
-                        Investment.fund_id == section_fund_id,
-                    )
-                    .distinct()
-                    .order_by(ShareClass.class_code.asc())
-                    .all()
+                # JH_GT) gets ONE combined summary and ONE statements table;
+                # each row names its class in the Event column instead.
+                _append_fund_statement_section(
+                    story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                    theme, pdf_styles, body_font, body_font_bold, statement_date,
                 )
-                if len(client_classes) > 1:
-                    for class_idx, (class_id, class_code) in enumerate(client_classes):
-                        if class_idx > 0:
-                            story.append(Spacer(1, 0.14 * inch))
-                        _append_fund_statement_section(
-                            story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
-                            theme, pdf_styles, body_font, body_font_bold, statement_date,
-                            share_class_id=class_id, class_label=class_code,
-                            include_unassigned_withdrawals=(class_idx == 0),
-                        )
-                else:
-                    _append_fund_statement_section(
-                        story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
-                        theme, pdf_styles, body_font, body_font_bold, statement_date,
-                    )
 
         # Task 5: one "SHARES (DANGOTE PETROLEUM REFINERY IPO)" section, omitted
         # entirely when the investor has no Shares holdings. Never mixes its
@@ -3572,13 +3574,16 @@ def get_investor_statements(client_code):
             deployment_date_actual = meta.get("deployment_date_actual")
             date_deployed = meta.get("date_deployed")
             
-            # Use actual deployment date if available, else use deposit date
+            # Always show the actual deposit date, even after deployment; the
+            # deployment date is kept separately for reference.
             event_date = inv.date_deposited
+            deployment_event_date = None
             if deployed and deployment_date_actual:
-                event_date = datetime.combine(deployment_date_actual, datetime.min.time()).replace(tzinfo=timezone.utc)
+                deployment_event_date = datetime.combine(deployment_date_actual, datetime.min.time()).replace(tzinfo=timezone.utc)
             elif deployed and date_deployed:
-                event_date = date_deployed
-            
+                deployment_event_date = date_deployed
+            share_class_code = inv.share_class.class_code if getattr(inv, "share_class", None) else None
+
             if deployed:
                 event_label = "Deployment Statement"
             elif inv.date_deposited.month == 4:
@@ -3615,6 +3620,8 @@ def get_investor_statements(client_code):
                 "batch_id": batch_id,
                 "batch_name": batch_names.get(batch_id, "Unknown") if batch_id is not None else None,
                 "date": event_date.isoformat(),
+                "deployment_date": deployment_event_date.isoformat() if deployment_event_date else None,
+                "share_class_code": share_class_code,
                 "label": event_label,
                 "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                 "original_principal": original_principal,
@@ -3700,6 +3707,7 @@ def get_investor_statements(client_code):
                     "batch_id": inv.batch_id,
                     "batch_name": inv.batch.batch_name if inv.batch else None,
                     "date": vdt_iso,
+                    "share_class_code": inv.share_class.class_code if getattr(inv, "share_class", None) else None,
                     "label": "Valuation Report",
                     "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                     "opening_balance": 0.0,  # Calculated in running balance pass
