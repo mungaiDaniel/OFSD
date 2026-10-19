@@ -1897,7 +1897,7 @@ def _filter_statement_rows_to_class(rows, client_code, fund_id, share_class_id, 
 
 def _combine_same_day_valuation_rows(rows):
     """
-    Display-only: merge the per-deposit "Valuation Report" rows that share a
+    Display-only: merge the per-deposit "Valuations" rows that share a
     valuation date (and NAV, i.e. the same share class) into ONE row, so a
     client with three deposits sees one valuation per date instead of three.
 
@@ -1923,7 +1923,7 @@ def _combine_same_day_valuation_rows(rows):
             group = {
                 "type": "VALUATION",
                 "date": row.get("date"),
-                "label": "Valuation Report",
+                "label": "Valuations",
                 "fund_name": row.get("fund_name"),
                 "currency": row.get("currency"),
                 "share_class_code": row.get("share_class_code"),
@@ -2501,7 +2501,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
                     label = "Deposit"
             elif not label:
                 if row_type == 'VALUATION':
-                    label = "Valuation Report"
+                    label = "Valuations"
                 elif row_type == 'WITHDRAWAL':
                     label = "Withdrawal"
                 elif row_type == 'MONTHLY_REPORT':
@@ -2514,7 +2514,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
 
             # Enrich valuation rows with NAV/Share and the valuation date text.
             if row_type == 'VALUATION':
-                label = "Valuation Report"
+                label = "Valuations"
 
             deposits_val = Decimal(str(row.get('deposits') or 0))
             opening_val = Decimal(str(row.get('opening_balance') or 0))
@@ -3782,7 +3782,7 @@ def get_investor_statements(client_code):
                     "batch_name": inv.batch.batch_name if inv.batch else None,
                     "date": vdt_iso,
                     "share_class_code": inv.share_class.class_code if getattr(inv, "share_class", None) else None,
-                    "label": "Valuation Report",
+                    "label": "Valuations",
                     "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                     "opening_balance": 0.0,  # Calculated in running balance pass
                     "deposits": 0.0,

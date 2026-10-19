@@ -215,6 +215,8 @@ export default function BulkUploadPage() {
   // "skip" on the backend, so an admin who never touches a row can't
   // accidentally add a duplicate deposit by just clicking Commit.
   const [decisions, setDecisions] = useState<Record<number, SameFundDecision>>({});
+  // Below-minimum SHARES rows: an admin can approve each as an exception, with a reason.
+  const [exceptions, setExceptions] = useState<Record<number, { approved: boolean; reason: string }>>({});
 
   // The preview table used to render every validated row at once — fine for
   // a few hundred rows, but 100,000 <tr> elements in one go is what actually
@@ -257,6 +259,11 @@ export default function BulkUploadPage() {
   const sameFundUndecidedSelected = useMemo(
     () => sameFundRows.some((r) => selected.has(r.row_index) && !decisions[r.row_index]),
     [sameFundRows, selected, decisions]
+  );
+  const belowMinRows = useMemo(() => validatedRows.filter((r) => r.resolved.below_minimum), [validatedRows]);
+  const exceptionMissingReason = useMemo(
+    () => belowMinRows.some((r) => selected.has(r.row_index) && exceptions[r.row_index]?.approved && !exceptions[r.row_index]?.reason.trim()),
+    [belowMinRows, selected, exceptions]
   );
   const setAllSameFundDecisions = (decision: SameFundDecision) => {
     setDecisions((prev) => {
@@ -413,7 +420,20 @@ export default function BulkUploadPage() {
       toast.error('Resolve every "Existing — same fund" row (Additional deposit or Skip) before committing');
       return;
     }
-    const rowsWithDecisions = rowsToCommit.map((r) => ({ ...r, decision: decisions[r.row_index] }));
+    if (exceptionMissingReason) {
+      toast.error("Enter a reason for every below-minimum deposit you approve as an exception");
+      return;
+    }
+    const rowsWithDecisions = rowsToCommit.map((r) => {
+      const ex = exceptions[r.row_index];
+      return {
+        ...r,
+        decision: decisions[r.row_index],
+        ...(r.resolved.below_minimum && ex?.approved
+          ? { min_deposit_exception: true, min_deposit_exception_reason: ex.reason.trim() }
+          : {}),
+      };
+    });
     setCommitting(true);
     try {
       const { job_id } = await bulkUploadService.startCommit(rowsWithDecisions, fileName);
@@ -607,6 +627,15 @@ export default function BulkUploadPage() {
             </div>
           )}
 
+          {belowMinRows.length > 0 && (
+            <div style={{ ...glass, padding: "14px 18px", border: "1px solid rgba(245,158,11,0.3)", background: "rgba(245,158,11,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ fontSize: "12px", color: "#F59E0B" }}>
+                {belowMinRows.length} row{belowMinRows.length !== 1 ? "s are" : " is"} below the {belowMinRows[0]?.resolved.min_deposit_usd?.toLocaleString()} USD minimum for a Shares batch.
+                Tick "Approve exception" and give a reason in the Decision column to include a row; otherwise it will fail on commit.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
             <input
               type="text"
@@ -702,6 +731,28 @@ export default function BulkUploadPage() {
                               <option value="additional_deposit">Additional deposit</option>
                               <option value="skip">Skip (possible duplicate)</option>
                             </select>
+                          ) : r.resolved.below_minimum ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "190px" }}>
+                              <label style={{ fontSize: "11px", color: "#F59E0B", display: "flex", gap: "6px", alignItems: "center", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!exceptions[r.row_index]?.approved}
+                                  onChange={(e) =>
+                                    setExceptions((prev) => ({ ...prev, [r.row_index]: { approved: e.target.checked, reason: prev[r.row_index]?.reason ?? "" } }))
+                                  }
+                                />
+                                Approve exception
+                              </label>
+                              {exceptions[r.row_index]?.approved && (
+                                <input
+                                  type="text"
+                                  placeholder="Reason (required)"
+                                  value={exceptions[r.row_index]?.reason ?? ""}
+                                  onChange={(e) => setExceptions((prev) => ({ ...prev, [r.row_index]: { approved: true, reason: e.target.value } }))}
+                                  style={{ ...inputBase, borderColor: exceptions[r.row_index]?.reason.trim() ? "rgba(255,255,255,0.1)" : "rgba(245,158,11,0.5)" }}
+                                />
+                              )}
+                            </div>
                           ) : (
                             <span style={{ color: "#475569", fontSize: "11px" }}>—</span>
                           )}

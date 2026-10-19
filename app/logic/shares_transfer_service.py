@@ -106,6 +106,7 @@ class SharesTransferService:
             inv.internal_client_code
             for inv in investments
             if Decimal(str(inv.amount_deposited or 0)) < min_deposit
+            and not getattr(inv, "min_deposit_exception", False)
         ]
         if below_min:
             raise SharesTransferError(

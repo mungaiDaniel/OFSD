@@ -73,10 +73,10 @@ class DevelopmentConfig():
         MAIL_PORT = int(os.environ.get('MAIL_PORT', 587))
         MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
         MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
-        MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'wealthmgt@aib-axysafrica.com'
+        MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'wealthmgt@axysinvestmentbank.com'
         MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or 'Compaqxp1!'
-        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@aib-axysafrica.com'
-        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@aib-axysafrica.com'
+        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@axysinvestmentbank.com'
+        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@axysinvestmentbank.com'
         
         # Email manual approval flag
         MANUAL_EMAIL_APPROVAL = True
@@ -126,8 +126,8 @@ class ProductionConfig():
         MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
         MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
         MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
-        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@aib-axysafrica.com'
-        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@aib-axysafrica.com'
+        MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@axysinvestmentbank.com'
+        MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@axysinvestmentbank.com'
 
         # Email manual approval flag
         MANUAL_EMAIL_APPROVAL = os.environ.get('MANUAL_EMAIL_APPROVAL', 'True').lower() == 'true'

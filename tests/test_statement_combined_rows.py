@@ -4,7 +4,7 @@ Investor statement — one valuation row per date, one section per class
 Display-only changes to the statement PDF (no figures change):
 1. Each deposit is its own holding, so the data has one VALUATION row per
    deposit per valuation date. The table now shows them as ONE combined
-   "Valuation Report" row per date (sums; Perf % = combined gain / combined
+   "Valuations" row per date (sums; Perf % = combined gain / combined
    previous value).
 2. A client holding two classes of one fund (e.g. JH_BT and JH_GT) gets a
    separate Account Summary + Statements table per class, instead of one
@@ -138,6 +138,6 @@ def test_two_class_client_gets_a_section_per_class_with_one_valuation_row_each(a
         assert "Account Summary (Global Tech, USD)" in text
         assert "Statements (Balanced)" in text and "Statements (Global Tech)" in text
         # One valuation row per class for 10 Sep (was three: one per deposit).
-        assert text.count("Valuation Report") == 2
+        assert text.count("Valuations") == 2
         # JH_BT combined: 150 shares, value 1,575.00 (=1,050 + 525).
         assert "150.00" in text and "1,575.00" in text

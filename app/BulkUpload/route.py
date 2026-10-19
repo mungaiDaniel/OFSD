@@ -262,7 +262,22 @@ def _validate_row(row: dict, row_index: int, seen_in_file: dict, class_by_code: 
     else:
         status = "existing_new_fund"
 
+    # SHARES batches enforce a minimum deposit. A row below it can still be
+    # committed if an admin approves it as an exception (with a reason) in the review step.
+    below_minimum = False
+    min_deposit = None
+    if amount is not None and share_class and share_class.get("product_type") == SHARES:
+        min_deposit = get_min_deposit_usd()
+        if amount < min_deposit:
+            below_minimum = True
+            warnings.append({
+                "field": "deposit_amount",
+                "message": f"Below the {min_deposit} USD minimum for a SHARES batch — approve it as an exception (with a reason) to include it",
+            })
+
     resolved = {
+        "below_minimum": below_minimum,
+        "min_deposit_usd": float(min_deposit) if min_deposit is not None else None,
         "client_code": client_code,
         "investor_name": existing["investor_name"] if existing else investor_name,
         "investor_email": existing["investor_email"] if existing else investor_email,
@@ -305,7 +320,7 @@ def validate_rows():
     class_by_code = {
         sc.class_code.strip().lower(): {
             "id": sc.id, "class_code": sc.class_code, "currency": sc.currency,
-            "fund_id": cf.id, "fund_name": cf.fund_name,
+            "fund_id": cf.id, "fund_name": cf.fund_name, "product_type": cf.product_type,
         }
         for sc, cf in active_classes
     }
@@ -632,14 +647,19 @@ def _commit_bulk_upload_chunk(session, chunk, filename, actor_kwargs, existing_i
 
             batch = BatchManagementService.find_or_create_batch(share_class_id)
 
+            exception_reason = None
             if batch.product_type == SHARES:
                 min_deposit = get_min_deposit_usd()
                 if amount < min_deposit:
-                    failed.append({
-                        "client_code": client_code,
-                        "message": f"Deposit of {amount} USD is below the {min_deposit} USD minimum (before fees) for a SHARES batch",
-                    })
-                    continue
+                    reason = str(row.get("min_deposit_exception_reason") or "").strip()
+                    if row.get("min_deposit_exception") is True and reason:
+                        exception_reason = reason
+                    else:
+                        failed.append({
+                            "client_code": client_code,
+                            "message": f"Deposit of {amount} USD is below the {min_deposit} USD minimum (before fees) for a SHARES batch — approve it as an exception with a reason to include it",
+                        })
+                        continue
 
             if status in ("existing_new_fund", "existing_same_fund"):
                 existing = existing_identity_by_code.get((client_code or "").strip().lower())
@@ -672,6 +692,8 @@ def _commit_bulk_upload_chunk(session, chunk, filename, actor_kwargs, existing_i
                 "product_type": batch.product_type,
                 "deposit_date": deposit_dt.date(),
                 "original_deposit_amount": amount,
+                "min_deposit_exception": exception_reason is not None,
+                "min_deposit_exception_reason": exception_reason,
                 "current_market_value": Decimal("0.00"),
                 "currency_type": currency or share_class.currency,
             }
@@ -711,6 +733,7 @@ def _commit_bulk_upload_chunk(session, chunk, filename, actor_kwargs, existing_i
             "new_value": json.dumps({
                 "outcome": outcome, "fund_id": r.get("fund_id"), "fund_name": r.get("fund_name"),
                 "deposit_amount": r.get("deposit_amount"), "deposit_date": r.get("deposit_date"),
+                "min_deposit_exception_reason": _dict.get("min_deposit_exception_reason"),
             }, default=str),
             "ip_address": ip, "user_agent": ua, "timestamp": now, "success": True,
         })

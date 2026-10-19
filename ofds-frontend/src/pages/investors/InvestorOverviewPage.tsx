@@ -112,7 +112,7 @@ function statementTypeLabel(stmt: StatementRow): string {
   if (stmt.type === "DEPLOYMENT") return "Deployment Statement";
   if (stmt.type === "DEPOSIT") return "Deposit";
   if (stmt.type === "WITHDRAWAL") return "Withdrawal";
-  if (stmt.type === "VALUATION") return "Valuation Report";
+  if (stmt.type === "VALUATION") return "Valuations";
   return stmt.type || "Statement";
 }
 

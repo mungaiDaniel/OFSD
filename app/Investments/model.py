@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Date, Numeric, ForeignKey, UniqueConstraint, Index, Enum, event, text
+from sqlalchemy import Column, Boolean, Integer, String, Text, DateTime, Date, Numeric, ForeignKey, UniqueConstraint, Index, Enum, event, text
 from app.database.database import db
 from app.database.product_type import ProductTypeEnum, FUNDS
 from base_model import Base
@@ -15,6 +15,10 @@ class Investment(Base, db.Model):
     investor_phone = Column(String(20))
     internal_client_code = Column(String(50), nullable=False, index=True)  # Unique ID from Excel (now allows duplicates across batches)
     amount_deposited = Column(Numeric(20, 2), nullable=False)
+    # SHARES batches enforce a minimum deposit (MIN_DEPOSIT_USD). An admin can approve a
+    # below-minimum deposit as a documented exception; the transfer check then skips it.
+    min_deposit_exception = Column(Boolean, nullable=False, default=False, server_default="false")
+    min_deposit_exception_reason = Column(Text, nullable=True)
     deployment_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Pro-rata transaction cost deducted at deployment
     transfer_fee_deducted = Column(Numeric(20, 2), nullable=False, default=Decimal("0.00"))  # Transfer-stage transaction cost for this investor (pro-rata formula, or amount_deposited - transfer_amount_received when manually entered)
     # The real amount that landed in the bank for this investor at the Transfer

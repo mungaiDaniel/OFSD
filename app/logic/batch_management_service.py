@@ -255,7 +255,10 @@ class BatchManagementService:
         if batch.product_type == SHARES:
             from app.logic.shares_transfer_service import get_min_deposit_usd
             min_deposit = get_min_deposit_usd()
-            if Decimal(str(investment.amount_deposited or 0)) < min_deposit:
+            if (
+                Decimal(str(investment.amount_deposited or 0)) < min_deposit
+                and not getattr(investment, "min_deposit_exception", False)
+            ):
                 raise ValueError(
                     f"Deposit of {investment.amount_deposited} USD is below the "
                     f"{min_deposit} USD minimum (before fees) for a SHARES batch"

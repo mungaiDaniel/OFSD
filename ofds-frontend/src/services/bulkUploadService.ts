@@ -37,6 +37,9 @@ export interface ResolvedRow {
   currency: string | null;
   deposit_amount: number | null;
   deposit_date: string | null;
+  /** SHARES row under the minimum deposit — needs an approved exception (with a reason) to commit. */
+  below_minimum?: boolean;
+  min_deposit_usd?: number | null;
   // Funds this client_code already holds a position in — populated whenever
   // status is existing_new_fund/existing_same_fund, empty for a brand-new client.
   existing_fund_names: string[];
@@ -64,6 +67,9 @@ export interface ValidatedRow {
   warnings: RowIssue[];
   resolved: ResolvedRow;
   decision?: SameFundDecision;
+  /** Set on commit for a below-minimum row an admin approved as an exception. */
+  min_deposit_exception?: boolean;
+  min_deposit_exception_reason?: string;
 }
 
 export interface ValidateSummary {
