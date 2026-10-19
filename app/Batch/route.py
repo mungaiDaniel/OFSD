@@ -202,6 +202,19 @@ def update_batch(batch_id):
         }), 500)
 
 
+@batch_v1.route('/api/v1/batches/<int:batch_id>/investor-deployment-dates', methods=['PUT'])
+@jwt_required()
+@super_admin_required
+def update_investor_deployment_dates(batch_id):
+    """Super admin: set each client's own deployment date in a deployed batch. Body: {"dates": {"<investment_id>": "YYYY-MM-DD"}}"""
+    try:
+        data = request.get_json() or {}
+        return BatchController.update_investor_deployment_dates(batch_id, data.get("dates"), db.session)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
 @batch_v1.route('/api/v1/batches/<int:batch_id>', methods=['PATCH'])
 @jwt_required()
 def patch_batch(batch_id):

@@ -111,6 +111,7 @@ export const API = {
   BATCHES: "/batches",
   BATCH_BY_ID: (id: number) => `/batches/${id}`,
   BATCH_INVESTMENTS_LIGHT: (id: number) => `/batches/${id}/investments-light`,
+  BATCH_INVESTOR_DEPLOYMENT_DATES: (id: number) => `/batches/${id}/investor-deployment-dates`,
   BATCH_SUMMARY: (id: number) => `/batches/${id}/summary`,
   BATCH_FUNDS: (id: number) => `/batches/${id}/funds`,
   BATCH_UPLOAD_EXCEL: (id: number) => `/batches/${id}/upload-excel`,

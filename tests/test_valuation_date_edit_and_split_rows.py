@@ -142,3 +142,59 @@ def test_batch_list_returns_aggregated_figures(client, app, super_admin_auth_tok
     assert row["total_principal"] == 2433.23 and row["investors_count"] == 1
     assert row["funds"] == [{"fund_name": "Edit Fund", "total_principal": 2433.23, "investors_count": 1}]
     assert row["class_code"] == "EDIT-I"
+
+
+def _add_second_client(batch_id, fund_id, sc_id, deposited, deploy_date):
+    inv = Investment(
+        investor_name="Second Client", investor_email="second@example.com", internal_client_code="EDIT-2",
+        amount_deposited=Decimal("1000.00"), batch_id=batch_id, fund_id=fund_id, fund_name="Edit Fund",
+        share_class_id=sc_id, date_deposited=_utc(deposited),
+    )
+    db.session.add(inv)
+    db.session.flush()
+    db.session.add(InvestorShares(
+        investment_id=inv.id, share_class_id=sc_id, batch_id=batch_id,
+        shares_owned=Decimal("24.3200"), deployment_nav=Decimal("41.12"), deployment_date=deploy_date,
+    ))
+    db.session.commit()
+    return inv.id
+
+
+@pytest.mark.unit
+class TestPerClientDeploymentDates:
+    def _setup(self):
+        sc_id = _seed(date(2026, 8, 13), date(2026, 8, 20), [])
+        batch = db.session.query(Batch).first()
+        inv1 = db.session.query(Investment).filter_by(internal_client_code="EDIT-1").one()
+        inv2_id = _add_second_client(batch.id, batch.share_class.core_fund_id, sc_id, date(2026, 8, 14), date(2026, 8, 20))
+        return batch.id, inv1.id, inv2_id
+
+    def _put(self, client, token, batch_id, dates):
+        return client.put(
+            f"/api/v1/batches/{batch_id}/investor-deployment-dates",
+            data=json.dumps({"dates": dates}), headers=_headers(token),
+        )
+
+    def test_each_client_gets_own_date_on_statement_and_in_list(self, client, app, super_admin_auth_token):
+        with app.app_context():
+            batch_id, inv1, inv2 = self._setup()
+        r = self._put(client, super_admin_auth_token, batch_id, {inv1: "2026-08-18", inv2: "2026-08-25"})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        with app.app_context():
+            by_code = {}
+            for code in ("EDIT-1", "EDIT-2"):
+                rows = get_investor_statements.__wrapped__(code).get_json()["data"]
+                by_code[code] = [x["date"][:10] for x in rows if x["type"] == "DEPLOYMENT"]
+            assert by_code == {"EDIT-1": ["2026-08-18"], "EDIT-2": ["2026-08-25"]}
+            assert db.session.get(Batch, batch_id).deployment_date_actual == date(2026, 8, 18)
+        lst = client.get(f"/api/v1/batches/{batch_id}/investments-light", headers=_headers(super_admin_auth_token)).get_json()["data"]
+        assert {x["id"]: x["deployment_date"] for x in lst} == {inv1: "2026-08-18", inv2: "2026-08-25"}
+
+    def test_validation_and_permissions(self, client, app, super_admin_auth_token, admin_auth_token):
+        with app.app_context():
+            batch_id, inv1, inv2 = self._setup()
+        assert self._put(client, admin_auth_token, batch_id, {inv1: "2026-08-18"}).status_code == 403
+        assert self._put(client, super_admin_auth_token, batch_id, {inv1: "2026-08-01"}).status_code == 400  # before deposit
+        assert self._put(client, super_admin_auth_token, batch_id, {inv1: "2999-01-01"}).status_code == 400  # future
+        assert self._put(client, super_admin_auth_token, batch_id, {inv1: "nope"}).status_code == 400
+        assert self._put(client, super_admin_auth_token, batch_id, {999999: "2026-08-18"}).status_code == 404

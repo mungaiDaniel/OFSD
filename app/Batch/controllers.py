@@ -559,8 +559,25 @@ class BatchController:
                 Investment.batch_id == batch_id
             ).order_by(Investment.id.asc()).all()
 
-            data = [
-                {
+            holding_dates = dict(
+                session.query(InvestorShares.investment_id, InvestorShares.deployment_date)
+                .filter(InvestorShares.batch_id == batch_id).all()
+            )
+            batch_date = (
+                batch.deployment_date_actual
+                or (batch.date_deployed.date() if batch.date_deployed else None)
+            )
+
+            def _client_deployment_date(inv):
+                d = holding_dates.get(inv.id)
+                if d is None and inv.date_transferred is not None:
+                    d = inv.date_transferred.date()
+                return d or batch_date
+
+            data = []
+            for inv in investments:
+                dep_date = _client_deployment_date(inv)
+                data.append({
                     "id": inv.id,
                     "investor_name": inv.investor_name,
                     "internal_client_code": inv.internal_client_code,
@@ -569,15 +586,89 @@ class BatchController:
                     "share_class_id": inv.share_class_id,
                     "class_code": inv.share_class.class_code if inv.share_class else None,
                     "class_currency": inv.share_class.currency if inv.share_class else None,
-                }
-                for inv in investments
-            ]
+                    "date_deposited": inv.date_deposited.date().isoformat() if inv.date_deposited else None,
+                    "deployment_date": dep_date.isoformat() if dep_date else None,
+                })
             return make_response(jsonify({"status": 200, "count": len(data), "data": data}), 200)
         except Exception as e:
             return make_response(jsonify({
                 "status": 500,
                 "message": f"Error retrieving batch investments: {str(e)}"
             }), 500)
+
+    @classmethod
+    def update_investor_deployment_dates(cls, batch_id, dates, session):
+        """
+        Correct the deployment date of individual clients in an already-deployed
+        batch (clients in one batch can be deployed on different days).
+
+        `dates` is {investment_id: "YYYY-MM-DD"}. Each date is saved as that
+        client's InvestorShares.deployment_date and Investment.date_transferred
+        (the start date valuation uses), so statements show it. Shares, NAV and
+        amounts are untouched. A date can't be before the client's deposit or in
+        the future. All-or-nothing: any invalid entry rejects the whole request.
+        """
+        batch = session.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
+        if not batch.deployment_confirmed:
+            return make_response(jsonify({"status": 400, "message": "Batch has not been deployed yet"}), 400)
+        if not isinstance(dates, dict) or not dates:
+            return make_response(jsonify({"status": 400, "message": "dates must map investment ids to dates"}), 400)
+
+        today = datetime.now(timezone.utc).date()
+        parsed = {}
+        for key, raw in dates.items():
+            try:
+                parsed[int(key)] = datetime.fromisoformat(str(raw)[:10]).date()
+            except (TypeError, ValueError):
+                return make_response(jsonify({"status": 400, "message": f"'{raw}' is not a valid date (use YYYY-MM-DD)"}), 400)
+
+        investments = {
+            i.id: i for i in session.query(Investment).filter(
+                Investment.batch_id == batch_id, Investment.id.in_(list(parsed))
+            ).all()
+        }
+        for inv_id, d in parsed.items():
+            inv = investments.get(inv_id)
+            if inv is None:
+                return make_response(jsonify({"status": 404, "message": f"Investment {inv_id} is not in this batch"}), 404)
+            if d > today:
+                return make_response(jsonify({"status": 400, "message": f"{inv.investor_name}: deployment date cannot be in the future"}), 400)
+            if inv.date_deposited and d < inv.date_deposited.date():
+                return make_response(jsonify({
+                    "status": 400,
+                    "message": f"{inv.investor_name}: deployment date cannot be before the deposit date ({inv.date_deposited.date().isoformat()})",
+                }), 400)
+
+        holdings = {
+            h.investment_id: h for h in session.query(InvestorShares).filter(
+                InvestorShares.investment_id.in_(list(parsed))
+            ).all()
+        }
+        changed = 0
+        for inv_id, d in parsed.items():
+            inv = investments[inv_id]
+            holding = holdings.get(inv_id)
+            if holding is not None and holding.deployment_date != d:
+                holding.deployment_date = d
+                changed += 1
+            inv.date_transferred = datetime.combine(d, datetime.min.time(), tzinfo=timezone.utc)
+
+        # The batch's own date follows its earliest client (same rule as manual deploy).
+        earliest = min(
+            [h.deployment_date for h in session.query(InvestorShares).filter(InvestorShares.batch_id == batch_id).all()],
+            default=None,
+        )
+        if earliest is not None:
+            batch.deployment_date_actual = earliest
+            batch.date_deployed = datetime.combine(earliest, datetime.min.time(), tzinfo=timezone.utc)
+        session.commit()
+        return make_response(jsonify({
+            "status": 200,
+            "message": f"Deployment dates updated for {len(parsed)} client(s)",
+            "data": {"updated": len(parsed), "holdings_changed": changed},
+        }), 200)
 
     @classmethod
     def _to_utc(cls, dt):

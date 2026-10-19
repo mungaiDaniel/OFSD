@@ -34,6 +34,12 @@ export const batchService = {
     return res.data.data ?? [];
   },
 
+  /** Super admin: set individual clients' deployment dates in a deployed batch. */
+  async updateInvestorDeploymentDates(id: number, dates: Record<number, string>): Promise<string> {
+    const res = await api.put<ApiResponse<unknown>>(API.BATCH_INVESTOR_DEPLOYMENT_DATES(id), { dates });
+    return res.data.message ?? "Deployment dates updated";
+  },
+
   /** Server-generated Excel export of every investment in this batch matching the current search filter (not just the visible page). */
   async exportInvestments(id: number, params?: { search?: string }): Promise<void> {
     const res = await api.get(API.BATCH_INVESTMENTS_EXPORT(id), {

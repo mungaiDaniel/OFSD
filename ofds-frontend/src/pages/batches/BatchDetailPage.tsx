@@ -12,6 +12,7 @@ import { ArrowLeft, Pencil, Upload, Download, Trash2, Search, ChevronLeft, Chevr
 import type { BatchInvestorLight } from "@/lib/types";
 import { EmailConfirmationModal } from "@/components/ui/EmailConfirmationModal";
 import { DeploymentDateModal, type DeploymentConfirmPayload } from "@/components/ui/DeploymentDateModal";
+import { ClientDeploymentDatesModal } from "@/components/ui/ClientDeploymentDatesModal";
 import { TransferCostModal } from "@/components/ui/TransferCostModal";
 import { SharesTransferModal } from "@/components/ui/SharesTransferModal";
 import { SharesDeploymentPanel, type SharesDeploymentConfirmPayload } from "@/components/ui/SharesDeploymentPanel";
@@ -189,6 +190,8 @@ export default function BatchDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [emailConfirmModalOpen, setEmailConfirmModalOpen] = useState(false);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
+  const [datesModalOpen, setDatesModalOpen] = useState(false);
+  const [savingDates, setSavingDates] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [sharesTransferModalOpen, setSharesTransferModalOpen] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -419,6 +422,32 @@ export default function BatchDetailPage() {
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to update";
       toast.error(msg);
+    }
+  };
+
+  const openClientDates = async () => {
+    setLoadingFullInvestments(true);
+    try {
+      setFullInvestments(await batchService.getInvestmentsLight(batchId));
+      setDatesModalOpen(true);
+    } catch {
+      toast.error("Failed to load investors for this batch");
+    } finally {
+      setLoadingFullInvestments(false);
+    }
+  };
+
+  const saveClientDates = async (dates: Record<number, string>) => {
+    setSavingDates(true);
+    try {
+      const msg = await batchService.updateInvestorDeploymentDates(batchId, dates);
+      toast.success(msg);
+      setBatch(await batchService.getById(batchId));
+      setDatesModalOpen(false);
+    } catch (err: unknown) {
+      toast.error((err as any)?.response?.data?.message || "Failed to update deployment dates");
+    } finally {
+      setSavingDates(false);
     }
   };
 
@@ -769,6 +798,14 @@ export default function BatchDetailPage() {
 
         <DeploymentStepper stage={batch.stage} />
 
+        {isSuperAdmin && !isShares && batch.stage >= 3 && (
+          <div style={{ marginTop: "12px" }}>
+            <button className="btn btn-sm btn-outline-secondary" onClick={openClientDates} disabled={loadingFullInvestments}>
+              {loadingFullInvestments ? "Loading…" : "Edit client deployment dates"}
+            </button>
+          </div>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "8px", marginTop: "12px" }}>
           <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", textAlign: "center" }}>
             <div style={{ fontWeight: 600, marginBottom: "2px", color: "var(--color-text-secondary)" }}>Deposited</div>
@@ -1091,6 +1128,7 @@ export default function BatchDetailPage() {
       {/* Email confirmation gate — opens after stage advance or file upload */}
       <EmailConfirmationModal open={emailConfirmModalOpen} onClose={() => setEmailConfirmModalOpen(false)} batchId={batchId} />
       <DeploymentDateModal open={deployModalOpen} onClose={() => setDeployModalOpen(false)} onConfirm={handleDeployDateConfirm} isLoading={isDeploying} investments={fullInvestments} isDprpFund={batch.is_dprp_fund} />
+      <ClientDeploymentDatesModal open={datesModalOpen} onClose={() => setDatesModalOpen(false)} investments={fullInvestments} onSave={saveClientDates} isSaving={savingDates} />
       <TransferCostModal open={transferModalOpen} onClose={() => setTransferModalOpen(false)} investments={fullInvestments} onConfirm={handleTransferCostConfirm} isLoading={isTransferring} />
       <SharesTransferModal open={sharesTransferModalOpen} onClose={() => setSharesTransferModalOpen(false)} batchId={batchId} onConfirm={handleSharesTransferConfirm} isLoading={isSharesTransferring} />
     </div>

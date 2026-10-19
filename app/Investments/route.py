@@ -3618,7 +3618,15 @@ def get_investor_statements(client_code):
             # deployment date is kept separately for reference.
             event_date = inv.date_deposited
             deployment_event_date = None
-            if deployed and deployment_date_actual:
+            # Clients in one batch can be deployed on different days: the client's
+            # own date (InvestorShares.deployment_date) wins over the batch's.
+            own_holding = session.query(InvestorShares.deployment_date).filter(
+                InvestorShares.investment_id == inv.id
+            ).first()
+            own_deployment_date = own_holding[0] if own_holding else None
+            if deployed and own_deployment_date:
+                deployment_event_date = datetime.combine(own_deployment_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            elif deployed and deployment_date_actual:
                 deployment_event_date = datetime.combine(deployment_date_actual, datetime.min.time()).replace(tzinfo=timezone.utc)
             elif deployed and date_deployed:
                 deployment_event_date = date_deployed

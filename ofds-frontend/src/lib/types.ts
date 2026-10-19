@@ -163,6 +163,9 @@ export interface BatchInvestorLight {
   share_class_id: number | null;
   class_code: string | null;
   class_currency: string | null;
+  date_deposited?: string | null;
+  /** This client's own deployment date (clients in one batch can differ). */
+  deployment_date?: string | null;
 }
 
 export interface BatchInvestor {
