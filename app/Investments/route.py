@@ -1659,7 +1659,7 @@ def download_investor_statement_pdf(client_code):
     if result is None:
         return make_response(jsonify({"status": 500, "message": "Could not generate statement PDF"}), 500)
 
-    filename = f"investor-statement-{client_code}.pdf"
+    filename = _statement_pdf_filename(client_code, as_of_dt)
     return send_file(result, mimetype='application/pdf', as_attachment=True, download_name=filename)
 
 
@@ -1848,6 +1848,19 @@ def _generate_oversubscription_notice_pdf_bytes(client_code, fund_id):
     except Exception as e:
         logger.error(f"Oversubscription notice PDF generation error for {client_code}, fund {fund_id}: {str(e)}")
         return None
+
+
+def _statement_pdf_filename(client_code, as_of_dt=None):
+    """Statement PDF file name: the client's name (e.g. "Mary Mburu - Statement.pdf")."""
+    import re
+    inv = db.session.query(Investment).filter(
+        func.lower(Investment.internal_client_code) == func.lower(client_code)
+    ).order_by(Investment.id.desc()).first()
+    name = (inv.investor_name if inv and inv.investor_name else str(client_code)).strip()
+    name = re.sub(r'[\\/:*?"<>|\r\n]+', " ", name)
+    name = re.sub(r"\s+", " ", name).strip() or str(client_code)
+    suffix = f" - {as_of_dt.strftime('%Y-%m-%d')}" if as_of_dt is not None else ""
+    return f"{name} - Statement{suffix}.pdf"
 
 
 def _filter_statement_rows_to_class(rows, client_code, fund_id, share_class_id, include_unassigned_withdrawals):
@@ -2333,14 +2346,14 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
     except Exception:
         pass
     deployment_date_txt = acct_deployment_date.strftime("%d %b %Y") if acct_deployment_date else "—"
-    shares_txt = f"{acct_total_shares:,.4f}" if acct_total_shares else "—"
+    shares_txt = f"{acct_total_shares:,.2f}" if acct_total_shares else "—"
     # Keep the headline Market Value consistent with the statement's
     # Current Balance.  The latter is the authoritative investor balance
     # used throughout this generated statement.
     mv_txt_val = Decimal(str(total_current_value or 0))
     mv_txt = _format_statement_money(mv_txt_val, acct_currency)
-    nav_txt = f"{acct_nav_per_share:,.4f}" if acct_nav_per_share is not None else "—"
-    deployment_nav_txt = f"{acct_deployment_nav:,.4f}" if acct_deployment_nav is not None else "—"
+    nav_txt = f"{acct_nav_per_share:,.2f}" if acct_nav_per_share is not None else "—"
+    deployment_nav_txt = f"{acct_deployment_nav:,.2f}" if acct_deployment_nav is not None else "—"
     if acct_nav_per_share is not None and nav_date_txt != "—":
         nav_txt = f"{nav_txt} (as of {nav_date_txt})"
     if acct_deployment_nav is not None and deployment_date_txt != "—":
@@ -2360,7 +2373,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             dep_dt_txt = dep_dt.strftime("%d %b %Y") if dep_dt else "—"
             deployment_detail_rows.append([
                 "NAV at Deployment",
-                f"{Decimal(str(nav_val)):,.4f} (as of {dep_dt_txt})" if dep_dt_txt != "—" else f"{Decimal(str(nav_val)):,.4f}",
+                f"{Decimal(str(nav_val)):,.2f} (as of {dep_dt_txt})" if dep_dt_txt != "—" else f"{Decimal(str(nav_val)):,.2f}",
             ])
 
     header_summary_data = [
@@ -2370,15 +2383,15 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
 
     header_summary_table = Table(header_summary_data, colWidths=[2.7 * inch, 4.8 * inch])
     header_summary_table.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), body_font, 9),
+        ('FONT', (0, 0), (-1, -1), body_font, 8.5),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#111827')),
         ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
         ('BACKGROUND', (0, 0), (-1, -1), colors.white),
         ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
         ('LEFTPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
 
     summary_data = [['Description', 'Amount']]
@@ -2413,13 +2426,13 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
     )
     if theme.is_jh:
         story.append(build_orange_banner_table(summary_title, theme, body_font_bold, font_size=10))
-        story.append(Spacer(1, 0.06 * inch))
+        story.append(Spacer(1, 0.03 * inch))
     else:
         story.append(Paragraph(summary_title, section_heading_style))
-        story.append(Spacer(1, 0.10 * inch))
+        story.append(Spacer(1, 0.05 * inch))
     story.append(header_summary_table)
     story.append(summary_table)
-    story.append(Spacer(1, 0.20 * inch))
+    story.append(Spacer(1, 0.05 * inch))
 
     # Statements timeline grouped by currency (KES/USD)
     story.append(Paragraph(f'Statements ({class_label})' if class_label else 'Statements', section_heading_style))
@@ -2477,8 +2490,11 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
                 row_date_txt = '—'
 
             label = row.get('label')
-            # Always normalize deployment wording to compact Deposit label.
-            if row_type in {'DEPOSIT', 'DEPLOYMENT'}:
+            # Deployment rows that sit on their own date (split from the deposit) keep
+            # the "Deployment" label; everything else uses the compact Deposit label.
+            if row_type == 'DEPLOYMENT' and Decimal(str(row.get('deposits') or 0)) == 0:
+                label = "Deployment"
+            elif row_type in {'DEPOSIT', 'DEPLOYMENT'}:
                 try:
                     label = f"Deposit - {datetime.fromisoformat(str(row_date).replace('Z', '+00:00')).strftime('%b')}"
                 except Exception:
@@ -2544,8 +2560,8 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             row_cells = [
                 row_date_txt,
                 event_label,
-                _fmt_decimal(shares_val, "0.0001"),
-                _fmt_decimal(nav_val, "0.0001"),
+                _fmt_decimal(shares_val, "0.01"),
+                _fmt_decimal(nav_val, "0.01"),
                 _fmt_money(deposit_for_row),
                 _fmt_money(withdrawal_for_row),
                 _fmt_money(previous_for_row),
@@ -2648,7 +2664,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
                     ]))
 
         story.append(history_table)
-        story.append(Spacer(1, 0.14 * inch))
+        story.append(Spacer(1, 0.07 * inch))
 
     grouped_rows = {
         "KES": [r for r in timeline_statements if str(r.get("currency") or "").upper() == "KES"],
@@ -2663,12 +2679,12 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
         _render_statements_table(grouped_rows["KES"], "KES")
     if grouped_rows["KES"] and grouped_rows["USD"]:
         story.append(Table([['']], colWidths=[7.3 * inch], style=[('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor(theme.divider_grey))]))
-        story.append(Spacer(1, 0.08 * inch))
+        story.append(Spacer(1, 0.04 * inch))
     if grouped_rows["USD"]:
         _render_statements_table(grouped_rows["USD"], "USD")
     if other_rows:
         _render_statements_table(other_rows, "Other")
-    story.append(Spacer(1, 0.08 * inch))
+    story.append(Spacer(1, 0.04 * inch))
 
     # Oversubscription/refund info is NOT shown on this (FUNDS) section — it's a
     # one-time event tied to a single deployment, not something that belongs on
@@ -2778,7 +2794,7 @@ def _append_shares_statement_section(story, client_code, shares_fund_ids, pdf_st
         return str(Decimal(str(value)).normalize()) if value is not None else "—"
 
     def _shares_qty(value):
-        return f"{Decimal(str(value)):,.4f}" if value is not None else "—"
+        return f"{Decimal(str(value)):,.2f}" if value is not None else "—"
 
     def _resolve_nav(inv):
         return _resolve_shares_nav_for_investment(inv, investor_shares_by_investment_id, db.session)
@@ -3048,12 +3064,12 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
         append_divider_line(story, theme)
         story.append(Spacer(1, 0.10 * inch))
 
-        def _fund_label_with_classes(fid):
-            # Name the share class(es) the client actually holds, e.g.
-            # "Janus Henderson (Biotech, Global Tech)".
+        def _fund_label_lines(fid):
+            # One line per share class the client holds, e.g.
+            # "Janus Henderson (Global Technology Leaders)".
             base = fund_id_to_name.get(fid, "")
             if fid not in funds_section_ids:
-                return base
+                return [base]
             class_names = [
                 n for (n,) in db.session.query(ShareClass.class_name)
                 .join(Investment, Investment.share_class_id == ShareClass.id)
@@ -3065,9 +3081,11 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
                 .order_by(ShareClass.class_name.asc())
                 .all() if n
             ]
-            return f"{base} ({', '.join(class_names)})" if class_names else base
+            return [f"{base} ({n})" for n in class_names] or [base]
 
-        fund_invested_label = ", ".join(_fund_label_with_classes(fid) for fid in resolved_fund_ids) or "—"
+        fund_label_lines = [line for fid in resolved_fund_ids for line in _fund_label_lines(fid)]
+        fund_invested_label = ", ".join(fund_label_lines) or "—"
+        fund_invested_html = "<br/>".join(escape(l) for l in fund_label_lines) or "—"
 
         if theme.is_jh:
             jh_logo_table = build_jh_logo_block(jh_logo_path)
@@ -3089,7 +3107,7 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
         )
         info_data = [
             ['Client Code', Paragraph(f': {escape(str(code))}', info_value_style), 'Statement Date', Paragraph(f': {escape(str(statement_date))}', info_value_style)],
-            ['Client Name', Paragraph(f': {escape(str(investor_name))}', info_value_style), fund_invested_header, Paragraph(f': {escape(str(fund_invested_label))}', info_value_style)],
+            ['Client Name', Paragraph(f': {escape(str(investor_name))}', info_value_style), fund_invested_header, Paragraph(f': {fund_invested_html}', info_value_style)],
         ]
         info_table = Table(info_data, colWidths=[1.1 * inch, 2.5 * inch, 1.4 * inch, 2.5 * inch])
         if theme.is_jh:
@@ -3138,12 +3156,34 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
                     story.append(Spacer(1, 0.08 * inch))
 
                 # A client holding several classes of this fund (e.g. JH_BT and
-                # JH_GT) gets ONE combined summary and ONE statements table;
-                # each row names its class in the Event column instead.
-                _append_fund_statement_section(
-                    story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
-                    theme, pdf_styles, body_font, body_font_bold, statement_date,
+                # JH_GT) gets one sub-section per class, each with its own
+                # summary and statements; a single-class holding is unchanged.
+                client_classes = (
+                    db.session.query(ShareClass.id, ShareClass.class_name)
+                    .join(Investment, Investment.share_class_id == ShareClass.id)
+                    .filter(
+                        func.lower(Investment.internal_client_code) == func.lower(client_code),
+                        Investment.fund_id == section_fund_id,
+                    )
+                    .distinct()
+                    .order_by(ShareClass.class_name.asc())
+                    .all()
                 )
+                if len(client_classes) > 1:
+                    for class_idx, (class_id, class_name) in enumerate(client_classes):
+                        if class_idx > 0:
+                            story.append(Spacer(1, 0.08 * inch))
+                        _append_fund_statement_section(
+                            story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                            theme, pdf_styles, body_font, body_font_bold, statement_date,
+                            share_class_id=class_id, class_label=class_name,
+                            include_unassigned_withdrawals=(class_idx == 0),
+                        )
+                else:
+                    _append_fund_statement_section(
+                        story, client_code, section_fund_id, fund_name_for_section, as_of_dt, period_only,
+                        theme, pdf_styles, body_font, body_font_bold, statement_date,
+                    )
 
         # Task 5: one "SHARES (DANGOTE PETROLEUM REFINERY IPO)" section, omitted
         # entirely when the investor has no Shares holdings. Never mixes its
@@ -3615,14 +3655,23 @@ def get_investor_statements(client_code):
                 else (deposit_amount / nav_at_deployment if nav_at_deployment and nav_at_deployment > 0 else None)
             )
             
-            statements.append({
-                "type": "DEPLOYMENT" if deployed else "DEPOSIT",
+            # A deployed holding whose deployment happened on a different day than the
+            # deposit gets two rows: a Deposit row (cash received, deposit date) and a
+            # Deployment row (shares allotted at the deployment NAV, deployment date).
+            split_deployment = bool(
+                deployed
+                and deployment_event_date is not None
+                and deployment_event_date.date() != event_date.date()
+            )
+
+            deposit_row = {
+                "type": "DEPOSIT" if split_deployment else ("DEPLOYMENT" if deployed else "DEPOSIT"),
                 "batch_id": batch_id,
                 "batch_name": batch_names.get(batch_id, "Unknown") if batch_id is not None else None,
                 "date": event_date.isoformat(),
                 "deployment_date": deployment_event_date.isoformat() if deployment_event_date else None,
                 "share_class_code": share_class_code,
-                "label": event_label,
+                "label": f"Deposit - {inv.date_deposited.strftime('%B')}" if split_deployment else event_label,
                 "fund_name": inv.fund.fund_name if inv.fund else inv.fund_name,
                 "original_principal": original_principal,
                 "transaction_fee_usd": transaction_fee,
@@ -3641,8 +3690,25 @@ def get_investor_statements(client_code):
                 "end_balance": 0.0,  # Will be calculated
                 "performance_rate": 0.0,
                 "sort_priority": -1  # Deposits first in chronological order
-            })
-        
+            }
+
+            if split_deployment:
+                deployment_row = dict(deposit_row)
+                deployment_row.update({
+                    "type": "DEPLOYMENT",
+                    "date": deployment_event_date.isoformat(),
+                    "label": "Deployment",
+                    "deposits": 0.0,  # cash was already counted on the Deposit row
+                    "sort_priority": -0.5,
+                })
+                # Shares/NAV exist only once the money is deployed.
+                for key in ("nav_at_deployment", "shares_at_deployment", "nav_per_share", "shares"):
+                    deposit_row[key] = None
+                statements.append(deposit_row)
+                statements.append(deployment_row)
+            else:
+                statements.append(deposit_row)
+
         # === ADD LEDGER ENTRIES (MONTHLY REPORTS) ===
         for entry in ledger_entries:
             # ✅ DECIMAL PRECISION FIX: Round all values to 2 decimal places
@@ -4624,7 +4690,7 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
             ['Net Deployed Amount', _fmt_money(net_deployed_amount)],
         ]
         if total_shares > 0:
-            deployment_breakdown.append(['Shares Purchased', f'{total_shares:,.4f}'])
+            deployment_breakdown.append(['Shares Purchased', f'{total_shares:,.2f}'])
         if nav_per_share > 0:
             deployment_breakdown.append(['NAV / Share', f'{nav_per_share:,.6f}'])
         deployment_table = Table(deployment_breakdown, colWidths=[5.2 * inch, 2.3 * inch])
@@ -6688,7 +6754,7 @@ def _send_pending_email_now(email_id):
                         )
                         _attach_pdf_buffer(
                             pdf_buffer,
-                            filename=f"investor-statement-{inv.internal_client_code}.pdf",
+                            filename=_statement_pdf_filename(inv.internal_client_code),
                             warn_prefix="Statement attachment skipped",
                         )
                     except Exception as attach_err:

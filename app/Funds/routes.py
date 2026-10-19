@@ -3,8 +3,11 @@ Fund and Share Class Management Routes
 
 Handles fund creation and share class management for the NAV-based system.
 """
+import copy
+import threading
+import time
 
-from flask import Blueprint, request, jsonify, make_response
+from flask import Blueprint, request, jsonify, make_response, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from types import SimpleNamespace
 from app.database.database import db
@@ -594,7 +597,41 @@ def get_share_class_details_for_shares(fund_id, class_id):
 # #1: Fund Summary Endpoint - For Dashboard & Landing Page
 # ============================================================================
 
+_FUNDS_SUMMARY_TTL_SECONDS = 20
+_funds_summary_cache = {}
+_funds_summary_lock = threading.Lock()
+
+
+def invalidate_funds_summary_cache():
+    """Drop cached fund summaries (call after anything that changes fund totals)."""
+    with _funds_summary_lock:
+        _funds_summary_cache.clear()
+
+
 def compute_funds_summary_data(session=None, product=FUNDS):
+    """
+    Cached wrapper around the (expensive, query-heavy) summary computation.
+
+    One Overview page load asks for this 4 times (Funds + Shares summaries and
+    /stats/overview, which computes both again), so a short per-product TTL cache
+    removes the repeated work. Disabled under TESTING so tests never see stale data.
+    """
+    if session is None:
+        session = db.session
+    if current_app.config.get("TESTING"):
+        return _compute_funds_summary_data_uncached(session, product)
+    now = time.monotonic()
+    with _funds_summary_lock:
+        hit = _funds_summary_cache.get(product)
+        if hit and now - hit[0] < _FUNDS_SUMMARY_TTL_SECONDS:
+            return copy.deepcopy(hit[1])
+    data = _compute_funds_summary_data_uncached(session, product)
+    with _funds_summary_lock:
+        _funds_summary_cache[product] = (time.monotonic(), data)
+    return copy.deepcopy(data)
+
+
+def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
     """
     Compute fund performance summary across all classes, scoped to one
     product (default FUNDS, matching every existing caller's expectation —

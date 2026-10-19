@@ -176,6 +176,7 @@ export const API = {
   VALUATION_NAV: "/valuation/nav",
   VALUATION_JOBS: "/valuation/jobs",
   VALUATION_NAV_RUNS: "/valuation/nav/runs",
+  VALUATION_NAV_RUN_DATE: "/valuation/nav/runs/date",
   VALUATION_BATCH_HISTORY: (batchId: number) => `/valuation/batch/${batchId}`,
 
   // Reports

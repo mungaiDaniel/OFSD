@@ -2576,7 +2576,7 @@ def generate_investments_csv(session=None):
             f"{amount_trans:.2f}",
             deploy_date,
             f"{amount_deploy:.2f}",
-            f"{shares:.4f}" if shares else "—",
+            f"{shares:.2f}" if shares else "—",
             fund_name,
             class_code,
             currency,
@@ -3671,7 +3671,7 @@ def client_activity_pdf():
                 label,
                 p.get("currency") or "—",
                 format_currency(p.get("deposit_amount")) if p.get("deposit_amount") is not None else "—",
-                f"{p.get('shares'):,.4f}" if p.get("shares") is not None else "—",
+                f"{p.get('shares'):,.2f}" if p.get("shares") is not None else "—",
                 format_currency(p.get("market_value")) if p.get("market_value") is not None else "—",
                 f"{p.get('performance_pct'):.2f}%" if p.get("performance_pct") is not None else "—",
             ])

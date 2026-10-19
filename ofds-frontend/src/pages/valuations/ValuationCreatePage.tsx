@@ -723,8 +723,8 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
                   {
                     label: "Shares",
                     value: cls.total_shares.toLocaleString("en-US", {
-                      minimumFractionDigits: 4,
-                      maximumFractionDigits: 4,
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
                     }),
                   },
                   {
@@ -851,7 +851,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
                               fontSize: "11px",
                             }}
                           >
-                            {inv.shares.toFixed(4)}
+                            {inv.shares.toFixed(2)}
                           </td>
                           <td
                             style={{

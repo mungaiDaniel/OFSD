@@ -84,7 +84,7 @@ const classKeyOf = (inv: DeploymentInvestment) =>
   inv.share_class_id != null ? String(inv.share_class_id) : `code-${inv.class_code ?? "unknown"}`;
 
 const fmt2 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const fmt4 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmt4 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * Deploy-to-Active: two ways to set the NAV each client buys in at —
@@ -724,7 +724,7 @@ export function DeploymentDateModal({ open, onClose, onConfirm, isLoading = fals
                     disabled
                     type="text"
                     style={readonlyInputStyle}
-                    value={totalShares.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
+                    value={totalShares.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   />
                 </div>
               </div>

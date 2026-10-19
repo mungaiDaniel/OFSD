@@ -163,7 +163,8 @@ def _parse_date(raw):
     if raw is None or str(raw).strip() == "":
         return None, "Missing"
     s = str(raw).strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %b %Y"):
+    # Dotted and dashed numeric dates are read day-first (09.10.2026 = 9 Oct 2026).
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"):
         try:
             return datetime.strptime(s, fmt).date(), None
         except ValueError:

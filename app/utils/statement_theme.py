@@ -131,10 +131,9 @@ def resolve_axys_logo_path() -> Optional[Path]:
 
 
 def resolve_jh_logo_path(fund_names=(), fund_codes=()) -> Optional[Path]:
-    if not is_janus_henderson_fund(fund_names, fund_codes):
-        return None
-    logo_path = PROJECT_ROOT / "assets" / "logo" / "logo-jh-dark-removebg-preview.png"
-    return logo_path if logo_path.exists() else None
+    # Statements carry the AXYS logo only; the Janus Henderson logo is no
+    # longer shown (the JH colour theme is unchanged).
+    return None
 
 
 def build_statement_brand_block(
@@ -385,8 +384,8 @@ def summary_table_style(theme: StatementTheme, body_font: str, body_font_bold: s
         ("GRID", (0, 0), (-1, -1), 0.25, _hex(theme.grid_grey)),
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("FONTNAME", (0, 0), (-1, 0), body_font_bold),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
     ])

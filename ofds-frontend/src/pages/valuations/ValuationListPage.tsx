@@ -4,7 +4,8 @@ import { valuationService } from "@/services/valuationService";
 import { formatDate, formatCurrency, formatPercent } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
 import type { NavValuationRunItem, ProductType } from "@/lib/types";
-import { Plus, Download, ChevronRight } from "lucide-react";
+import { Plus, Download, ChevronRight, Pencil } from "lucide-react";
+import { getUserRole } from "@/lib/auth";
 import { toast } from "sonner";
 
 interface ValuationListPageProps {
@@ -20,6 +21,11 @@ export default function ValuationListPage({ product = "FUNDS" }: ValuationListPa
   const [runs, setRuns] = useState<NavValuationRunItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [editing, setEditing] = useState<NavValuationRunItem | null>(null);
+  const [newDate, setNewDate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const canEditDate = getUserRole() === "super_admin";
 
   useEffect(() => {
     (async () => {
@@ -37,7 +43,31 @@ export default function ValuationListPage({ product = "FUNDS" }: ValuationListPa
         setLoading(false);
       }
     })();
-  }, [product]);
+  }, [product, reloadKey]);
+
+  const openEditDate = (run: NavValuationRunItem) => {
+    setEditing(run);
+    setNewDate(run.valuation_date.slice(0, 10));
+  };
+
+  const saveDate = async () => {
+    if (!editing) return;
+    try {
+      setSaving(true);
+      const msg = await valuationService.updateRunDate(
+        editing.share_class_id,
+        editing.valuation_date.slice(0, 10),
+        newDate
+      );
+      toast.success(msg);
+      setEditing(null);
+      setReloadKey((k) => k + 1);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || "Failed to change valuation date");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleDownloadClick = async () => {
     try {
@@ -128,7 +158,7 @@ export default function ValuationListPage({ product = "FUNDS" }: ValuationListPa
                         color: "var(--color-text-secondary)",
                       }}
                     >
-                      {Number(r.nav_per_share || 0).toFixed(4)}
+                      {Number(r.nav_per_share || 0).toFixed(2)}
                     </td>
                     <td
                       className="text-end"
@@ -175,6 +205,17 @@ export default function ValuationListPage({ product = "FUNDS" }: ValuationListPa
                       {formatPercent(r.performance_pct)}
                     </td>
                     <td className="text-center">
+                      {canEditDate && (
+                        <Pencil
+                          size={16}
+                          aria-label="Edit valuation date"
+                          style={{ color: "#00005b", cursor: "pointer", marginRight: "12px" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditDate(r);
+                          }}
+                        />
+                      )}
                       <Download
                         size={16}
                         style={{ color: "#00005b", cursor: "pointer" }}
@@ -208,6 +249,48 @@ export default function ValuationListPage({ product = "FUNDS" }: ValuationListPa
           </div>
         )}
       </div>
+
+      {editing && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1050,
+          }}
+          onClick={() => !saving && setEditing(null)}
+        >
+          <div
+            style={{ background: "var(--color-surface, #fff)", borderRadius: "8px", padding: "24px", width: "380px", maxWidth: "92vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: "16px", marginBottom: "6px" }}>Edit valuation date</h3>
+            <p style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "16px" }}>
+              {editing.fund_name} · {editing.share_class_code} — currently {formatDate(editing.valuation_date)}.
+              All statements will show the new date. NAV and values do not change.
+            </p>
+            <input
+              type="date"
+              className="form-control"
+              value={newDate}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setNewDate(e.target.value)}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "20px" }}>
+              <button className="btn btn-sm btn-outline-secondary" disabled={saving} onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={saving || !newDate || newDate === editing.valuation_date.slice(0, 10)}
+                onClick={saveDate}
+              >
+                {saving ? "Saving..." : "Save date"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

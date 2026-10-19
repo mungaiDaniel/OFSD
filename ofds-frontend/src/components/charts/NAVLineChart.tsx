@@ -11,10 +11,12 @@ import {
 import type { FundClassSummary } from "@/lib/types";
 
 // ── Color palettes per currency ──────────────────────────────────────────────
-const KES_COLORS = ["#F59E0B", "#FBBF24", "#D97706", "#FCD34D", "#92400E"];
-const USD_COLORS = ["#3B82F6", "#60A5FA", "#2563EB", "#93C5FD", "#1D4ED8"];
-const NGN_COLORS = ["#22C55E", "#4ADE80", "#16A34A", "#86EFAC", "#15803D"];
-const PALETTE_BY_CURRENCY: Record<string, string[]> = { KES: KES_COLORS, USD: USD_COLORS, NGN: NGN_COLORS };
+// Classes within a chart must be told apart at a glance, so every currency uses
+// the same well-known categorical palette (Tableau-10 order: blue, orange,
+// green, red, purple, ...) instead of shades of one hue. The currency itself is
+// still identified by the badge and title.
+const CLASS_COLORS = ["#4E79A7", "#F28E2B", "#59A14F", "#E15759", "#B07AA1", "#76B7B2", "#EDC948", "#FF9DA7"];
+const PALETTE_BY_CURRENCY: Record<string, string[]> = { KES: CLASS_COLORS, USD: CLASS_COLORS, NGN: CLASS_COLORS };
 const CURRENCY_VAR: Record<string, string> = { KES: "--color-kes", USD: "--color-usd", NGN: "--color-ngn" };
 
 // ── Date formatter for X axis ─────────────────────────────────────────────────
@@ -41,7 +43,7 @@ function formatFriendlyDate(dateStr: string): string {
 }
 
 // ── Custom tooltip ────────────────────────────────────────────────────────────
-function NAVTooltip({ active, payload, label }: any) {
+function NAVTooltip({ active, payload, label, percentMode }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div
@@ -54,14 +56,21 @@ function NAVTooltip({ active, payload, label }: any) {
       }}
     >
       <div style={{ color: "#94a3b8", marginBottom: "6px", fontFamily: "var(--font-mono)" }}>
-        {label}
+        {formatFriendlyDate(String(label))}
       </div>
       {payload.map((p: any) => (
         <div
           key={p.dataKey}
           style={{ color: p.color, fontFamily: "var(--font-mono)", fontWeight: 600 }}
         >
-          {p.name}: {p.value != null ? Number(p.value).toFixed(4) : "—"}
+          {p.name}:{" "}
+          {percentMode
+            ? p.value != null
+              ? `${Number(p.value) >= 0 ? "+" : ""}${Number(p.value).toFixed(2)}%  (NAV ${Number(p.payload?.[`${p.dataKey}__nav`]).toFixed(2)})`
+              : "—"
+            : p.value != null
+              ? Number(p.value).toFixed(2)
+              : "—"}
         </div>
       ))}
     </div>
@@ -78,7 +87,7 @@ interface NAVLineChartProps {
 
 export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChartProps) {
   const currencyVar = CURRENCY_VAR[currency] ?? "--color-usd";
-  const palette = PALETTE_BY_CURRENCY[currency] ?? USD_COLORS;
+  const palette = PALETTE_BY_CURRENCY[currency] ?? CLASS_COLORS;
   const currencyColor = `var(${currencyVar})`;
 
   // Only classes with at least one nav_history point
@@ -93,6 +102,17 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
   const [visible, setVisible] = useState<Record<number | string, boolean>>(
     () => Object.fromEntries(activeClasses.map((c) => [c.id ?? c.class_code ?? c.class_name, true]))
   );
+
+  // Classes of one currency can sit on very different NAV scales (e.g. 14 vs
+  // 360), which flattens the cheaper ones against the axis. When the spread
+  // is wide, default to "% change since first valuation" so every class is
+  // readable; the user can switch back to raw NAV.
+  const latestNavs = activeClasses
+    .map((c) => c.nav_history?.[c.nav_history.length - 1]?.nav)
+    .filter((n): n is number => typeof n === "number" && n > 0);
+  const wideSpread = latestNavs.length > 1 && Math.max(...latestNavs) / Math.min(...latestNavs) > 4;
+  const [percentChoice, setPercentChoice] = useState<boolean | null>(null);
+  const percentMode = percentChoice ?? wideSpread;
 
   const toggleClass = useCallback((id: number | string) => {
     setVisible((prev) => {
@@ -113,7 +133,10 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
     activeClasses.forEach((c) => {
       const entry = c.nav_history?.find((h) => h.date === date);
       const key = c.class_code ?? c.class_name;
-      row[key] = entry?.nav ?? null;
+      const nav = entry?.nav ?? null;
+      const base = c.nav_history?.find((h) => h.nav != null && h.nav > 0)?.nav ?? null;
+      row[`${key}__nav`] = nav;
+      row[key] = percentMode && nav != null && base ? (nav / base - 1) * 100 : nav;
     });
     return row;
   });
@@ -164,7 +187,7 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
             const point = c.nav_history?.find((h) => h.date === sortedDates[0]);
             return (
               <span key={c.id ?? key} style={{ fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 700, color: c.color }}>
-                {key}: {point?.nav != null ? point.nav.toFixed(4) : "—"}
+                {key}: {point?.nav != null ? point.nav.toFixed(2) : "—"}
               </span>
             );
           })}
@@ -226,9 +249,32 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
         </div>
       )}
 
+      {activeClasses.length > 1 && (
+        <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+          {([["NAV", false], ["% change", true]] as const).map(([label, value]) => (
+            <button
+              key={label}
+              onClick={() => setPercentChoice(value)}
+              style={{
+                padding: "2px 8px",
+                borderRadius: "5px",
+                fontSize: "10px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                color: percentMode === value ? "var(--color-text-primary)" : "var(--color-text-tertiary)",
+                background: percentMode === value ? "rgba(255,255,255,0.08)" : "transparent",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Chart */}
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
+        <LineChart data={chartData} margin={{ top: 4, right: 16, bottom: 0, left: -8 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
           <XAxis
             dataKey="date"
@@ -236,16 +282,19 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
             tick={{ fontSize: 10, fill: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}
             axisLine={false}
             tickLine={false}
+            minTickGap={28}
+            interval="preserveStartEnd"
           />
           <YAxis
             tick={{ fontSize: 10, fill: "var(--color-text-tertiary)", fontFamily: "var(--font-mono)" }}
             axisLine={false}
             tickLine={false}
-            tickFormatter={(v) => v.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+            tickFormatter={(v) => (percentMode ? `${Number(v).toFixed(0)}%` : v.toLocaleString("en-US", { maximumFractionDigits: 0 }))}
+            domain={percentMode ? ["auto", "auto"] : [0, "auto"]}
             width={60}
           />
           <Tooltip
-            content={<NAVTooltip />}
+            content={<NAVTooltip percentMode={percentMode} />}
             cursor={{ stroke: "rgba(255,255,255,0.12)", strokeWidth: 1, strokeDasharray: "4 2" }}
           />
           {activeClasses.map((c) => {
@@ -324,7 +373,7 @@ export function NAVLineChart({ classes, currency, title, asOfDate }: NAVLineChar
                     color: "var(--color-text-tertiary)",
                   }}
                 >
-                  {c.current_nav.toFixed(4)}
+                  {c.current_nav.toFixed(2)}
                 </span>
               )}
             </button>

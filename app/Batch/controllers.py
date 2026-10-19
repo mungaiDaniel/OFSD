@@ -1787,31 +1787,56 @@ class BatchController:
             batches_query = session.query(Batch)
             if product:
                 batches_query = batches_query.filter(Batch.product_type == product)
-            batches = batches_query.all()
-            
-            batch_list = []
-            for batch in batches:
-                # Base principal (deposits)
-                total_deposits_sum = session.query(db.func.sum(Investment.amount_deposited)).filter(
-                    Investment.batch_id == batch.id
-                ).scalar() or 0.00
+            batches = batches_query.options(joinedload(Batch.share_class)).all()
+            batch_ids = [b.id for b in batches]
+
+            # Aggregate once for ALL batches instead of 4 queries per batch (this
+            # list is loaded by both the Batches page and the Overview page).
+            deposits_by_batch = {}
+            investors_by_batch = {}
+            fund_rows_by_batch = {}
+            latest_bv_by_batch = {}
+            if batch_ids:
+                for bid, dep_sum, inv_count in session.query(
+                    Investment.batch_id,
+                    db.func.sum(Investment.amount_deposited),
+                    db.func.count(distinct(Investment.internal_client_code)),
+                ).filter(Investment.batch_id.in_(batch_ids)).group_by(Investment.batch_id).all():
+                    deposits_by_batch[bid] = dep_sum or 0.00
+                    investors_by_batch[bid] = inv_count or 0
+
+                for fr in session.query(
+                    Investment.batch_id.label("batch_id"),
+                    CoreFund.fund_name.label("fund_name"),
+                    db.func.coalesce(db.func.sum(Investment.amount_deposited), 0).label("total_principal"),
+                    db.func.count(distinct(Investment.internal_client_code)).label("investors_count"),
+                ).join(
+                    CoreFund, Investment.fund_id == CoreFund.id,
+                ).filter(
+                    Investment.batch_id.in_(batch_ids),
+                ).group_by(Investment.batch_id, CoreFund.fund_name).all():
+                    fund_rows_by_batch.setdefault(fr.batch_id, []).append(fr)
 
                 # Prefer persisted batch valuation, but only from committed valuation runs.
                 # BatchValuation rows can be written during dry-runs/uncommitted previews,
                 # which must not affect "Before <next> Valuations" dashboards.
-                latest_bv = (
+                for bv in (
                     session.query(BatchValuation)
-                    .join(
-                        ValuationRun,
-                        BatchValuation.period_end_date == ValuationRun.epoch_end,
-                    )
+                    .join(ValuationRun, BatchValuation.period_end_date == ValuationRun.epoch_end)
                     .filter(
-                        BatchValuation.batch_id == batch.id,
+                        BatchValuation.batch_id.in_(batch_ids),
                         func.lower(ValuationRun.status) == "committed",
                     )
-                    .order_by(BatchValuation.period_end_date.desc())
-                    .first()
-                )
+                    .distinct(BatchValuation.batch_id)
+                    .order_by(BatchValuation.batch_id, BatchValuation.period_end_date.desc())
+                    .all()
+                ):
+                    latest_bv_by_batch[bv.batch_id] = bv
+
+            batch_list = []
+            for batch in batches:
+                total_deposits_sum = deposits_by_batch.get(batch.id, 0.00)
+                latest_bv = latest_bv_by_batch.get(batch.id)
                 if latest_bv:
                     total_value = float(latest_bv.balance_at_end_of_period or 0)
                 elif batch.cached_total_capital is not None:
@@ -1820,12 +1845,8 @@ class BatchController:
                     # Live fallback + self-heal: older batches or ones that predate this cache.
                     total_value = cls.refresh_cached_total_capital(batch, session)
 
-                # Count unique investors (by distinct internal_client_code)
-                investors_count = session.query(
-                    db.func.count(distinct(Investment.internal_client_code))
-                ).filter(
-                    Investment.batch_id == batch.id
-                ).scalar() or 0
+                # Unique investors (by distinct internal_client_code)
+                investors_count = investors_by_batch.get(batch.id, 0)
 
                 # Hide empty batches from the list.
                 if int(investors_count) == 0:
@@ -1837,19 +1858,8 @@ class BatchController:
                 # Status: 'Pending' unless batch is explicitly activated
                 status = 'Active' if batch.is_active else 'Deactivated'
 
-                # Calculate fund-level breakdown for accurate filtering
-                fund_rows = session.query(
-                    CoreFund.fund_name.label("fund_name"),
-                    db.func.coalesce(db.func.sum(Investment.amount_deposited), 0).label("total_principal"),
-                    db.func.count(distinct(Investment.internal_client_code)).label("investors_count"),
-                ).join(
-                    CoreFund,
-                    Investment.fund_id == CoreFund.id,
-                ).filter(
-                    Investment.batch_id == batch.id,
-                ).group_by(
-                    CoreFund.fund_name,
-                ).all()
+                # Fund-level breakdown for accurate filtering
+                fund_rows = fund_rows_by_batch.get(batch.id, [])
 
                 fund_breakdown = [
                     {

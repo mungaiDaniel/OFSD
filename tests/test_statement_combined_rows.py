@@ -113,7 +113,7 @@ def _holding(client_code, fund, share_class, deposit, shares, dep_nav, val_nav, 
 
 
 @pytest.mark.unit
-def test_two_class_client_gets_one_combined_table_with_class_named_rows(app):
+def test_two_class_client_gets_a_section_per_class_with_one_valuation_row_each(app):
     with app.app_context():
         fund = CoreFund(fund_name="Janus Henderson", fund_code="JH-TEST")
         db.session.add(fund)
@@ -134,11 +134,10 @@ def test_two_class_client_gets_one_combined_table_with_class_named_rows(app):
         assert not isinstance(buf, tuple) and buf is not None
         text = _pdf_text(buf)
 
-        # One combined summary/table; classes named in the header and rows.
-        assert text.count("Account Summary") == 1
-        assert "Balanced," in text and "Global" in text
-        assert "(JH_BT)" in text and "(JH_GT)" in text
+        assert "Account Summary (Balanced, USD)" in text
+        assert "Account Summary (Global Tech, USD)" in text
+        assert "Statements (Balanced)" in text and "Statements (Global Tech)" in text
         # One valuation row per class for 10 Sep (was three: one per deposit).
         assert text.count("Valuation Report") == 2
         # JH_BT combined: 150 shares, value 1,575.00 (=1,050 + 525).
-        assert "150.0000" in text and "1,575.00" in text
+        assert "150.00" in text and "1,575.00" in text

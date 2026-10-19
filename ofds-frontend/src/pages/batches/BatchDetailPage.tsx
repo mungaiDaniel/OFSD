@@ -48,7 +48,7 @@ function getInvestorColumns(isShares: boolean) {
   ];
   const fundsCols = [
     { key: "net_amount", label: "Net Amount", align: "right" as const, grid: "1fr", render: (inv: any) => fmtMoney(inv.main_balance) },
-    { key: "shares", label: "Shares", align: "right" as const, grid: "0.9fr", render: (inv: any) => (inv.shares_owned != null ? Number(inv.shares_owned).toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—") },
+    { key: "shares", label: "Shares", align: "right" as const, grid: "0.9fr", render: (inv: any) => (inv.shares_owned != null ? Number(inv.shares_owned).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—") },
     { key: "market_value", label: "Market Value", align: "right" as const, grid: "1.1fr", render: (inv: any) => fmtMoney(inv.market_value ?? inv.current_balance) },
     { key: "perf", label: "Perf %", align: "right" as const, grid: "0.8fr", render: (inv: any) => (inv.performance_pct != null ? `${inv.performance_pct >= 0 ? "+" : ""}${Number(inv.performance_pct).toFixed(2)}%` : "—") },
   ];
@@ -824,9 +824,9 @@ export default function BatchDetailPage() {
         <StatCard label="Net Principal" value={fmtMoney(batch.total_net_principal)} sub="After transfer cost + entry fee" />
         <StatCard label="Investors" value={String(batch.investors_count)} />
         <StatCard label="Deployment Date" value={fmtDate(batch.date_deployed)} />
-        <StatCard label="NAV at Deployment" value={batch.deployment_nav != null ? batch.deployment_nav.toFixed(4) : "—"} sub="/ share" />
+        <StatCard label="NAV at Deployment" value={batch.deployment_nav != null ? batch.deployment_nav.toFixed(2) : "—"} sub="/ share" />
         <StatCard label="Total NAV" value={fmtMoney(batch.deployment_total_nav)} sub="Computed at deployment" />
-        <StatCard label="Total Shares" value={batch.total_shares != null ? batch.total_shares.toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—"} />
+        <StatCard label="Total Shares" value={batch.total_shares != null ? batch.total_shares.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"} />
       </div>
 
       {/* SHARES-only allocation stats (Task 3) — kept in their own row, never

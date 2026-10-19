@@ -1,5 +1,6 @@
 import api from "./api";
 import { API } from "@/lib/constants";
+import { filenameFromDisposition } from "@/lib/utils";
 import type {
   ApiResponse,
   CreateInvestmentRequest,
@@ -137,7 +138,7 @@ export const investmentService = {
     const url = window.URL.createObjectURL(new Blob([res.data]));
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `investor-statement-${normalizedClientCode}.pdf`);
+    link.setAttribute('download', filenameFromDisposition(res.headers?.['content-disposition'], `investor-statement-${normalizedClientCode}.pdf`));
     document.body.appendChild(link);
     link.click();
     link.parentNode?.removeChild(link);

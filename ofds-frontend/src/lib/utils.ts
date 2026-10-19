@@ -113,3 +113,18 @@ export function safeJsonParse<T>(json: string | null | undefined): T | null {
     return null;
   }
 }
+
+/** File name from a Content-Disposition header, or `fallback` when absent. */
+export function filenameFromDisposition(header: unknown, fallback: string): string {
+  const h = typeof header === "string" ? header : "";
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(h);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1] ?? "");
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(h);
+  return plain?.[1] ?? fallback;
+}

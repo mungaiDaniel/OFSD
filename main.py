@@ -49,7 +49,7 @@ def create_app(config_filename):
             "http://osfmr2.aib-axysafrica.com",
             "https://osfmr.aib-axysafrica.com",
             "http://osfmr.aib-axysafrica.com"
-        ]}})
+        ], "expose_headers": ["Content-Disposition"]}})
         db.init_app(app)
         # Registers `flask db <command>` (upgrade/current/history/...) — this
         # was never wired up before, which is why those commands didn't exist.

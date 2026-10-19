@@ -73,6 +73,16 @@ export const valuationService = {
     return res.data.data ?? [];
   },
 
+  /** Super admin: correct the date of a committed valuation run; statements follow automatically. */
+  async updateRunDate(shareClassId: number, oldDate: string, newDate: string): Promise<string> {
+    const res = await api.put<ApiResponse<unknown>>(API.VALUATION_NAV_RUN_DATE, {
+      share_class_id: shareClassId,
+      old_date: oldDate,
+      new_date: newDate,
+    });
+    return res.data.message ?? "Valuation date updated";
+  },
+
   /** Already-committed NAV valuation history for one batch — read-only, triggers no calculation. */
   async getBatchValuationHistory(batchId: number): Promise<BatchValuationHistoryPoint[]> {
     const res = await api.get<ApiResponse<BatchValuationHistoryPoint[]>>(API.VALUATION_BATCH_HISTORY(batchId));

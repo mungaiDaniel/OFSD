@@ -341,6 +341,103 @@ def list_nav_valuation_runs():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
+@valuation_v1.route("/api/v1/valuation/nav/runs/date", methods=["PUT"])
+@jwt_required()
+def update_valuation_run_date():
+    """
+    Correct the date of a committed valuation run (one share class on one date).
+
+    Body: {"share_class_id": 1, "old_date": "2026-10-16", "new_date": "2026-10-15"}
+
+    Moves every ValuationSnapshot of that class (and its 'valuation' NavHistory
+    row) from old_date to new_date. Statements, the overview and NAV history
+    all read these two tables, so the new date shows up everywhere. NAV, shares
+    and market values are untouched. The new date must stay between the class's
+    previous and next valuation (so stored performance remains valid), must not
+    be before the deployment date, and must be free. Super admin only.
+    """
+    from app.Funds.routes import _require_super_admin
+
+    user, error_response = _require_super_admin()
+    if error_response:
+        return error_response
+    try:
+        data = request.get_json() or {}
+        try:
+            share_class_id = int(data.get("share_class_id"))
+            old_date = datetime.fromisoformat(str(data.get("old_date"))).date()
+            new_date = datetime.fromisoformat(str(data.get("new_date"))).date()
+        except (TypeError, ValueError):
+            return make_response(jsonify({"status": 400, "message": "share_class_id, old_date and new_date (YYYY-MM-DD) are required"}), 400)
+
+        if new_date == old_date:
+            return make_response(jsonify({"status": 400, "message": "New date is the same as the current date"}), 400)
+        if new_date > datetime.now(timezone.utc).date():
+            return make_response(jsonify({"status": 400, "message": "Valuation date cannot be in the future"}), 400)
+
+        share_class_holdings = db.session.query(InvestorShares.id).filter(InvestorShares.share_class_id == share_class_id)
+        snaps = db.session.query(ValuationSnapshot).filter(
+            ValuationSnapshot.investor_shares_id.in_(share_class_holdings),
+            ValuationSnapshot.valuation_date == old_date,
+        ).all()
+        if not snaps:
+            return make_response(jsonify({"status": 404, "message": "No valuation found for that share class and date"}), 404)
+
+        other_dates = sorted({
+            d for (d,) in db.session.query(ValuationSnapshot.valuation_date).filter(
+                ValuationSnapshot.investor_shares_id.in_(share_class_holdings),
+                ValuationSnapshot.valuation_date != old_date,
+            ).distinct()
+        })
+        if new_date in other_dates:
+            return make_response(jsonify({"status": 409, "message": f"This share class already has a valuation on {new_date.isoformat()}"}), 409)
+        prev_date = max((d for d in other_dates if d < old_date), default=None)
+        next_date = min((d for d in other_dates if d > old_date), default=None)
+        if prev_date and new_date <= prev_date:
+            return make_response(jsonify({"status": 400, "message": f"New date must be after the previous valuation ({prev_date.isoformat()})"}), 400)
+        if next_date and new_date >= next_date:
+            return make_response(jsonify({"status": 400, "message": f"New date must be before the next valuation ({next_date.isoformat()})"}), 400)
+
+        deployment_nav_row = db.session.query(func.min(NavHistory.nav_date)).filter(
+            NavHistory.share_class_id == share_class_id, NavHistory.source == "deployment"
+        ).scalar()
+        if deployment_nav_row and new_date < deployment_nav_row:
+            return make_response(jsonify({"status": 400, "message": f"New date cannot be before the deployment date ({deployment_nav_row.isoformat()})"}), 400)
+
+        nav_row = db.session.query(NavHistory).filter(
+            NavHistory.share_class_id == share_class_id,
+            NavHistory.nav_date == old_date,
+            NavHistory.source == "valuation",
+        ).first()
+        if nav_row is not None:
+            clash = db.session.query(NavHistory.id).filter(
+                NavHistory.share_class_id == share_class_id,
+                NavHistory.nav_date == new_date,
+                NavHistory.source == "valuation",
+            ).first()
+            if clash:
+                return make_response(jsonify({"status": 409, "message": f"NAV history already has an entry on {new_date.isoformat()}"}), 409)
+            nav_row.nav_date = new_date
+
+        for snap in snaps:
+            snap.valuation_date = new_date
+        db.session.commit()
+        from app.Funds.routes import invalidate_funds_summary_cache
+        invalidate_funds_summary_cache()
+        logger.info(
+            "Valuation date changed by %s: share_class=%s %s -> %s (%d holdings)",
+            getattr(user, "email", user), share_class_id, old_date, new_date, len(snaps),
+        )
+        return make_response(jsonify({
+            "status": 200,
+            "message": f"Valuation date changed from {old_date.isoformat()} to {new_date.isoformat()}",
+            "data": {"share_class_id": share_class_id, "old_date": old_date.isoformat(), "new_date": new_date.isoformat(), "holdings_updated": len(snaps)},
+        }), 200)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
 @valuation_v1.route("/api/v1/valuation/funds", methods=["GET"])
 @jwt_required()
 def valuation_funds():
@@ -1718,6 +1815,11 @@ def _run_valuation_commit_job(app, job_id):
             job.results_payload = json.dumps({"valuation_date": data["valuation_date"], "classes": results})
             job.completed_at = datetime.now(timezone.utc)
             session.commit()
+            try:
+                from app.Funds.routes import invalidate_funds_summary_cache
+                invalidate_funds_summary_cache()
+            except Exception:
+                pass
             logger.info(f"Valuation commit job {job_id} completed: {total_snapshots_created} snapshot(s) across {len(class_contexts)} class(es)")
 
         except Exception as e:

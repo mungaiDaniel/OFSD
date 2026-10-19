@@ -473,7 +473,7 @@ export default function ClientActivitySection() {
                         </td>
                         <td style={{ padding: "8px 10px", textAlign: "right", fontSize: "11px", color: "var(--color-text-tertiary)" }}>{p.currency || "—"}</td>
                         <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px" }}>{fmtMoney(p.deposit_amount)}</td>
-                        <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px" }}>{p.shares != null ? p.shares.toLocaleString("en-US", { maximumFractionDigits: 4 }) : "—"}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px" }}>{p.shares != null ? p.shares.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}</td>
                         <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px" }}>{fmtMoney(p.market_value)}</td>
                         <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 600, color: (p.performance_pct ?? 0) >= 0 ? "#22c55e" : "#ef4444" }}>
                           {p.performance_pct != null ? `${p.performance_pct >= 0 ? "+" : ""}${p.performance_pct.toFixed(2)}%` : "—"}

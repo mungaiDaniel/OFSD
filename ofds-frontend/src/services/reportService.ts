@@ -1,5 +1,6 @@
 import api from "./api";
 import { API } from "@/lib/constants";
+import { filenameFromDisposition } from "@/lib/utils";
 import type {
   ApiResponse,
   ReportSummary,
@@ -104,7 +105,7 @@ export const reportService = {
       const urlBlob = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = urlBlob;
-      link.setAttribute('download', `investor-statement-${normalizedClientCode}${asOf ? '-' + asOf.split('T')[0] : ''}.pdf`);
+      link.setAttribute('download', filenameFromDisposition(res.headers?.['content-disposition'], `investor-statement-${normalizedClientCode}${asOf ? '-' + asOf.split('T')[0] : ''}.pdf`));
       document.body.appendChild(link);
       link.click();
       link.parentNode?.removeChild(link);

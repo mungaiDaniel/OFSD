@@ -950,8 +950,8 @@ export default function OverviewPage() {
                     const navDisplay =
                       cls.current_nav != null
                         ? cls.current_nav.toLocaleString("en-US", {
-                            minimumFractionDigits: 4,
-                            maximumFractionDigits: 4,
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
                           })
                         : "—";
                     return (
