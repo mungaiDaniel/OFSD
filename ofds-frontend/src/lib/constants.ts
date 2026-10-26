@@ -151,6 +151,7 @@ export const API = {
   EMAIL_CANCEL_BATCH: "/emails/cancel-batch",
   EMAIL_QUEUE_STATUS: "/emails/queue-status",
   EMAIL_STATEMENTS_QUEUE_BATCH: "/emails/statements/queue-batch",
+  EMAIL_STATEMENTS_DOWNLOAD_BATCH: "/emails/statements/download-batch",
 
   // Funds
   FUNDS: "/funds",

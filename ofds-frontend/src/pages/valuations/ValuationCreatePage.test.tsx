@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import ValuationCreatePage from "./ValuationCreatePage";
 import { fundService } from "@/services/fundService";
 import { batchService } from "@/services/batchService";
+import { valuationService } from "@/services/valuationService";
 
 vi.mock("@/services/fundService");
 vi.mock("@/services/batchService");
@@ -78,5 +79,59 @@ describe("Valuation entry screen — product scoping", () => {
 
     expect(await screen.findByText(/No active share classes/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Go to Shares Management/i })).toBeInTheDocument();
+  });
+});
+
+describe("Valuation scope — all vs selected batches", () => {
+  const summary = {
+    as_of_date: "2026-10-20",
+    funds: [
+      {
+        fund_name: "Axiom",
+        classes: [{ id: 1, class_name: "Class I", class_code: "KES_I", currency: "KES", is_active: true, current_nav: 1 }],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(fundService.getSummary).mockResolvedValue(summary as any);
+    vi.mocked(batchService.getAll).mockResolvedValue([
+      { id: 10, batch_name: "Batch A", is_active: true, share_class_id: 1, class_code: "KES_I", investors_count: 3 },
+      { id: 11, batch_name: "Batch B", is_active: true, share_class_id: 1, class_code: "KES_I", investors_count: 2 },
+    ] as any);
+    vi.mocked(valuationService.preview).mockResolvedValue({ valuation_date: "2026-10-20", batch_ids: [10], classes: [] } as any);
+  });
+
+  async function fillAndPreview() {
+    await screen.findByText("KES_I");
+    const inputs = screen.getAllByPlaceholderText(/e\.g\./);
+    fireEvent.change(inputs[0]!, { target: { value: "1362.3460" } });
+    fireEvent.change(inputs[1]!, { target: { value: "100000" } });
+    fireEvent.click(screen.getByRole("button", { name: /Ready to preview|Preview/i }));
+  }
+
+  it("defaults to all batches: no batch_ids are sent", async () => {
+    renderWith(<ValuationCreatePage product="FUNDS" />);
+    await fillAndPreview();
+    await waitFor(() => expect(valuationService.preview).toHaveBeenCalled());
+    expect(vi.mocked(valuationService.preview).mock.calls[0]![0]).not.toHaveProperty("batch_ids");
+  });
+
+  it("selected batches: sends only the ticked batch ids and blocks preview with none ticked", async () => {
+    renderWith(<ValuationCreatePage product="FUNDS" />);
+    await screen.findByText("KES_I");
+    fireEvent.click(screen.getByLabelText("Selected batches"));
+    const inputs = screen.getAllByPlaceholderText(/e\.g\./);
+    fireEvent.change(inputs[0]!, { target: { value: "1362.3460" } });
+    fireEvent.change(inputs[1]!, { target: { value: "100000" } });
+    const previewBtn = screen.getByRole("button", { name: /Preview/i });
+    expect(previewBtn).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText(/Batch A/));
+    expect(previewBtn).not.toBeDisabled();
+    fireEvent.click(previewBtn);
+
+    await waitFor(() => expect(valuationService.preview).toHaveBeenCalled());
+    expect(vi.mocked(valuationService.preview).mock.calls.at(-1)![0]).toMatchObject({ batch_ids: [10] });
   });
 });

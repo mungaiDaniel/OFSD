@@ -1434,7 +1434,53 @@ def backfill_batch_valuations():
 
 # ==================== NAV-BASED VALUATION ====================
 
-def _reconcile_class_totals(cls, tolerance=Decimal("10.00")):
+def _parse_batch_ids(data):
+    """
+    Optional `batch_ids` in a valuation request. None = value ALL batches (the
+    default); a non-empty list = value only those batches (selected mode).
+    """
+    raw = data.get("batch_ids")
+    if raw is None or raw == [] or raw == "":
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("batch_ids must be a list of batch ids")
+    try:
+        ids = sorted({int(x) for x in raw})
+    except (TypeError, ValueError):
+        raise ValueError("batch_ids must be a list of integers")
+    found = db.session.query(func.count(Batch.id)).filter(Batch.id.in_(ids)).scalar() or 0
+    if found != len(ids):
+        raise ValueError("One or more selected batches do not exist")
+    return ids
+
+
+def _nav_conflict_message(share_class_id, valuation_date, nav_per_share):
+    """
+    A class has ONE NAV per date. If this date already has a different NAV for the
+    class and some holdings are already valued on it, writing more valuations at a
+    new NAV would leave the class with two prices on the same day.
+    """
+    existing = db.session.query(NavHistory).filter(
+        NavHistory.share_class_id == share_class_id,
+        NavHistory.nav_date == valuation_date,
+        NavHistory.source == "valuation",
+    ).first()
+    if existing is None or Decimal(str(existing.nav_per_share)) == Decimal(str(nav_per_share)):
+        return None
+    holdings = db.session.query(InvestorShares.id).filter(InvestorShares.share_class_id == share_class_id)
+    already = db.session.query(func.count(ValuationSnapshot.id)).filter(
+        ValuationSnapshot.investor_shares_id.in_(holdings),
+        ValuationSnapshot.valuation_date == valuation_date,
+    ).scalar() or 0
+    if not already:
+        return None
+    return (
+        f"This class already has a valuation on {valuation_date.isoformat()} at NAV "
+        f"{Decimal(str(existing.nav_per_share)).normalize():f}. Use the same NAV for the remaining batches, or a different date."
+    )
+
+
+def _reconcile_class_totals(cls, tolerance=Decimal("10.00"), batch_ids=None):
     """
     Cheap, aggregate-only reconciliation check for one class — no per-investor
     rows touched. Returns (share_class, total_shares, nav_per_share,
@@ -1456,12 +1502,15 @@ def _reconcile_class_totals(cls, tolerance=Decimal("10.00")):
     if not share_class:
         raise ValueError(f"Share class {share_class_id} not found")
 
-    total_shares = db.session.query(
+    shares_q = db.session.query(
         func.coalesce(func.sum(InvestorShares.shares_owned), 0)
     ).join(Investment, InvestorShares.investment_id == Investment.id).filter(
         Investment.share_class_id == share_class_id,
         InvestorShares.is_active == True,
-    ).scalar() or Decimal("0")
+    )
+    if batch_ids:
+        shares_q = shares_q.filter(Investment.batch_id.in_(batch_ids))
+    total_shares = shares_q.scalar() or Decimal("0")
     total_shares = Decimal(str(total_shares))
 
     system_total_nav = (total_shares * nav_per_share).quantize(Decimal("0.01"))
@@ -1519,9 +1568,13 @@ def nav_valuation():
             # Task 9: a single valuation run must never mix Funds and Shares
             # classes — each is a completely separate NAV universe.
             seen_products = set()
+            batch_ids = _parse_batch_ids(data)
             for cls in data["classes"]:
-                share_class, *_rest = _reconcile_class_totals(cls)
+                share_class, *_rest = _reconcile_class_totals(cls, batch_ids=batch_ids)
                 seen_products.add(share_class.product_type)
+                conflict = _nav_conflict_message(share_class.id, datetime.fromisoformat(data["valuation_date"]).date(), Decimal(str(cls["nav_per_share"])))
+                if conflict:
+                    return make_response(jsonify({"status": 409, "message": f"{share_class.class_code}: {conflict}"}), 409)
             if len(seen_products) > 1:
                 return make_response(jsonify({
                     "status": 400,
@@ -1530,12 +1583,15 @@ def nav_valuation():
         except ValueError as ve:
             return make_response(jsonify({"status": 400, "message": str(ve)}), 400)
 
-        total_investors = db.session.query(func.count(InvestorShares.id)).join(
+        investors_q = db.session.query(func.count(InvestorShares.id)).join(
             Investment, InvestorShares.investment_id == Investment.id
         ).filter(
             Investment.share_class_id.in_([int(c["share_class_id"]) for c in data["classes"]]),
             InvestorShares.is_active == True,
-        ).scalar() or 0
+        )
+        if batch_ids:
+            investors_q = investors_q.filter(Investment.batch_id.in_(batch_ids))
+        total_investors = investors_q.scalar() or 0
 
         user_id, user_email = _current_user_for_job()
         job = ValuationJob(
@@ -1625,6 +1681,7 @@ def _run_valuation_commit_job(app, job_id):
             data = json.loads(job.request_payload)
             valuation_date = datetime.fromisoformat(data["valuation_date"]).date()
             tolerance = Decimal("10.00")
+            batch_ids = _parse_batch_ids(data)
 
             # Re-validate reconciliation at run time (state may have changed
             # between the request that queued this job and now) — if anything
@@ -1633,10 +1690,13 @@ def _run_valuation_commit_job(app, job_id):
             any_fail = False
             for cls in data["classes"]:
                 share_class, total_shares, nav_per_share, head_office_nav, system_total_nav, difference, status = (
-                    _reconcile_class_totals(cls, tolerance)
+                    _reconcile_class_totals(cls, tolerance, batch_ids=batch_ids)
                 )
                 if status == "FAIL":
                     any_fail = True
+                nav_conflict = _nav_conflict_message(share_class.id, valuation_date, nav_per_share)
+                if nav_conflict:
+                    raise ValueError(f"{share_class.class_code}: {nav_conflict}")
                 class_contexts.append({
                     "share_class": share_class,
                     "share_class_id": share_class.id,
@@ -1668,12 +1728,15 @@ def _run_valuation_commit_job(app, job_id):
                 difference = ctx["difference"]
                 status = ctx["status"]
 
-                holdings = db.session.query(InvestorShares).join(
+                holdings_q = db.session.query(InvestorShares).join(
                     Investment, InvestorShares.investment_id == Investment.id
                 ).filter(
                     Investment.share_class_id == share_class_id,
                     InvestorShares.is_active == True,
-                ).all()
+                )
+                if batch_ids:
+                    holdings_q = holdings_q.filter(Investment.batch_id.in_(batch_ids))
+                holdings = holdings_q.all()
 
                 # Bulk prefetch — one query each for the whole class instead of
                 # two queries (Investment re-fetch + snapshot existence check)
@@ -1763,22 +1826,28 @@ def _run_valuation_commit_job(app, job_id):
                     NavHistory.nav_date == valuation_date,
                     NavHistory.source == "valuation"
                 ).first()
+                # Selected-batches run: head_office_nav is only the selected batches'
+                # total, so it must not be stored as the class's total fund NAV.
                 if existing_nav:
                     existing_nav.nav_per_share = nav_per_share
-                    existing_nav.total_fund_nav = head_office_nav
+                    if not batch_ids:
+                        existing_nav.total_fund_nav = head_office_nav
                 else:
                     session.add(NavHistory(
                         share_class_id=share_class_id,
                         nav_date=valuation_date,
                         nav_per_share=nav_per_share,
-                        total_fund_nav=head_office_nav,
+                        total_fund_nav=None if batch_ids else head_office_nav,
                         source="valuation",
                     ))
 
-                batches = session.query(Batch).filter(
+                batches_q = session.query(Batch).filter(
                     Batch.share_class_id == share_class_id,
                     Batch.date_deployed.isnot(None),
-                ).all()
+                )
+                if batch_ids:
+                    batches_q = batches_q.filter(Batch.id.in_(batch_ids))
+                batches = batches_q.all()
                 for batch in batches:
                     batch.deployment_total_nav = head_office_nav
                     if batch.deployment_nav is None:
@@ -1796,7 +1865,9 @@ def _run_valuation_commit_job(app, job_id):
                     "difference": float(difference),
                     "status": status,
                     "snapshots_created": snapshots_created,
+                    "already_valued": len(existing_snapshot_ids),
                     "investor_count": len(holdings),
+                    "batch_ids": batch_ids,
                 })
 
                 job.processed_investors = processed_investors
@@ -1874,6 +1945,10 @@ def nav_valuation_preview():
 
         valuation_date = datetime.fromisoformat(str(data["valuation_date"])).date()
         tolerance = Decimal("10.00")
+        try:
+            batch_ids = _parse_batch_ids(data)
+        except ValueError as ve:
+            return make_response(jsonify({"status": 400, "message": str(ve)}), 400)
 
         preview_classes = []
         seen_products = set()
@@ -1909,18 +1984,21 @@ def nav_valuation_preview():
                     "message": "Cannot mix FUNDS and SHARES share classes in one valuation run",
                 }), 400)
 
-            total_shares = db.session.query(
+            shares_q = db.session.query(
                 func.coalesce(func.sum(InvestorShares.shares_owned), 0)
             ).join(Investment, InvestorShares.investment_id == Investment.id).filter(
                 Investment.share_class_id == share_class_id,
                 InvestorShares.is_active == True,
-            ).scalar() or Decimal("0")
-            total_shares = Decimal(str(total_shares))
-
-            holdings = db.session.query(InvestorShares).join(Investment, InvestorShares.investment_id == Investment.id).filter(
+            )
+            holdings_q = db.session.query(InvestorShares).join(Investment, InvestorShares.investment_id == Investment.id).filter(
                 Investment.share_class_id == share_class_id,
                 InvestorShares.is_active == True,
-            ).all()
+            )
+            if batch_ids:
+                shares_q = shares_q.filter(Investment.batch_id.in_(batch_ids))
+                holdings_q = holdings_q.filter(Investment.batch_id.in_(batch_ids))
+            total_shares = Decimal(str(shares_q.scalar() or Decimal("0")))
+            holdings = holdings_q.all()
 
             # Prefetch once instead of a lazy-load per row below (h.investment
             # would otherwise fire its own query per holding — the join above
@@ -1988,6 +2066,7 @@ def nav_valuation_preview():
                     "status": 200,
                     "data": {
                         "valuation_date": valuation_date.isoformat(),
+                        "batch_ids": batch_ids,
                         "classes": preview_classes,
                     },
                 }

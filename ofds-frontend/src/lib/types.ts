@@ -701,6 +701,8 @@ export interface NavClassInput {
 
 export interface NavValuationRequest {
   valuation_date: string;
+  /** Omit (or empty) to value ALL batches; otherwise only these batches. */
+  batch_ids?: number[];
   classes: NavClassInput[];
   dry_run?: boolean;
 }
@@ -725,6 +727,8 @@ export interface NavClassPreview {
 
 export interface NavValuationPreviewResponse {
   valuation_date: string;
+  /** null = all batches; otherwise the selected batch ids. */
+  batch_ids?: number[] | null;
   classes: NavClassPreview[];
 }
 
@@ -732,6 +736,8 @@ export interface NavValuationPreviewResponse {
 // omits the per-investor `investors` array NavClassPreview has (that would be
 // a huge payload at 100k investors); investor_count is the count instead.
 export interface NavClassCommitResult {
+  /** Holdings skipped because they already had a valuation on this date. */
+  already_valued?: number;
   class_code: string;
   nav_per_share: number;
   total_shares: number;

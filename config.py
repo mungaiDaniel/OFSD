@@ -64,7 +64,7 @@ class TestingConfig():
 class DevelopmentConfig():
         SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-minimum-32-bytes-long-required-for-secure-jwt'
         # Allow DATABASE_URI override (e.g. create_super.py, local prod-like DB)
-        SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URI") or "postgresql://postgres:username@localhost/offshore"
+        SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URI") or "postgresql:///osfmr"
         DEBUG = True
         DEVELOPMENT = True      
         

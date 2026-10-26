@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { FileText, Loader2, Send } from "lucide-react";
+import { Download, FileText, Loader2, Send } from "lucide-react";
 import { fundService } from "@/services/fundService";
 import { reportService } from "@/services/reportService";
 import { emailService } from "@/services/emailService";
@@ -80,6 +80,8 @@ export default function SendStatementsPanel() {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [queuing, setQueuing] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{ done: number; total: number } | null>(null);
 
   useEffect(() => {
     fundService.getSummary().then((s) => { if (s) setFunds(s.funds); }).catch(() => {});
@@ -119,6 +121,35 @@ export default function SendStatementsPanel() {
     });
   const selectAllReady = () => setSelectedIds(new Set(readyRows.map((i) => i.id)));
   const deselectAll = () => setSelectedIds(new Set());
+
+  // Download PDFs: the ticked investors, or every investor in the list when none are
+  // ticked. No email address is needed, so investors without one are included.
+  const handleDownloadZip = async () => {
+    const rows = selectedIds.size > 0 ? eligible.filter((i) => selectedIds.has(i.id)) : eligible;
+    if (rows.length === 0) {
+      toast.error("No investors to download");
+      return;
+    }
+    setDownloading(true);
+    setDownloadProgress({ done: 0, total: rows.length });
+    try {
+      const codes = Array.from(new Set(rows.map((i) => i.internal_client_code)));
+      const fundIds = fundId !== "all" ? [Number(fundId)] : undefined;
+      const { total, failed } = await emailService.downloadStatementsZip(codes, fundIds, (done, t) =>
+        setDownloadProgress({ done, total: t })
+      );
+      if (failed.length > 0) {
+        toast.warning(`Downloaded ${total - failed.length} of ${total} statements — ${failed.length} failed (listed in _FAILED.txt inside the zip)`);
+      } else {
+        toast.success(`Downloaded ${total} statement${total === 1 ? "" : "s"}`);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.message || "Failed to download statements");
+    } finally {
+      setDownloading(false);
+      setDownloadProgress(null);
+    }
+  };
 
   const handleQueue = async () => {
     const selected = eligible.filter((i) => selectedIds.has(i.id) && i.email_status !== "no_email");
@@ -215,6 +246,12 @@ export default function SendStatementsPanel() {
             <div style={{ display: "flex", gap: "8px" }}>
               <button onClick={selectAllReady} style={btn(readyRows.length === 0)} disabled={readyRows.length === 0}>Select all</button>
               <button onClick={deselectAll} style={btn(selectedIds.size === 0)} disabled={selectedIds.size === 0}>Deselect all</button>
+              <button onClick={handleDownloadZip} disabled={downloading || eligible.length === 0} style={btn(downloading || eligible.length === 0)}>
+                {downloading ? <Loader2 size={13} className="ss-spin" /> : <Download size={13} />}
+                {downloading && downloadProgress
+                  ? `Building ${downloadProgress.done}/${downloadProgress.total}…`
+                  : `Download ${selectedIds.size > 0 ? selectedIds.size : eligible.length} PDF${(selectedIds.size > 0 ? selectedIds.size : eligible.length) === 1 ? "" : "s"} (zip)`}
+              </button>
               <button onClick={handleQueue} disabled={queuing || selectedIds.size === 0} style={btn(queuing || selectedIds.size === 0, "primary")}>
                 {queuing ? <Loader2 size={13} className="ss-spin" /> : <Send size={13} />}
                 Queue {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}for approval

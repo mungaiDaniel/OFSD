@@ -180,6 +180,12 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
   const [previewData, setPreviewData] = useState<NavValuationPreviewResponse | null>(null);
   const [successData, setSuccessData] = useState<NavValuationCommitResults | null>(null);
   const [commitJob, setCommitJob] = useState<ValuationJobStatus | null>(null);
+  // Valuation scope: every batch (default, as before) or only the ticked batches.
+  const [scope, setScope] = useState<"all" | "selected">("all");
+  const [batchOptions, setBatchOptions] = useState<
+    { id: number; name: string; classId: number; classCode: string; investors: number }[]
+  >([]);
+  const [selectedBatchIds, setSelectedBatchIds] = useState<Set<number>>(new Set());
   const watcherCancelRef = React.useRef<(() => void) | null>(null);
 
   useEffect(() => () => watcherCancelRef.current?.(), []);
@@ -193,6 +199,17 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
           batchService.getAll().catch(() => []),
         ]);
         const activeBatches = batches.filter((b: any) => b.is_active);
+        setBatchOptions(
+          activeBatches
+            .filter((b: any) => typeof b.share_class_id === "number")
+            .map((b: any) => ({
+              id: b.id,
+              name: b.batch_name,
+              classId: b.share_class_id,
+              classCode: b.class_code ?? "",
+              investors: b.investors_count ?? 0,
+            }))
+        );
         const activeShareClassIds = new Set(
           activeBatches
             .map((b: any) => b.share_class_id)
@@ -253,10 +270,23 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
     return n !== o;
   });
 
-  const canPreview = filledRows.length > 0 && !partialMismatch && !!valuationDate;
+  const canPreview =
+    filledRows.length > 0 &&
+    !partialMismatch &&
+    !!valuationDate &&
+    (scope === "all" || selectedBatchIds.size > 0);
+
+  const toggleBatch = (id: number) =>
+    setSelectedBatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const buildPayload = () => ({
     valuation_date: valuationDate,
+    ...(scope === "selected" ? { batch_ids: Array.from(selectedBatchIds) } : {}),
     classes: filledRows.map((r) => ({
       share_class_id: r.classId,
       nav_per_share: parseFloat(clean(r.navPerShare)),
@@ -481,6 +511,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
                     <div style={{ fontSize: "11px", color: "#475569", marginTop: "2px" }}>
                       {cls.investor_count} investor{cls.investor_count !== 1 ? "s" : ""} updated
                       {cls.snapshots_created !== cls.investor_count ? ` (${cls.snapshots_created} new snapshot${cls.snapshots_created !== 1 ? "s" : ""})` : ""}
+                      {cls.already_valued ? ` · ${cls.already_valued} already valued on this date, skipped` : ""}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -607,6 +638,9 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
           </h1>
           <div style={{ fontSize: "12px", color: "#94A3B8" }}>
             NAV as of <strong style={{ color: "#FFFFFF" }}>{formatDate(previewData.valuation_date)}</strong> ·
+            {previewData.batch_ids?.length
+              ? ` ${previewData.batch_ids.length} selected batch${previewData.batch_ids.length !== 1 ? "es" : ""} only · `
+              : " All batches · "}
             Review reconciliation before committing.
           </div>
         </div>
@@ -1334,6 +1368,81 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
           and compare it to your entered AXYS total. Difference must be &lt; 1.00 to pass
           reconciliation. Once committed, these values cannot be changed.
         </span>
+      </div>
+
+      <div
+        style={{
+          padding: "14px 18px",
+          background: "rgba(16,24,45,0.72)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          borderRadius: "12px",
+          marginBottom: "14px",
+        }}
+      >
+        <div style={{ display: "flex", gap: "22px", alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 600, letterSpacing: "0.04em" }}>
+            VALUE
+          </span>
+          {([
+            ["all", "All batches"],
+            ["selected", "Selected batches"],
+          ] as const).map(([val, label]) => (
+            <label
+              key={val}
+              style={{ display: "flex", gap: "8px", alignItems: "center", fontSize: "13px", color: "#E2E8F0", cursor: "pointer" }}
+            >
+              <input type="radio" name="valuation-scope" checked={scope === val} onChange={() => setScope(val)} />
+              {label}
+            </label>
+          ))}
+          {scope === "selected" && (
+            <span style={{ fontSize: "11px", color: "#94A3B8" }}>
+              {selectedBatchIds.size} batch{selectedBatchIds.size !== 1 ? "es" : ""} selected
+            </span>
+          )}
+        </div>
+
+        {scope === "selected" && (
+          <div style={{ marginTop: "12px" }}>
+            <div style={{ fontSize: "11px", color: "#F59E0B", marginBottom: "10px" }}>
+              Enter the AXYS NAV <strong>total for the selected batches only</strong> (not the whole class). Batches
+              already valued on this date are skipped.
+            </div>
+            {Array.from(new Set(batchOptions.map((b) => b.classCode))).sort().map((code) => {
+              const inClass = batchOptions.filter((b) => b.classCode === code);
+              const allTicked = inClass.every((b) => selectedBatchIds.has(b.id));
+              return (
+                <div key={code} style={{ marginBottom: "10px" }}>
+                  <label style={{ display: "flex", gap: "8px", alignItems: "center", fontSize: "12px", color: "#FFFFFF", fontWeight: 600, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={allTicked}
+                      onChange={() =>
+                        setSelectedBatchIds((prev) => {
+                          const next = new Set(prev);
+                          inClass.forEach((b) => (allTicked ? next.delete(b.id) : next.add(b.id)));
+                          return next;
+                        })
+                      }
+                    />
+                    {code || "Class"} ({inClass.length})
+                  </label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", paddingLeft: "24px", marginTop: "4px" }}>
+                    {inClass.map((b) => (
+                      <label key={b.id} style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", color: "#CBD5E1", cursor: "pointer" }}>
+                        <input type="checkbox" checked={selectedBatchIds.has(b.id)} onChange={() => toggleBatch(b.id)} />
+                        {b.name} <span style={{ color: "#64748B" }}>· {b.investors} investor{b.investors !== 1 ? "s" : ""}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {batchOptions.length === 0 && (
+              <div style={{ fontSize: "11px", color: "#64748B" }}>No active batches found.</div>
+            )}
+          </div>
+        )}
       </div>
 
       {currencies.map((currency) =>

@@ -6677,6 +6677,98 @@ def queue_investor_statements_batch():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
+@investment_v1.route('/api/v1/emails/statements/download-batch', methods=['POST'])
+@jwt_required()
+def start_statements_download_batch():
+    """
+    Build every given client's statement PDF in the background and return ONE zip.
+    Same selection as queue-batch (the Email page's Send Statements tab), but
+    nothing is emailed and a client does not need an email address.
+
+    Body: {"client_codes": [...], "fund_ids": [3] (optional), "as_of": "YYYY-MM-DD" (optional)}
+    fund_ids behaves exactly like queue-batch: one id -> each client's statement
+    for that fund only; omitted -> each client's full consolidated statement.
+    Response 202: {"data": {"job_id": "...", "total": N}}. Poll
+    GET /api/v1/emails/statements/download-batch/<job_id>, then fetch .../file.
+    """
+    from app.utils import bulk_statements
+
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_codes = data.get('client_codes')
+        if not isinstance(raw_codes, list) or not raw_codes:
+            return make_response(jsonify({"status": 400, "message": "client_codes (non-empty list) is required"}), 400)
+
+        fund_ids = None
+        if data.get('fund_ids'):
+            try:
+                fund_ids = [int(f) for f in data['fund_ids']] or None
+            except (TypeError, ValueError):
+                return make_response(jsonify({"status": 400, "message": "fund_ids must be a list of integers"}), 400)
+
+        as_of_dt = None
+        if data.get('as_of'):
+            try:
+                as_of_dt = normalize_datetime_to_utc(datetime.fromisoformat(str(data['as_of']).replace("Z", "+00:00")))
+            except ValueError:
+                return make_response(jsonify({"status": 400, "message": "Invalid as_of format. Use YYYY-MM-DD."}), 400)
+
+        seen, codes = set(), []
+        for code in raw_codes:
+            code = (str(code) if code is not None else "").strip()
+            if code and code.lower() not in seen:
+                seen.add(code.lower())
+                codes.append(code)
+        if not codes:
+            return make_response(jsonify({"status": 400, "message": "No valid client codes given"}), 400)
+        if len(codes) > bulk_statements.MAX_CLIENTS:
+            return make_response(jsonify({
+                "status": 400,
+                "message": f"Too many clients ({len(codes)}); the limit is {bulk_statements.MAX_CLIENTS} per download",
+            }), 400)
+
+        job_id = bulk_statements.start_job(
+            current_app._get_current_object(),
+            codes,
+            build_pdf=lambda code: _generate_investor_statement_pdf_bytes(code, as_of_dt=as_of_dt, fund_ids=fund_ids),
+            filename_for=lambda code: _statement_pdf_filename(code, as_of_dt),
+        )
+        return make_response(jsonify({"status": 202, "message": f"Building {len(codes)} statement(s)", "data": {"job_id": job_id, "total": len(codes)}}), 202)
+    except Exception as e:
+        logger.error(f"start_statements_download_batch error: {str(e)}")
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/emails/statements/download-batch/<job_id>', methods=['GET'])
+@jwt_required()
+def get_statements_download_status(job_id):
+    from app.utils import bulk_statements
+
+    status = bulk_statements.read_status(job_id)
+    if status is None:
+        return make_response(jsonify({"status": 404, "message": "Download job not found (it may have expired)"}), 404)
+    return make_response(jsonify({"status": 200, "data": {
+        "state": status.get("state"), "total": status.get("total"), "done": status.get("done"),
+        "failed": status.get("failed") or [], "error": status.get("error"),
+    }}), 200)
+
+
+@investment_v1.route('/api/v1/emails/statements/download-batch/<job_id>/file', methods=['GET'])
+@jwt_required()
+def download_statements_zip(job_id):
+    import os
+    from app.utils import bulk_statements
+
+    status = bulk_statements.read_status(job_id)
+    if status is None:
+        return make_response(jsonify({"status": 404, "message": "Download job not found (it may have expired)"}), 404)
+    path = bulk_statements.zip_path(job_id)
+    if status.get("state") != "completed" or not path or not os.path.exists(path):
+        return make_response(jsonify({"status": 409, "message": "The statements are not ready yet"}), 409)
+    name = f"Statements - {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip"
+    return send_file(path, mimetype='application/zip', as_attachment=True, download_name=name)
+
+
 def _send_pending_email_now(email_id):
     """
     Does the actual work of sending one PendingEmail via SMTP: builds the message,

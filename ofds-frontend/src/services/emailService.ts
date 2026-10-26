@@ -1,6 +1,7 @@
 import type { AxiosResponse } from "axios";
 import api from "./api";
 import { API } from "@/lib/constants";
+import { filenameFromDisposition } from "@/lib/utils";
 import type { ApiResponse, PendingEmail } from "@/lib/types";
 
 // Re-exported so existing consumers (EmailConfirmationModal, PendingEmailsBadge)
@@ -119,5 +120,46 @@ export const emailService = {
       fundIds && fundIds.length ? { client_codes: clientCodes, fund_ids: fundIds } : { client_codes: clientCodes }
     );
     return res.data;
+  },
+
+  /**
+   * Build every given client's statement PDF in the background and download ONE zip.
+   * Same fund_ids rule as queueStatementsBatch (one fund -> that fund's statement;
+   * omitted -> full consolidated statement). No email address is needed.
+   * onProgress(done, total) is called while the server builds the PDFs.
+   */
+  async downloadStatementsZip(
+    clientCodes: string[],
+    fundIds: number[] | undefined,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<{ total: number; failed: { client_code: string; reason: string }[] }> {
+    const start = await api.post<ApiResponse<{ job_id: string; total: number }>>(
+      API.EMAIL_STATEMENTS_DOWNLOAD_BATCH,
+      fundIds && fundIds.length ? { client_codes: clientCodes, fund_ids: fundIds } : { client_codes: clientCodes }
+    );
+    const { job_id, total } = start.data.data as { job_id: string; total: number };
+    onProgress?.(0, total);
+
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const res = await api.get<ApiResponse<{ state: string; total: number; done: number; failed: { client_code: string; reason: string }[]; error?: string }>>(
+        `${API.EMAIL_STATEMENTS_DOWNLOAD_BATCH}/${job_id}`
+      );
+      const st = res.data.data as { state: string; total: number; done: number; failed: { client_code: string; reason: string }[]; error?: string };
+      onProgress?.(st.done, st.total);
+      if (st.state === "failed") throw new Error(st.error || "Building the statements failed");
+      if (st.state === "completed") {
+        const file = await api.get(`${API.EMAIL_STATEMENTS_DOWNLOAD_BATCH}/${job_id}/file`, { responseType: "blob" });
+        const url = window.URL.createObjectURL(new Blob([file.data], { type: "application/zip" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", filenameFromDisposition(file.headers?.["content-disposition"], "Statements.zip"));
+        document.body.appendChild(link);
+        link.click();
+        link.parentNode?.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return { total: st.total, failed: st.failed ?? [] };
+      }
+    }
   },
 };
