@@ -21,3 +21,16 @@ dist/
 # Generated output
 reports/
 uploads/
+
+# Local/scratch
+instance/
+*.db
+*.bak
+*.backup
+*.bak2
+venv/
+.venv/
+.coverage
+htmlcov/
+build_errors*
+.claude/
