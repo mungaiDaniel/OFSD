@@ -7,10 +7,19 @@ import { fundService } from "@/services/fundService";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { Withdrawal, WithdrawalSource, CoreFund, ProductType } from "@/lib/types";
 import { toast } from "sonner";
-import { Upload, Check, X, Download } from "lucide-react";
+import { Upload, Check, X, Download, ArrowDownCircle } from "lucide-react";
+import { RedemptionModal, type RedemptionPrefill } from "@/components/ui/RedemptionModal";
+import { reportService } from "@/services/reportService";
 
-const FILTERS = ["", "Pending", "Approved", "Rejected"] as const;
-const FILTER_LABELS: Record<string, string> = { "": "All", Pending: "Pending", Approved: "Approved", Rejected: "Rejected" };
+const FILTERS = ["", "Pending", "Approved", "Executed", "Rejected"] as const;
+const FILTER_LABELS: Record<string, string> = { "": "All", Pending: "Pending", Approved: "Approved", Executed: "Executed", Rejected: "Rejected" };
+
+/** A FUNDS investor request not yet booked in shares — can be executed from its contract note. */
+const canExecuteAsRedemption = (w: Withdrawal) =>
+  (w.status === "Pending" || w.status === "Approved") &&
+  w.shares_redeemed == null &&
+  (w.source ?? "investor_request") === "investor_request" &&
+  (w.product_type ?? "FUNDS") === "FUNDS";
 
 const SOURCE_FILTERS = ["", "investor_request", "oversubscription_refund"] as const;
 const SOURCE_FILTER_LABELS: Record<string, string> = {
@@ -28,6 +37,24 @@ export default function WithdrawalListPage() {
   // under Shares (DPRP), but this also scopes normal investor-request rows.
   const [productFilter, setProductFilter] = useState<ProductFilterValue>("ALL");
   const [uploading, setUploading] = useState(false);
+  // Unit redemption form (contract note) — new, or executing an existing request.
+  const [redemptionOpen, setRedemptionOpen] = useState(false);
+  const [redemptionPrefill, setRedemptionPrefill] = useState<RedemptionPrefill | undefined>(undefined);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const onDownloadStatement = async (w: Withdrawal) => {
+    setDownloadingId(w.id);
+    try {
+      await reportService.downloadWithdrawalReceipt(w.client_id, w.id);
+    } catch {
+      toast.error("Could not download the withdrawal statement");
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+  const openRedemption = (prefill?: RedemptionPrefill) => {
+    setRedemptionPrefill(prefill);
+    setRedemptionOpen(true);
+  };
   const [processing, setProcessing] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -254,6 +281,14 @@ export default function WithdrawalListPage() {
           >
             <Upload size={14} /> {uploading ? "Uploading..." : "Upload Excel"}
           </button>
+          <button
+            onClick={() => openRedemption()}
+            className="btn btn-sm d-flex align-items-center gap-2 fw-bold"
+            style={{ padding: "8px 18px", borderRadius: "20px", border: "none", background: "#00005b", color: "#ffffff" }}
+            title="Record a redemption from the transfer agent's contract note (reduces the client's shares)"
+          >
+            <ArrowDownCircle size={14} /> Record redemption
+          </button>
           </div>
         </div>
       </div>
@@ -432,6 +467,12 @@ export default function WithdrawalListPage() {
                     <td style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>{w.batch_name || "—"}</td>
                     <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-destructive)" }}>
                       {formatCurrency(w.amount)}
+                      {w.shares_redeemed != null && (
+                        <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)" }}>
+                          {w.shares_redeemed.toLocaleString("en-US", { maximumFractionDigits: 6 })} sh @ {w.redemption_nav?.toLocaleString("en-US", { maximumFractionDigits: 6 })}
+                          {w.ta_reference ? ` · ref ${w.ta_reference}` : ""}
+                        </div>
+                      )}
                     </td>
                     <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-secondary)" }}>
                       {w.rate_used != null ? `₦${w.rate_used.toLocaleString("en-US", { maximumFractionDigits: 4 })}` : "—"}
@@ -440,6 +481,7 @@ export default function WithdrawalListPage() {
                     <td style={{ color: "var(--color-text-secondary)", fontSize: "12px" }}>{formatDate(w.date_withdrawn)}</td>
                     <td style={{ color: "var(--color-text-tertiary)", fontSize: "12px" }}>{formatDate(w.approved_at)}</td>
                     <td style={{ textAlign: "center" }}>
+                      <div className="d-flex gap-2 justify-content-center align-items-center">
                       {w.status === "Pending" ? (
                         <div className="d-flex gap-2 justify-content-center">
                           <button
@@ -478,10 +520,40 @@ export default function WithdrawalListPage() {
                           >
                             <X size={12} /> Reject
                           </button>
+                          {canExecuteAsRedemption(w) && (
+                            <button
+                              onClick={() => openRedemption({ withdrawalId: w.id, clientCode: w.client_id, fundId: w.fund_id, amount: w.amount })}
+                              className="btn btn-sm d-flex align-items-center gap-1"
+                              style={{ padding: "4px 10px", fontSize: "11px", borderRadius: "12px", border: "1px solid rgba(220,38,38,0.4)", background: "transparent", color: "#F87171" }}
+                              title="Execute as a redemption from the contract note (shares, NAV, trade date)"
+                            >
+                              <ArrowDownCircle size={12} /> Execute
+                            </button>
+                          )}
                         </div>
-                      ) : (
-                        <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>—</span>
+                      ) : canExecuteAsRedemption(w) ? (
+                        <button
+                          onClick={() => openRedemption({ withdrawalId: w.id, clientCode: w.client_id, fundId: w.fund_id, amount: w.amount })}
+                          className="btn btn-sm d-inline-flex align-items-center gap-1"
+                          style={{ padding: "4px 10px", fontSize: "11px", borderRadius: "12px", border: "1px solid rgba(220,38,38,0.4)", background: "transparent", color: "#F87171" }}
+                          title="Execute as a redemption from the contract note (shares, NAV, trade date)"
+                        >
+                          <ArrowDownCircle size={12} /> Execute
+                        </button>
+                      ) : null}
+                      {(w.source ?? "investor_request") === "investor_request" && w.status !== "Rejected" && (
+                        <button
+                          onClick={() => onDownloadStatement(w)}
+                          disabled={downloadingId === w.id}
+                          className="btn btn-sm d-inline-flex align-items-center"
+                          style={{ padding: "4px 8px", borderRadius: "12px", border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: "var(--color-text-secondary)", opacity: downloadingId === w.id ? 0.6 : 1 }}
+                          title="Download the withdrawal statement (PDF) — the same one attached to the client's withdrawal email"
+                          aria-label={`Download withdrawal statement ${w.id}`}
+                        >
+                          <Download size={12} />
+                        </button>
                       )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -531,6 +603,13 @@ export default function WithdrawalListPage() {
           </div>
         </div>
       </div>
+
+      <RedemptionModal
+        open={redemptionOpen}
+        onClose={() => setRedemptionOpen(false)}
+        onDone={load}
+        prefill={redemptionPrefill}
+      />
     </div>
   );
 }

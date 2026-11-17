@@ -116,7 +116,7 @@ export default function SettingsPage() {
             <p style={{ fontSize: "13px", color: "var(--color-text-secondary)", margin: "0 0 4px" }}>
               OFDS — Operations Fund Distribution System
             </p>
-            <p style={{ fontSize: "11px", color: "var(--color-text-tertiary)", margin: 0 }}>AIB AXYS Africa · v2.0.0</p>
+            <p style={{ fontSize: "11px", color: "var(--color-text-tertiary)", margin: 0 }}>OFSD · v2.0.0</p>
           </div>
 
           {/* Sign out */}

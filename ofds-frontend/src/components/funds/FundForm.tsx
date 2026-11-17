@@ -130,7 +130,7 @@ export function FundForm({
               id={`fund-name-${mode}`}
               value={values.fund_name}
               onChange={(e) => set("fund_name", e.target.value)}
-              placeholder={isShares ? "e.g. Dangote Petroleum Refinery" : "e.g. Axiom"}
+              placeholder={isShares ? "e.g. Summit Equity Shares" : "e.g. Northwind Growth Fund"}
               style={renameLocked ? readOnlyStyle : withError(inputStyle, !!err("fund_name"))}
               onFocus={handleFocus}
               onBlur={handleBlur}
@@ -151,7 +151,7 @@ export function FundForm({
               id={`fund-code-${mode}`}
               value={values.fund_code}
               onChange={(e) => set("fund_code", e.target.value.toUpperCase())}
-              placeholder={isShares ? "e.g. DPRP" : "e.g. AXM"}
+              placeholder={isShares ? "e.g. SES" : "e.g. NWG"}
               style={withError(inputStyle, !!err("fund_code"))}
               onFocus={handleFocus}
               onBlur={handleBlur}

@@ -91,8 +91,8 @@ class TestManualTransferAmounts:
             # B: bank took 200 -> transfer_fee_deducted reflects that gap exactly.
             assert b.transfer_amount_received == Decimal("2800.00")
             assert b.transfer_fee_deducted == Decimal("200.00")
-            assert b.deployment_fee_deducted == Decimal("60.00")  # 2% of the 3000 deposit, not the 2800 received
-            assert b.net_principal == Decimal("2740.00")  # 3000 - 200 transfer - 60 entry fee
+            assert b.deployment_fee_deducted == Decimal("56.00")  # 2% of the 2800 left after the 200 transfer cost
+            assert b.net_principal == Decimal("2744.00")  # 2800 - 56 entry fee
 
     def test_investor_missing_from_map_defaults_to_full_deposit(self, client, auth_token, app):
         with app.app_context():
@@ -142,7 +142,7 @@ class TestManualTransferAmounts:
             assert a.transfer_amount_received is None
             assert b.transfer_amount_received is None
 
-    def test_aggregate_mode_entry_fee_charged_on_initial_deposit(self, client, auth_token, app):
+    def test_aggregate_mode_entry_fee_charged_after_transaction_cost(self, client, auth_token, app):
         with app.app_context():
             batch, investments = _make_funds_batch_with_investments(["2000.00", "6000.00"])
             inv_a, _ = investments
@@ -161,5 +161,5 @@ class TestManualTransferAmounts:
 
             a = db.session.get(Investment, inv_a.id)
             assert a.transfer_fee_deducted == Decimal("20.00")   # 2000/8000 * 80
-            assert a.deployment_fee_deducted == Decimal("40.00")  # 2% of 2000 deposit (not of 1980)
-            assert a.net_principal == Decimal("1940.00")
+            assert a.deployment_fee_deducted == Decimal("39.60")  # 2% of 1980 (deposit after the 20 transfer cost)
+            assert a.net_principal == Decimal("1940.40")

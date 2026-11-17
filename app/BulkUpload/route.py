@@ -34,6 +34,9 @@ from app.Funds.share_class import ShareClass
 from app.BulkUpload.model import UploadColumnMapping, BulkUploadJob
 from app.utils.audit_log import create_audit_log, AuditLog, get_client_ip, get_user_identity_meta
 from app.logic.batch_management_service import BatchManagementService
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 bulk_upload_v1 = Blueprint("bulk_upload_v1", __name__, url_prefix="/")
@@ -495,7 +498,7 @@ def _schedule_bulk_upload_job(job_id: int) -> bool:
             )
             return True
     except Exception as e:
-        print(f"APScheduler unavailable for bulk upload job {job_id} ({e}); falling back to daemon thread")
+        logger.info(f"APScheduler unavailable for bulk upload job {job_id} ({e}); falling back to daemon thread")
 
     # Fallback: daemon thread (safe for multi-worker Gunicorn where the
     # in-memory scheduler is None in workers other than the one that started it)
@@ -507,10 +510,10 @@ def _schedule_bulk_upload_job(job_id: int) -> bool:
             name=f"bulk_upload_job_{job_id}",
         )
         t.start()
-        print(f"Bulk upload job {job_id} started on daemon thread (APScheduler not available in this worker)")
+        logger.info(f"Bulk upload job {job_id} started on daemon thread (APScheduler not available in this worker)")
         return True
     except Exception as e:
-        print(f"Could not start daemon thread for bulk upload job {job_id}: {e}")
+        logger.info(f"Could not start daemon thread for bulk upload job {job_id}: {e}")
         return False
 
 
@@ -844,7 +847,7 @@ def _run_bulk_upload_commit_job(app, job_id):
                     session.commit()
                 except Exception as chunk_err:
                     session.rollback()
-                    print(f"Bulk upload job {job_id}: chunk starting at row {i} failed as a batch ({chunk_err}); "
+                    logger.info(f"Bulk upload job {job_id}: chunk starting at row {i} failed as a batch ({chunk_err}); "
                           f"falling back to processing it row-by-row")
                     s, f, sk = [], [], []
                     for single_row in chunk:

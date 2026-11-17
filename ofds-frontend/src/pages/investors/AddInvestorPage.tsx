@@ -173,12 +173,18 @@ export default function AddInvestorPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [fundList, dirRes] = await Promise.all([
-          fundService.getAll(),
-          investmentService.getInvestorDirectory(),
+        // The funds and shares endpoints are separate; load both so the Product
+        // toggle can switch between them (each fund carries its product_type).
+        const [fundList, shareList] = await Promise.all([
+          fundService.getAll("FUNDS"),
+          fundService.getAll("SHARES").catch(() => [] as CoreFund[]),
         ]);
-        setAllFunds(fundList.filter((f) => f.is_active));
-        setDirectory(((dirRes.data as DirectoryEntry[]) || []));
+        setAllFunds(
+          [
+            ...fundList.map((f) => ({ ...f, product_type: f.product_type ?? "FUNDS" })),
+            ...shareList.map((f) => ({ ...f, product_type: f.product_type ?? "SHARES" })),
+          ].filter((f) => f.is_active)
+        );
       } catch {
         toast.error("Failed to load funds");
       } finally {
@@ -202,16 +208,39 @@ export default function AddInvestorPage() {
     setClassesLoading(true);
     setClassId("");
     fundService
-      .getClasses(Number(fundId))
+      .getClasses(Number(fundId), product)
       .then((res) => setClasses(res.filter((c) => c.is_active !== false)))
       .catch(() => toast.error("Failed to load share classes"))
       .finally(() => setClassesLoading(false));
-  }, [fundId]);
+  }, [fundId, product]);
 
   const selectedClass = useMemo(
     () => classes.find((c) => String(c.id) === classId) || null,
     [classes, classId]
   );
+
+  // The directory API is paginated (50/page), so never match against a preloaded
+  // page: look the typed code up on the server, and keep only an exact match.
+  useEffect(() => {
+    const code = clientCode.trim();
+    if (!code) {
+      setDirectory([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await investmentService.getInvestorDirectory({ search: code, per_page: 50 });
+        if (!cancelled) setDirectory(((res.data as DirectoryEntry[]) || []));
+      } catch {
+        if (!cancelled) setDirectory([]);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [clientCode]);
 
   const existingInvestor = useMemo(() => {
     const code = clientCode.trim().toLowerCase();

@@ -11,6 +11,9 @@ from app.Batch.fund import Fund
 from app.utils.email_service import EmailService
 from app.logic.batch_management_service import BatchManagementService
 from app.Funds.share_class import ShareClass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class InvestmentController:
@@ -65,6 +68,11 @@ class InvestmentController:
                 batch = session.query(Batch).filter(Batch.id == batch_id).first()
                 if not batch:
                     return make_response(jsonify({"status": 404, "message": "Batch not found"}), 404)
+                if not BatchManagementService.batch_accepts_deposits(batch):
+                    return make_response(jsonify({
+                        "status": 400,
+                        "message": f"Batch '{batch.batch_name}' has moved past the deposit stage (transfer or deployment), so new investors cannot be added to it.",
+                    }), 400)
 
             # fund is optional; resolve only when fund_id or fund_name provided
             resolved_fund_id = core.id
@@ -743,6 +751,10 @@ class InvestmentController:
                     if share_class:
                         target_batch = BatchManagementService.find_or_create_batch(share_class.id)
                     elif global_batch:
+                        if not BatchManagementService.batch_accepts_deposits(global_batch):
+                            raise ValueError(
+                                f"Batch '{global_batch.batch_name}' has moved past the deposit stage, so new investors cannot be added to it."
+                            )
                         target_batch = global_batch
                     else:
                         raise ValueError(f"No active share class found for fund '{normalized_fund_name}' and no global batch provided.")
@@ -885,11 +897,11 @@ class InvestmentController:
                     }
                     for _, row in df.iterrows()
                 ], trigger_source="investment.upload.stage_1_initial_deposit")
-                print(f"Email sent to {email_stats['sent']} addresses, failed {email_stats['failed']}")
+                logger.info(f"Email sent to {email_stats['sent']} addresses, failed {email_stats['failed']}")
 
             except Exception as e:
                 # Do not abort; log only.
-                print(f"Email Stage 1 dispatch failed: {e}")
+                logger.info(f"Email Stage 1 dispatch failed: {e}")
 
             response_data = {
                 "status": 201,

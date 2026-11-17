@@ -773,7 +773,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
                     }),
                   },
                   {
-                    label: "AXYS Total",
+                    label: "Administrator Total",
                     value: cls.head_office_nav.toLocaleString("en-US", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
@@ -1154,13 +1154,13 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
           <div>
             NAV per Share{" "}
             <span style={{ color: "#475569", textTransform: "none", fontWeight: 400, fontSize: "9px" }}>
-              (from AXYS)
+              (from administrator)
             </span>
           </div>
           <div>
             Total Fund NAV{" "}
             <span style={{ color: "#475569", textTransform: "none", fontWeight: 400, fontSize: "9px" }}>
-              (AXYS total)
+              (administrator total)
             </span>
           </div>
         </div>
@@ -1241,7 +1241,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
                   onBlur={handleBlur}
                 />
                 <div style={{ fontSize: "9px", color: "#475569", letterSpacing: "0.02em" }}>
-                  From AXYS NAV statement
+                  From administrator NAV statement
                 </div>
               </div>
             </div>
@@ -1287,7 +1287,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
             Monthly {isShares ? "Shares" : "Fund"} Valuation
           </h1>
           <div style={{ fontSize: "12px", color: "#94A3B8" }}>
-            Enter NAV per share and total fund NAV from the AXYS statement. System will reconcile
+            Enter NAV per share and total fund NAV from the administrator statement. System will reconcile
             and allocate snapshots.
           </div>
         </div>
@@ -1361,11 +1361,11 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
           <circle cx="7" cy="10" r="0.6" fill="currentColor" />
         </svg>
         <span>
-          Values come directly from the AXYS NAV statement. The system will compute{" "}
+          Values come directly from the administrator NAV statement. The system will compute{" "}
           <strong style={{ color: "#FCD34D" }}>
             system total NAV = shares × NAV/share
           </strong>{" "}
-          and compare it to your entered AXYS total. Difference must be &lt; 1.00 to pass
+          and compare it to your entered administrator total. Difference must be &lt; 1.00 to pass
           reconciliation. Once committed, these values cannot be changed.
         </span>
       </div>
@@ -1405,7 +1405,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
         {scope === "selected" && (
           <div style={{ marginTop: "12px" }}>
             <div style={{ fontSize: "11px", color: "#F59E0B", marginBottom: "10px" }}>
-              Enter the AXYS NAV <strong>total for the selected batches only</strong> (not the whole class). Batches
+              Enter the administrator NAV <strong>total for the selected batches only</strong> (not the whole class). Batches
               already valued on this date are skipped.
             </div>
             {Array.from(new Set(batchOptions.map((b) => b.classCode))).sort().map((code) => {
@@ -1477,7 +1477,7 @@ export default function ValuationCreatePage({ product = "FUNDS" }: ValuationCrea
             ? "Complete both fields for any row you start"
             : canPreview
             ? `Ready to preview (${filledRows.length} class${filledRows.length !== 1 ? "es" : ""})`
-            : "Enter NAV/share and AXYS total for at least one class"}
+            : "Enter NAV/share and administrator total for at least one class"}
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button

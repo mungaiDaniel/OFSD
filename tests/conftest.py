@@ -10,6 +10,9 @@ Run tests with:
     pytest tests/test_investments.py -v
 """
 
+import os
+os.environ.setdefault("APP_ENV", "testing")  # before importing main, which builds the app at import time
+
 import pytest
 import os
 from datetime import datetime, timezone
@@ -29,7 +32,7 @@ def app():
     Create application for the test session.
     Uses TestingConfig for isolated database.
     """
-    app = create_app(config_filename=TestingConfig)
+    app = create_app(TestingConfig)
     app.config['TESTING'] = True
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     

@@ -43,6 +43,9 @@ from app.utils.statement_theme import (
     get_statement_theme,
     resolve_jh_logo_path,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 reports_v1 = Blueprint("reports_v1", __name__, url_prefix="/")
@@ -114,12 +117,8 @@ def _register_montserrat_fonts():
 
 def _get_standard_statement_fonts():
     """
-    Prefer Montserrat (matches app UI). Fallback to built-in Times-Roman/Times-Bold.
+    Statements use Times New Roman (built-in Times-Roman/Times-Bold).
     """
-    _register_montserrat_fonts()
-    registered = set(pdfmetrics.getRegisteredFontNames())
-    if "Montserrat" in registered and "Montserrat-Bold" in registered:
-        return "Montserrat", "Montserrat-Bold"
     return "Times-Roman", "Times-Bold"
 
 
@@ -645,7 +644,7 @@ def multi_batch_portfolio_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -745,7 +744,7 @@ def get_batch_summary_json(batch_id: int):
             }
         }), 200
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -849,7 +848,7 @@ def batch_summary_excel(batch_id: int):
             download_name=filename,
         )
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -907,7 +906,7 @@ def batch_reconciliation(batch_id: int):
             }
         ), 200
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -944,7 +943,7 @@ def get_report_detail(valuation_run_id):
 
         # Requirement 5: Reconciliation Guard (Block rendering if mismatch > $0.01)
         if abs(reconciliation_diff) > 0.01:
-            print(f"RECONCILIATION MISMATCH: Run {valuation_run_id}, Fund {fund_name}, "
+            logger.info(f"RECONCILIATION MISMATCH: Run {valuation_run_id}, Fund {fund_name}, "
                   f"Ledger: ${ledger_total}, Head Office: ${head_office_total}, Diff: ${reconciliation_diff}")
             
             return jsonify({
@@ -991,7 +990,7 @@ def get_report_detail(valuation_run_id):
                     inv_values = BatchController._calculate_batch_investment_values(inv_item, batch, db.session)
                     current_balance += Decimal(str(inv_values["current_balance"]))
             except Exception as e:
-                print(f"⚠️  Warning: Balance calculation failed for {entry.internal_client_code}: {str(e)}")
+                logger.info(f"⚠️  Warning: Balance calculation failed for {entry.internal_client_code}: {str(e)}")
                 # Fallback: use ledger end_balance
                 current_balance = Decimal(str(entry.end_balance or 0))
 
@@ -1199,7 +1198,7 @@ def get_report_pdf(valuation_run_id):
                         inv_values = BatchController._calculate_batch_investment_values(inv_item, batch, db.session)
                         current_balance += Decimal(str(inv_values["current_balance"]))
                 except Exception as e:
-                    print(f"⚠️  Warning: Balance calculation failed for {entry.internal_client_code}: {str(e)}")
+                    logger.info(f"⚠️  Warning: Balance calculation failed for {entry.internal_client_code}: {str(e)}")
                     current_balance = Decimal(str(entry.end_balance or 0))
                 
                 # Calculate CURRENT profit
@@ -1660,7 +1659,7 @@ def get_investor_statement_pdf(investor_email):
         )
 
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -1788,7 +1787,7 @@ def get_eligible_investors():
         }), 200
     
     except Exception as e:
-        print(f"ERROR in get_eligible_investors: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_eligible_investors: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -1924,7 +1923,7 @@ def generate_reports():
     
     except Exception as e:
         db.session.rollback()
-        print(f"ERROR in generate_reports: {traceback.format_exc()}")
+        logger.info(f"ERROR in generate_reports: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -1977,7 +1976,7 @@ def list_report_runs():
         }), 200
     
     except Exception as e:
-        print(f"ERROR in list_report_runs: {traceback.format_exc()}")
+        logger.info(f"ERROR in list_report_runs: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -1986,6 +1985,7 @@ def list_report_runs():
 # ============================================================================
 
 @reports_v1.route("/api/v1/reports/fund-shares-excel", methods=["GET"])
+@jwt_required()
 def fund_shares_excel():
     """
     Download a comprehensive fund shares report as a multi-sheet Excel file.
@@ -2314,7 +2314,7 @@ def fund_shares_excel():
         )
 
     except Exception as e:
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -2374,7 +2374,7 @@ def get_report_run_detail(report_run_id):
         }), 200
     
     except Exception as e:
-        print(f"ERROR in get_report_run_detail: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_report_run_detail: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -2464,7 +2464,7 @@ def _get_current_balance_for_investment(inv, session):
                 return float(round(float(cb), 2))
 
     except Exception as e:
-        print(f"Warning: error calculating current balance for inv {inv.id}: {e}")
+        logger.info(f"Warning: error calculating current balance for inv {inv.id}: {e}")
 
     # 6. Fallback: net_principal (amount deployed) or amount_deposited
     if inv.net_principal:
@@ -2590,17 +2590,13 @@ def generate_investments_csv(session=None):
 
 @reports_v1.route('/api/v1/reports/export-all-investments/csv', methods=['GET'])
 @reports_v1.route('/api/v1/investments/export/csv', methods=['GET'])
+@jwt_required()
 def export_all_investments_csv():
     """
     Export all investments from the database as a CSV spreadsheet.
     Supports JWT in header or query parameter ?token=... for direct browser downloads.
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         csv_buffer = generate_investments_csv(db.session)
         byte_buffer = BytesIO(csv_buffer.getvalue().encode('utf-8'))
         filename = f"investments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2612,7 +2608,7 @@ def export_all_investments_csv():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in export_all_investments_csv: {traceback.format_exc()}")
+        logger.info(f"ERROR in export_all_investments_csv: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -2773,7 +2769,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
                 running_balance = closing_b
                 prev_date = vdt
     except Exception as e:
-        print(f"Warning: error reading valuation snapshots: {e}")
+        logger.info(f"Warning: error reading valuation snapshots: {e}")
 
     # ────────────────────────────────────────────────────────────────────────
     # 2. LEGACY EPOCH VALUATION RUNS (if any committed runs exist)
@@ -2927,7 +2923,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
                         "source": "EpochLedger",
                     })
     except Exception as e:
-        print(f"Warning: error reading valuation runs: {e}")
+        logger.info(f"Warning: error reading valuation runs: {e}")
 
     # Sort investor rows by Epoch End descending, then Investor Name / Client Code
     investor_rows.sort(key=lambda r: (r.get("Epoch End") or "", r.get("Client Code") or ""), reverse=True)
@@ -2992,6 +2988,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
 
 @reports_v1.route('/api/v1/reports/export-valuations/csv', methods=['GET'])
 @reports_v1.route('/api/v1/valuations/export/csv', methods=['GET'])
+@jwt_required()
 def export_valuations_csv():
     """
     Export all committed valuation runs as a flat CSV file.
@@ -3014,11 +3011,6 @@ def export_valuations_csv():
 
     try:
         # Auth: optional — works as a direct browser download URL
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         session = db.session
         fund_id_filter = request.args.get("fund_id", type=int)
         vr_id_filter = request.args.get("valuation_run_id", type=int)
@@ -3085,7 +3077,7 @@ def export_valuations_csv():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in export_valuations_csv: {traceback.format_exc()}")
+        logger.info(f"ERROR in export_valuations_csv: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3178,6 +3170,7 @@ def generate_valuations_excel(session=None, valuation_run_id=None, fund_id=None)
 
 @reports_v1.route('/api/v1/reports/valuation-excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/valuations/export/excel', methods=['GET'])
+@jwt_required()
 def export_valuations_excel():
     """
     Download comprehensive valuation statement workbook in Excel (.xlsx).
@@ -3187,11 +3180,6 @@ def export_valuations_excel():
       - token (str, optional): JWT token for direct browser downloads
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         valuation_run_id = request.args.get("valuation_run_id", type=int)
         fund_id = request.args.get("fund_id", type=int)
 
@@ -3206,22 +3194,18 @@ def export_valuations_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in export_valuations_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in export_valuations_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
 @reports_v1.route('/api/v1/reports/<int:valuation_run_id>/excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/valuation-runs/<int:valuation_run_id>/excel', methods=['GET'])
+@jwt_required()
 def get_valuation_run_excel(valuation_run_id: int):
     """
     Download valuation statement in Excel format for a specific ValuationRun.
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         excel_buffer = generate_valuations_excel(db.session, valuation_run_id=valuation_run_id)
         filename = f"Valuation_Run_{valuation_run_id}_Statement_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
@@ -3232,7 +3216,7 @@ def get_valuation_run_excel(valuation_run_id: int):
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in get_valuation_run_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_valuation_run_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3242,6 +3226,7 @@ def get_valuation_run_excel(valuation_run_id: int):
 
 @reports_v1.route('/api/v1/reports/export-all/excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/full-export/excel', methods=['GET'])
+@jwt_required()
 def export_combined_excel():
     """
     Single-URL Excel export containing:
@@ -3254,11 +3239,6 @@ def export_combined_excel():
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
-
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
 
         session = db.session
 
@@ -3394,7 +3374,7 @@ def export_combined_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in export_combined_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in export_combined_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3549,7 +3529,7 @@ def client_activity():
 
         return jsonify({"status": 200, "data": data}), 200
     except Exception as e:
-        print(f"ERROR in client_activity: {traceback.format_exc()}")
+        logger.info(f"ERROR in client_activity: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3603,7 +3583,7 @@ def client_activity_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in client_activity_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in client_activity_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3723,7 +3703,7 @@ def client_activity_pdf():
         filename = f"Client_Activity_{data['internal_client_code']}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.pdf"
         return send_file(pdf_buffer, mimetype="application/pdf", as_attachment=True, download_name=filename)
     except Exception as e:
-        print(f"ERROR in client_activity_pdf: {traceback.format_exc()}")
+        logger.info(f"ERROR in client_activity_pdf: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3864,7 +3844,7 @@ def daily_activity():
         summary = {k: v for k, v in data.items() if k != "events"}
         return jsonify({"status": 200, "data": summary}), 200
     except Exception as e:
-        print(f"ERROR in daily_activity: {traceback.format_exc()}")
+        logger.info(f"ERROR in daily_activity: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3920,7 +3900,7 @@ def daily_activity_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in daily_activity_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in daily_activity_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -4023,7 +4003,7 @@ def daily_activity_pdf():
         filename = f"Daily_Activity_{data['date_from']}_to_{data['date_to']}.pdf"
         return send_file(pdf_buffer, mimetype="application/pdf", as_attachment=True, download_name=filename)
     except Exception as e:
-        print(f"ERROR in daily_activity_pdf: {traceback.format_exc()}")
+        logger.info(f"ERROR in daily_activity_pdf: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -4153,7 +4133,7 @@ def withdrawals_export_excel():
             download_name=filename,
         )
     except Exception as e:
-        print(f"ERROR in withdrawals_export_excel: {traceback.format_exc()}")
+        logger.info(f"ERROR in withdrawals_export_excel: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -4252,6 +4232,6 @@ def withdrawals_export_pdf():
         filename = f"Withdrawals_{fund_label}{range_label}.pdf"
         return send_file(pdf_buffer, mimetype="application/pdf", as_attachment=True, download_name=filename)
     except Exception as e:
-        print(f"ERROR in withdrawals_export_pdf: {traceback.format_exc()}")
+        logger.info(f"ERROR in withdrawals_export_pdf: {traceback.format_exc()}")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 

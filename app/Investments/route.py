@@ -51,6 +51,8 @@ from app.utils.statement_theme import (
     build_jh_logo_block,
     client_info_table_style,
     get_statement_theme,
+    logo_image,
+    statement_fonts,
     highlight_banner_style,
     history_table_style,
     resolve_axys_logo_path,
@@ -59,6 +61,8 @@ from app.utils.statement_theme import (
     is_janus_henderson_fund as _is_janus_henderson_fund,
     is_dangote_dprp_fund,
 )
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +156,7 @@ def _resolve_janus_henderson_statement_logo_path(
     if logo_path is None and _is_janus_henderson_fund(fund_names, fund_codes):
         logger.warning(
             "Janus Henderson statement logo is missing: %s",
-            Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo-jh-dark-removebg-preview.png",
+            Path(__file__).resolve().parents[2] / "assets" / "logo" / "brand-logo-dark.png",
         )
     return logo_path
 
@@ -675,6 +679,7 @@ def get_total_investors_count(session=None, product_type=None) -> int:
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/history', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_history(client_code):
     """
     Returns an investor's chronological history of valuations.
@@ -869,6 +874,7 @@ def get_investor_history(client_code):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/portfolio', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_portfolio_aggregated(client_code):
     """
     Returns an investor's aggregated portfolio across all batches and funds.
@@ -1145,6 +1151,7 @@ def _get_investor_portfolio_aggregated_data(client_code, fund_ids=None):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/portfolio/display', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_portfolio_display(client_code):
     """
     Returns pre-computed aggregated portfolio data for display.
@@ -1789,15 +1796,14 @@ def _generate_oversubscription_notice_pdf_bytes(client_code, fund_id):
 
         _register_montserrat_fonts()
         registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-        pdf_body_font = "Montserrat" if "Montserrat" in registered_fonts else "Helvetica"
-        pdf_body_font_bold = "Montserrat-Bold" if "Montserrat-Bold" in registered_fonts else "Helvetica-Bold"
+        pdf_body_font, pdf_body_font_bold = statement_fonts()
 
         fund_name = ctx["fund_name"] or "Fund"
         theme = get_statement_theme([fund_name])
         jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
 
         pdf_buffer = BytesIO()
-        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5)
+        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5, receipt=True)
         story = []
 
         styles = getSampleStyleSheet()
@@ -1887,7 +1893,8 @@ def _filter_statement_rows_to_class(rows, client_code, fund_id, share_class_id, 
     kept = []
     for r in rows:
         if r.get("type") == "WITHDRAWAL":
-            wd_batch = withdrawal_batch.get(r.get("withdrawal_id"))
+            # A unit-redemption row already carries the batch of the lot it came out of.
+            wd_batch = r.get("batch_id") if r.get("batch_id") is not None else withdrawal_batch.get(r.get("withdrawal_id"))
             if (wd_batch in class_batch_ids) if wd_batch is not None else include_unassigned_withdrawals:
                 kept.append(r)
         elif r.get("batch_id") in class_batch_ids:
@@ -2102,7 +2109,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             rows.sort(key=lambda x: x.get("date") or "", reverse=True)
             timeline_statements = rows
     except Exception as timeline_err:
-        print(f"⚠️  Warning: Could not load timeline statements for {client_code}/{fund_name}: {timeline_err}")
+        logger.info(f"⚠️  Warning: Could not load timeline statements for {client_code}/{fund_name}: {timeline_err}")
 
     previous_period_value = None
     previous_period_date_text = None
@@ -3010,13 +3017,7 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
                 if inv.fund_id == only_fid and getattr(inv, "fund", None)
             ]
 
-        try:
-            _require_montserrat_fonts_or_raise()
-        except ValueError as e:
-            logger.warning(f"Statement PDF: font requirement not met for {client_code}: {e}")
-            return ("error", 400, str(e))
-        body_font = "Montserrat"
-        body_font_bold = "Montserrat-Bold"
+        body_font, body_font_bold = statement_fonts()
         theme = get_statement_theme(theme_fund_names, theme_fund_codes)
 
         pdf_buffer = BytesIO()
@@ -3035,7 +3036,7 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
             theme_fund_names, theme_fund_codes
         )
         axys_logo_path = resolve_axys_logo_path()
-        axys_logo = Image(str(axys_logo_path), width=135, height=43) if axys_logo_path and axys_logo_path.exists() else None
+        axys_logo = logo_image(axys_logo_path, width=135, height=43) if axys_logo_path and axys_logo_path.exists() else None
         top_logo_block = Table([[axys_logo]], colWidths=[1.9 * inch]) if axys_logo else Paragraph('<font size=18><b>AXYS INVESTMENT BANK</b></font>', title_style)
 
         head_office_html = (
@@ -3221,6 +3222,7 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
 
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/statement/excel', methods=['GET'])
+@jwt_required()
 def download_investor_statement_excel(client_code):
     """
     Download a branded investor statement spreadsheet in Excel format (.xlsx).
@@ -3413,7 +3415,7 @@ def download_investor_statement_excel(client_code):
         return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name=filename)
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -3563,6 +3565,17 @@ def get_investor_statements(client_code):
             Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
         ).all()
 
+        # Shares later redeemed out of each holding (unit redemptions) — added
+        # back so "shares at deployment" shows what was allotted, not what's left.
+        from app.Investments.model import WithdrawalLot
+        redeemed_by_holding = {}
+        unit_withdrawal_ids = [w.id for w in withdrawals if w.shares_redeemed is not None]
+        if unit_withdrawal_ids:
+            for lot in session.query(WithdrawalLot).filter(WithdrawalLot.withdrawal_id.in_(unit_withdrawal_ids)).all():
+                redeemed_by_holding[lot.investor_shares_id] = (
+                    redeemed_by_holding.get(lot.investor_shares_id, 0.0) + float(lot.shares_redeemed or 0)
+                )
+
         statements = []
         
         # Currency helper map for ledger/withdrawal rows that don't directly carry currency.
@@ -3658,7 +3671,7 @@ def get_investor_statements(client_code):
                 else (float(meta.get("deployment_nav")) if meta.get("deployment_nav") is not None else None)
             )
             shares_at_deployment = (
-                float(inv_shares.shares_owned)
+                float(inv_shares.shares_owned) + redeemed_by_holding.get(inv_shares.id, 0.0)
                 if inv_shares and inv_shares.shares_owned is not None
                 else (deposit_amount / nav_at_deployment if nav_at_deployment and nav_at_deployment > 0 else None)
             )
@@ -3753,7 +3766,7 @@ def get_investor_statements(client_code):
             if not inv_shares:
                 continue
 
-            shares_owned = float(inv_shares.shares_owned or 0)
+            shares_owned = float(inv_shares.shares_owned or 0) + redeemed_by_holding.get(inv_shares.id, 0.0)
             deployment_nav = float(inv_shares.deployment_nav or inv.previous_nav_price or 0)
 
             snapshots = (
@@ -3800,6 +3813,38 @@ def get_investor_statements(client_code):
             
         # === ADD WITHDRAWAL EVENTS ===
         for wd in withdrawals:
+            if wd.shares_redeemed is not None and wd.lots:
+                # Unit redemption: one row per holding it came out of, in that
+                # holding's balance bucket (batch), dated the trade date and
+                # sorted BEFORE that day's valuation (written at execution) —
+                # so the valuation's gain is measured on what was left.
+                nav = float(wd.redemption_nav or 0)
+                gross = float(wd.gross_amount or 0)
+                lots = sorted(wd.lots, key=lambda l: l.id)
+                allocated = 0.0
+                for i, lot in enumerate(lots):
+                    lot_shares = float(lot.shares_redeemed or 0)
+                    lot_amount = round(gross - allocated, 2) if i == len(lots) - 1 else round(lot_shares * nav, 2)
+                    allocated += lot_amount
+                    statements.append({
+                        "type": "WITHDRAWAL",
+                        "date": (wd.trade_date or wd.date_withdrawn.date()).isoformat(),
+                        "label": "Redemption",
+                        "fund_name": wd.fund_name,
+                        "batch_id": lot.batch_id,
+                        "opening_balance": 0.0,
+                        "deposits": 0.0,
+                        "withdrawals": lot_amount,
+                        "profit": 0.0,
+                        "end_balance": 0.0,
+                        "performance_rate": 0.0,
+                        "withdrawal_id": wd.id,
+                        "shares": -lot_shares,
+                        "nav_per_share": nav,
+                        "currency": fund_currency_map.get(wd.fund_name),
+                        "sort_priority": -1,
+                    })
+                continue
             # ✅ DECIMAL PRECISION FIX: Round withdrawal amount to 2 decimal places
             withdrawal_amount = round(
                 float(wd.gross_amount if getattr(wd, "gross_amount", None) is not None else wd.amount or 0),
@@ -3925,45 +3970,93 @@ def get_investor_statements(client_code):
         }), 500)
 
 
-@investment_v1.route('/api/v1/investors/<string:client_code>/withdrawals/<int:withdrawal_id>/pdf', methods=['GET'])
-@jwt_required()
-def get_withdrawal_pdf(client_code, withdrawal_id):
+def _current_holding_value(w):
     """
-    Generate a detailed Withdrawal Statement & Receipt PDF with account reconciliation.
+    The client's remaining holding in the withdrawal's fund/class TODAY:
+    (shares, nav_per_share, market_value, as_at_date). Each holding uses its
+    latest valuation snapshot (what their statement shows), falling back to
+    the current price if it has never been valued.
     """
-    try:
-        _register_montserrat_fonts()
-        registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-        pdf_body_font = "Montserrat" if "Montserrat" in registered_fonts else "Helvetica"
-        pdf_body_font_bold = "Montserrat-Bold" if "Montserrat-Bold" in registered_fonts else "Helvetica-Bold"
+    from app.Funds.investor_shares import InvestorShares
+    from app.Funds.nav_history import NavHistory
+    from app.Valuation.valuation_snapshot import ValuationSnapshot
 
-        w = db.session.query(Withdrawal).filter(
-            Withdrawal.id == withdrawal_id,
-            Withdrawal.internal_client_code == client_code
-        ).first()
-        
-        if not w:
-            return make_response(jsonify({"status": 404, "message": "Withdrawal record not found"}), 404)
-            
-        # Get investor info
-        inv = db.session.query(Investment).filter(Investment.internal_client_code == client_code).first()
-        investor_name = inv.investor_name if inv else "Investor"
-        currency_code = (
-            (getattr(inv, "currency", None) or "").upper()
-            or (getattr(getattr(inv, "share_class", None), "currency", None) or "").upper()
-            or "USD"
+    q = (
+        db.session.query(InvestorShares)
+        .join(Investment, InvestorShares.investment_id == Investment.id)
+        .filter(
+            func.lower(Investment.internal_client_code) == func.lower(w.internal_client_code),
+            Investment.fund_id == w.fund_id,
+            InvestorShares.is_active.is_(True),
+            InvestorShares.shares_owned > 0,
         )
+    )
+    if w.share_class_id is not None:
+        q = q.filter(InvestorShares.share_class_id == w.share_class_id)
 
-        def _fmt_money(amount: float) -> str:
-            if currency_code == "KES":
-                return f"KES {amount:,.2f}"
-            return f"USD {amount:,.2f}"
-        
-        # Get fund info and current balance
-        fund_name = w.fund_name or "Portfolio"
-        withdrawal_amount_value = float(w.gross_amount if getattr(w, "gross_amount", None) is not None else w.amount or 0)
+    shares = value = Decimal("0")
+    as_at = None
+    for holding in q.all():
+        snap = (
+            db.session.query(ValuationSnapshot)
+            .filter(ValuationSnapshot.investor_shares_id == holding.id)
+            .order_by(ValuationSnapshot.valuation_date.desc())
+            .first()
+        )
+        if snap is not None:
+            h_shares, h_value, h_date = Decimal(str(snap.shares_held)), Decimal(str(snap.market_value)), snap.valuation_date
+        else:
+            nav, h_date, _fallback = NavHistory.resolve_current_price(
+                holding.share_class_id, holding.deployment_date, holding.deployment_nav, session=db.session
+            )
+            h_shares = Decimal(str(holding.shares_owned))
+            h_value = (h_shares * Decimal(str(nav or 0))).quantize(Decimal("0.01"))
+        shares += h_shares
+        value += h_value
+        if h_date is not None and (as_at is None or h_date > as_at):
+            as_at = h_date
+    nav = (value / shares).quantize(Decimal("0.0001")) if shares > 0 else None
+    return shares, nav, value.quantize(Decimal("0.01")), as_at
 
-        # Prefer NAV snapshot market value (this is what the app shows as standing)
+
+def _generate_withdrawal_statement_pdf_bytes(client_code, withdrawal_id):
+    """
+    Withdrawal Statement & Receipt PDF as a BytesIO (safe for the background
+    email sender — no send_file). ("error", 404, msg) if the withdrawal isn't
+    this client's. A unit redemption shows the contract-note figures (shares,
+    NAV, trade/settlement date, reference, gross, exit fee, net) and the
+    holding before/after valued at the redemption NAV.
+    """
+    _register_montserrat_fonts()
+    pdf_body_font, pdf_body_font_bold = statement_fonts()
+
+    w = db.session.query(Withdrawal).filter(
+        Withdrawal.id == withdrawal_id,
+        func.lower(Withdrawal.internal_client_code) == func.lower(client_code),
+    ).first()
+    if not w:
+        return ("error", 404, "Withdrawal record not found")
+
+    inv_q = db.session.query(Investment).filter(func.lower(Investment.internal_client_code) == func.lower(client_code))
+    inv = (inv_q.filter(Investment.fund_id == w.fund_id).first() if w.fund_id else None) or inv_q.first()
+    investor_name = inv.investor_name if inv else "Investor"
+    currency_code = (
+        (getattr(getattr(inv, "share_class", None), "currency", None) or "").upper()
+        or (getattr(inv, "currency_type", None) or "").upper()
+        or "USD"
+    )
+
+    def _fmt_money(amount) -> str:
+        return f"{currency_code} {float(amount):,.2f}"
+
+    fund_name = (w.fund.fund_name if getattr(w, "fund", None) else None) or w.fund_name or "Portfolio"
+    gross_value = float(w.gross_amount if w.gross_amount is not None else w.amount or 0)
+    exit_fee_value = float(w.exit_fee_deducted or 0)
+    net_value = float(w.amount if w.amount is not None else gross_value - exit_fee_value)
+    is_redemption = w.shares_redeemed is not None
+
+    if not is_redemption:
+        # Legacy cash withdrawal: latest NAV snapshot value on/before the date, minus the amount.
         from app.Funds.investor_shares import InvestorShares
         from app.Valuation.valuation_snapshot import ValuationSnapshot
 
@@ -3971,132 +4064,161 @@ def get_withdrawal_pdf(client_code, withdrawal_id):
         if inv is not None:
             inv_shares = db.session.query(InvestorShares).filter(InvestorShares.investment_id == inv.id).first()
             if inv_shares is not None:
-                snap_q = db.session.query(ValuationSnapshot).filter(
-                    ValuationSnapshot.investor_shares_id == inv_shares.id
-                )
+                snap_q = db.session.query(ValuationSnapshot).filter(ValuationSnapshot.investor_shares_id == inv_shares.id)
                 if w.date_withdrawn:
                     snap_q = snap_q.filter(ValuationSnapshot.valuation_date <= w.date_withdrawn.date())
                 latest_snap = snap_q.order_by(ValuationSnapshot.valuation_date.desc()).first()
                 if latest_snap and latest_snap.market_value is not None:
                     pre_withdrawal_balance = float(latest_snap.market_value)
-
         if pre_withdrawal_balance is None:
-            # Last fallback: investment valuation field (already updated on approval)
             latest_investment = db.session.query(Investment).filter(
-                Investment.internal_client_code == client_code,
-                or_(
-                    Investment.fund_name == fund_name,
-                    Investment.fund_id == w.fund_id
-                )
+                func.lower(Investment.internal_client_code) == func.lower(client_code),
+                or_(Investment.fund_name == fund_name, Investment.fund_id == w.fund_id),
             ).order_by(Investment.id.desc()).first()
             pre_withdrawal_balance = float(latest_investment.valuation or 0) if latest_investment else 0.0
+        post_withdrawal_balance = max(0.0, float(pre_withdrawal_balance) - gross_value)
 
-        # Current value after withdrawal should reflect direct deduction.
-        post_withdrawal_balance = max(0.0, float(pre_withdrawal_balance) - float(withdrawal_amount_value))
+    theme = get_statement_theme([fund_name])
+    jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
 
-        theme = get_statement_theme([fund_name])
-        jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
+    pdf_buffer = BytesIO()
+    doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5, receipt=True)
+    story = []
+    styles = getSampleStyleSheet()
+    pdf_styles = build_paragraph_styles(theme, styles, pdf_body_font, pdf_body_font_bold)
+    section_heading_style = pdf_styles["section_heading"]
+    normal_style = pdf_styles["normal"]
 
-        pdf_buffer = BytesIO()
-        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5)
-        story = []
-        styles = getSampleStyleSheet()
-        pdf_styles = build_paragraph_styles(theme, styles, pdf_body_font, pdf_body_font_bold)
-        title_style = pdf_styles["title"]
-        heading_style = pdf_styles["heading"]
-        section_heading_style = pdf_styles["section_heading"]
-        normal_style = pdf_styles["normal"]
+    append_receipt_header(
+        story, theme, pdf_styles, jh_logo_path=jh_logo_path,
+        document_title="WITHDRAWAL STATEMENT & AUTHORIZATION RECEIPT", fund_name=fund_name,
+    )
 
-        append_receipt_header(
-            story,
-            theme,
-            pdf_styles,
-            jh_logo_path=jh_logo_path,
-            document_title="WITHDRAWAL STATEMENT & AUTHORIZATION RECEIPT",
-            fund_name=fund_name,
-        )
-        # Withdrawal Details - detailed table
-        withdrawal_date_str = w.date_withdrawn.strftime("%B %d, %Y") if w.date_withdrawn else "N/A"
-        approved_date_str = w.approved_at.strftime("%B %d, %Y") if w.approved_at else "Pending"
-        receipt_data = [
-            ['Reference ID', f': WDR-{w.id}', 'Withdrawal Date', f': {withdrawal_date_str}'],
-            ['Client Code', Paragraph(f': {escape(str(client_code))}', normal_style), 'Client Name', Paragraph(f': {escape(str(investor_name))}', normal_style)],
-            ['Shares' if is_dangote_dprp_fund([fund_name]) else 'Fund', Paragraph(f': {escape(str(fund_name))}', normal_style), 'Status', Paragraph(f': {escape(str(w.status))}', normal_style)],
-            ['Approved Date', f': {approved_date_str}', '', ''],
+    withdrawal_date = w.trade_date or (w.date_withdrawn.date() if w.date_withdrawn else None)
+    withdrawal_date_str = withdrawal_date.strftime("%B %d, %Y") if withdrawal_date else "N/A"
+    receipt_data = [
+        ['Reference ID', f': WDR-{w.id}', 'Withdrawal Date', f': {withdrawal_date_str}'],
+        ['Client Code', Paragraph(f': {escape(str(client_code))}', normal_style), 'Client Name', Paragraph(f': {escape(str(investor_name))}', normal_style)],
+        ['Shares' if is_dangote_dprp_fund([fund_name]) else 'Fund', Paragraph(f': {escape(str(fund_name))}', normal_style), '', ''],
+    ]
+    receipt_table = Table(receipt_data, colWidths=[0.78 * inch, 1.55 * inch, 1.05 * inch, 3.12 * inch])
+    receipt_table.setStyle(TableStyle([
+        ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ]))
+    story.append(Paragraph('Withdrawal Details', section_heading_style))
+    story.append(receipt_table)
+    story.append(Spacer(1, 0.1 * inch))
+
+    amount_table = Table([['NET AMOUNT PAID', _fmt_money(net_value)]], colWidths=[3.5 * inch, 3.5 * inch])
+    banner_style = highlight_banner_style(theme, pdf_body_font_bold)
+    banner_style.add("FONT", (0, 0), (-1, -1), pdf_body_font_bold, 16)
+    amount_table.setStyle(banner_style)
+    story.append(amount_table)
+    story.append(Spacer(1, 0.1 * inch))
+
+    grid_style = TableStyle([
+        ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
+        ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+    ])
+
+    if is_redemption:
+        redemption_rows = [
+            ['Shares Redeemed', f'{float(w.shares_redeemed):,.4f}'],
+            ['NAV per Share (redemption price)', f'{float(w.redemption_nav):,.4f}'],
+            ['Gross Amount', _fmt_money(gross_value)],
+            ['Exit Fee', f'({_fmt_money(exit_fee_value)})'],
+            ['Net Amount Paid', _fmt_money(net_value)],
         ]
-        receipt_table = Table(receipt_data, colWidths=[1.2 * inch, 1.75 * inch, 1.25 * inch, 3.3 * inch])
-        receipt_table.setStyle(TableStyle([
-            ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
-            ('FONTNAME', (0, 0), (-1, -1), pdf_body_font),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('ALIGN', (2, 0), (2, -1), 'LEFT'),
-            ('ALIGN', (3, 0), (3, -1), 'LEFT'),
-        ]))
-        story.append(Paragraph('Withdrawal Details', section_heading_style))
-        story.append(receipt_table)
-        story.append(Spacer(1, 0.25 * inch))
-        
-        # Amount Box - highlighted
-        amount_data = [['WITHDRAWS', _fmt_money(withdrawal_amount_value)]]
-        amount_table = Table(amount_data, colWidths=[3.5 * inch, 3.5 * inch])
-        banner_style = highlight_banner_style(theme, pdf_body_font_bold)
-        banner_style.add("FONT", (0, 0), (-1, -1), pdf_body_font_bold, 18)
-        amount_table.setStyle(banner_style)
-        story.append(amount_table)
-        story.append(Spacer(1, 0.25 * inch))
-        
-        # Summary (same structure style as deposit statement layout)
-        reconciliation_data = [
-            ['Previous Value (Before Withdrawal)', _fmt_money(pre_withdrawal_balance)],
-            ['Withdrawal Amount', f'({_fmt_money(withdrawal_amount_value)})'],
-            ['Current Value (After Withdrawal)', _fmt_money(post_withdrawal_balance)],
+        if w.ta_reference:
+            redemption_rows.append(['Transfer Agent Reference', str(w.ta_reference)])
+        redemption_table = Table(redemption_rows, colWidths=[5.2 * inch, 2.3 * inch])
+        redemption_table.setStyle(grid_style)
+        redemption_table.setStyle(TableStyle([('FONTNAME', (0, 4), (-1, 4), pdf_body_font_bold)]))
+        story.append(Paragraph('Redemption', section_heading_style))
+        story.append(redemption_table)
+        story.append(Spacer(1, 0.1 * inch))
+
+        # What's left today: remaining shares at the CURRENT NAV (latest
+        # valuation) — the same figure the client sees on their statement —
+        # rather than a before/redeemed/after breakdown at the sale price.
+        cur_shares, cur_nav, cur_value, cur_date = _current_holding_value(w)
+        holding_rows = [
+            ['', 'Shares', 'NAV per Share', 'Market Value'],
+            [
+                'Current Holding' + (f' (as at {cur_date.strftime("%d %b %Y")})' if cur_date else ''),
+                f'{float(cur_shares):,.4f}',
+                f'{float(cur_nav):,.4f}' if cur_nav is not None else '-',
+                _fmt_money(cur_value),
+            ],
         ]
-        
-        reconciliation_table = Table(reconciliation_data, colWidths=[5.2 * inch, 2.3 * inch])
-        reconciliation_table.setStyle(TableStyle([
-            ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
-            ('FONTNAME', (0, 0), (-1, -1), pdf_body_font),
+        holding_table = Table(holding_rows, colWidths=[3.0 * inch, 1.4 * inch, 1.3 * inch, 1.8 * inch])
+        holding_table.setStyle(grid_style)
+        holding_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f5f5f5')),
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
-            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('FONTNAME', (0, 0), (-1, 0), pdf_body_font_bold),
+            ('FONTNAME', (0, 1), (-1, 1), pdf_body_font_bold),
+        ]))
+        story.append(Paragraph(f'Holding After Withdrawal ({currency_code})', section_heading_style))
+        story.append(holding_table)
+    else:
+        reconciliation_table = Table([
+            ['Previous Value (Before Withdrawal)', _fmt_money(pre_withdrawal_balance)],
+            ['Withdrawal Amount', f'({_fmt_money(gross_value)})'],
+            ['Current Value (After Withdrawal)', _fmt_money(post_withdrawal_balance)],
+        ], colWidths=[5.2 * inch, 2.3 * inch])
+        reconciliation_table.setStyle(grid_style)
+        reconciliation_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f5f5f5')),
             ('FONTNAME', (0, 0), (-1, 0), pdf_body_font_bold),
             ('FONTNAME', (0, 2), (-1, 2), pdf_body_font_bold),
         ]))
         story.append(Paragraph(f'Withdrawal Summary ({currency_code})', section_heading_style))
         story.append(reconciliation_table)
-        story.append(Spacer(1, 0.2 * inch))
-        
-        append_branded_footer(
-            story,
-            theme,
-            pdf_styles,
-            '<b>Disclaimer & Notice:</b> This is an electronically generated withdrawal authorization receipt. '
-            'No signature is required. This statement is provided for informational purposes and confirms your withdrawal request. '
-            'All figures are subject to verification and may not reflect real-time data. Withdrawal completion is subject to fund rules and processing timelines.',
-            f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y at %H:%M UTC')} | "
-            f"Withdrawal ID: {w.id} | Client Code: {client_code}",
-        )
-        
-        doc.build(story)
-        pdf_buffer.seek(0)
-        
+    story.append(Spacer(1, 0.1 * inch))
+
+    append_branded_footer(
+        story, theme, pdf_styles,
+        '<b>Disclaimer & Notice:</b> This is an electronically generated withdrawal authorization receipt. '
+        'No signature is required. This statement is provided for informational purposes and confirms your withdrawal. '
+        'All figures are subject to verification and may not reflect real-time data. Withdrawal completion is subject to fund rules and processing timelines.',
+        f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y at %H:%M UTC')} | "
+        f"Withdrawal ID: {w.id} | Client Code: {client_code}",
+    )
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+
+def _withdrawal_statement_pdf_filename(client_code, withdrawal_id):
+    return f"withdrawal-statement-{client_code}-{withdrawal_id}.pdf"
+
+
+@investment_v1.route('/api/v1/investors/<string:client_code>/withdrawals/<int:withdrawal_id>/pdf', methods=['GET'])
+@jwt_required()
+def get_withdrawal_pdf(client_code, withdrawal_id):
+    """Download the Withdrawal Statement & Receipt PDF (see _generate_withdrawal_statement_pdf_bytes)."""
+    try:
+        result = _generate_withdrawal_statement_pdf_bytes(client_code, withdrawal_id)
+        if isinstance(result, tuple):
+            _, status, message = result
+            return make_response(jsonify({"status": status, "message": message}), status)
         return send_file(
-            pdf_buffer,
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name=f"withdrawal-receipt-{client_code}-{w.id}.pdf"
+            result, mimetype='application/pdf', as_attachment=True,
+            download_name=_withdrawal_statement_pdf_filename(client_code, withdrawal_id),
         )
     except Exception as e:
         import traceback
-        print(f"❌ Withdrawal PDF generation error for {client_code}, withdrawal {withdrawal_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.info(f"❌ Withdrawal PDF generation error for {client_code}, withdrawal {withdrawal_id}: {str(e)}")
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4110,8 +4232,7 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
         # Prefer Montserrat to match app UI; fall back if unavailable.
         _register_montserrat_fonts()
         registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-        pdf_body_font = "Montserrat" if "Montserrat" in registered_fonts else "Helvetica"
-        pdf_body_font_bold = "Montserrat-Bold" if "Montserrat-Bold" in registered_fonts else "Helvetica-Bold"
+        pdf_body_font, pdf_body_font_bold = statement_fonts()
 
         # Get all investments for this client in this batch
         investments = db.session.query(Investment).filter(
@@ -4203,13 +4324,13 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
                     ending_standing_from_statement = float(matched_deposit.get("end_balance") or 0)
                     net_deposit_from_statement = float(matched_deposit.get("deposits") or 0)
         except Exception as stmt_err:
-            print(f"⚠️  Could not derive deposit event standings from statements for {client_code}/{batch_id}: {stmt_err}")
+            logger.info(f"⚠️  Could not derive deposit event standings from statements for {client_code}/{batch_id}: {stmt_err}")
         
         theme = get_statement_theme([fund_name])
         jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
 
         pdf_buffer = BytesIO()
-        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5)
+        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5, receipt=True)
         story = []
 
         styles = getSampleStyleSheet()
@@ -4237,14 +4358,14 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
             ['Shares' if is_dangote_dprp_fund([fund_name]) else 'Fund', Paragraph(f': {escape(str(fund_name))}', normal_style), '', ''],
         ]
         
-        receipt_table = Table(receipt_data, colWidths=[1.2 * inch, 1.7 * inch, 1.2 * inch, 3.4 * inch])
+        receipt_table = Table(receipt_data, colWidths=[0.78 * inch, 1.55 * inch, 1.05 * inch, 3.12 * inch])
         receipt_table.setStyle(TableStyle([
             ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
             ('FONTNAME', (0, 0), (-1, -1), pdf_body_font),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (2, 0), (2, -1), 'LEFT'),
             ('ALIGN', (3, 0), (3, -1), 'LEFT'),
@@ -4260,7 +4381,7 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
         amount_table = Table(amount_data, colWidths=[3.5 * inch, 3.5 * inch])
         amount_table.setStyle(highlight_banner_style(theme, pdf_body_font_bold))
         story.append(amount_table)
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(Spacer(1, 0.18 * inch))
 
         # Deposit breakdown (deposit statement): show only initial deposit amount.
         deductions_data = [
@@ -4274,8 +4395,8 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f9f9f9')),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('FONTNAME', (0, 0), (-1, 0), pdf_body_font_bold),
             ('TEXTCOLOR', (1, 0), (1, 0), colors.HexColor('#16a34a')),
             ('FONTNAME', (1, 0), (1, 0), pdf_body_font_bold),
@@ -4350,8 +4471,8 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f5f5f5')),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
         ]))
         # Reconciliation section removed per statement requirements.
@@ -4422,7 +4543,7 @@ def get_deposit_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"❌ Deposit PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4441,8 +4562,7 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
     try:
         _register_montserrat_fonts()
         registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-        pdf_body_font = "Montserrat" if "Montserrat" in registered_fonts else "Helvetica"
-        pdf_body_font_bold = "Montserrat-Bold" if "Montserrat-Bold" in registered_fonts else "Helvetica-Bold"
+        pdf_body_font, pdf_body_font_bold = statement_fonts()
 
         investments = db.session.query(Investment).filter(
             Investment.internal_client_code == client_code,
@@ -4461,8 +4581,8 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
 
         def _fmt_money(amount: float) -> str:
             if currency_code == "KES":
-                return f"KES {amount:,.2f}"
-            return f"USD {amount:,.2f}"
+                return f"KES {amount:,.0f}"
+            return f"USD {amount:,.0f}"
 
         total_initial_deposit = sum(float(inv.amount_deposited or 0) for inv in investments)
         total_transaction_fee = sum(float(inv.transfer_fee_deducted or 0) for inv in investments)
@@ -4483,7 +4603,7 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
         jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
 
         pdf_buffer = BytesIO()
-        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5)
+        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5, receipt=True)
         story = []
         styles = getSampleStyleSheet()
         pdf_styles = build_paragraph_styles(theme, styles, pdf_body_font, pdf_body_font_bold)
@@ -4508,29 +4628,29 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
             ['Client Name', Paragraph(f': {escape(str(investor_name))}', normal_style)],
             ['Shares' if is_dangote_dprp_fund([fund_name]) else 'Fund', Paragraph(f': {escape(str(fund_name))}', normal_style)],
         ]
-        details_table = Table(details_data, colWidths=[1.3 * inch, 6.2 * inch])
+        details_table = Table(details_data, colWidths=[0.72 * inch, 5.78 * inch])
         details_table.setStyle(TableStyle([
             ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
             ('FONTNAME', (0, 0), (-1, -1), pdf_body_font),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ]))
         story.append(Paragraph('Transfer Details', section_heading_style))
         story.append(details_table)
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(Spacer(1, 0.18 * inch))
 
         amount_table = Table([['TRANSFER SUMMARY', _fmt_money(current_net_after_transfer)]], colWidths=[3.5 * inch, 3.5 * inch])
         amount_table.setStyle(highlight_banner_style(theme, pdf_body_font_bold))
         story.append(amount_table)
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(Spacer(1, 0.18 * inch))
 
         transfer_breakdown = [
             ['Initial Deposit Amount', _fmt_money(total_initial_deposit)],
-            ['Transaction Fee Contribution', f'({_fmt_money(total_transaction_fee)})'],
-            ['Entry Fee Contribution', f'({_fmt_money(total_entry_fee)})'],
+            ['Transaction Fee', f'({_fmt_money(total_transaction_fee)})'],
+            ['Entry Fee', f'({_fmt_money(total_entry_fee)})'],
             ['Net After Transaction Fee', _fmt_money(net_after_transaction)],
             ['Current Net After Transfer', _fmt_money(current_net_after_transfer)],
         ]
@@ -4542,8 +4662,8 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f9f9f9')),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('FONTNAME', (0, 0), (-1, 0), pdf_body_font_bold),
             ('FONTNAME', (0, 4), (-1, 4), pdf_body_font_bold),
         ]))
@@ -4557,8 +4677,7 @@ def _generate_transfer_receipt_pdf_bytes(client_code, batch_id):
             pdf_styles,
             'Disclaimer: This is an electronically generated transfer statement. '
             'It confirms transfer processing and fee deductions for this batch.',
-            f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y at %H:%M UTC')} | "
-            f"Batch ID: {batch_id} | Investment ID: {inv_first.id}",
+            f"Generated on: {datetime.now(timezone.utc).strftime('%B %d, %Y at %H:%M UTC')}",
         )
 
         doc.build(story)
@@ -4590,7 +4709,7 @@ def get_transfer_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"Transfer PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4605,8 +4724,7 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
     try:
         _register_montserrat_fonts()
         registered_fonts = set(pdfmetrics.getRegisteredFontNames())
-        pdf_body_font = "Montserrat" if "Montserrat" in registered_fonts else "Helvetica"
-        pdf_body_font_bold = "Montserrat-Bold" if "Montserrat-Bold" in registered_fonts else "Helvetica-Bold"
+        pdf_body_font, pdf_body_font_bold = statement_fonts()
 
         investments = db.session.query(Investment).filter(
             Investment.internal_client_code == client_code,
@@ -4637,9 +4755,8 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
 
         batch = db.session.query(Batch).filter(Batch.id == batch_id).first()
         batch_name = batch.batch_name if batch else "Unknown Batch"
-        deployment_date = datetime.now(timezone.utc)
-        if batch and getattr(batch, "date_deployed", None):
-            deployment_date = batch.date_deployed
+        from app.utils.deployment_date import resolve_client_deployment_date
+        deployment_date = resolve_client_deployment_date(investments, batch) or datetime.now(timezone.utc)
         nav_per_share = float(getattr(inv_first, "previous_nav_price", None) or getattr(batch, "deployment_nav", 0) or 0)
 
         fund_name = inv_first.fund_name or (inv_first.fund.fund_name if inv_first.fund else "Portfolio")
@@ -4650,7 +4767,7 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
         jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
 
         pdf_buffer = BytesIO()
-        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5)
+        doc = build_doc_template(pdf_buffer, theme, top_margin=0.5, bottom_margin=0.5, receipt=True)
         story = []
         styles = getSampleStyleSheet()
         pdf_styles = build_paragraph_styles(theme, styles, pdf_body_font, pdf_body_font_bold)
@@ -4672,24 +4789,24 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
             ['Shares' if is_dprp else 'Fund', Paragraph(f': {escape(str(fund_name))}', normal_style)],
             ['Deployment Date', f': {deployment_date.strftime("%B %d, %Y")}'],
         ]
-        details_table = Table(details_data, colWidths=[1.3 * inch, 6.2 * inch])
+        details_table = Table(details_data, colWidths=[1.3 * inch, 5.2 * inch])
         details_table.setStyle(TableStyle([
             ('FONT', (0, 0), (-1, -1), pdf_body_font, 10),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#333333')),
             ('FONTNAME', (0, 0), (-1, -1), pdf_body_font),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ]))
         story.append(Paragraph('Deployment Details', section_heading_style))
         story.append(details_table)
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(Spacer(1, 0.18 * inch))
 
         amount_table = Table([['DEPLOYMENT SUMMARY', _fmt_money(net_deployed_amount)]], colWidths=[3.5 * inch, 3.5 * inch])
         amount_table.setStyle(highlight_banner_style(theme, pdf_body_font_bold))
         story.append(amount_table)
-        story.append(Spacer(1, 0.25 * inch))
+        story.append(Spacer(1, 0.18 * inch))
 
         deployment_breakdown = [
             ['Original Deposit Amount', _fmt_money(total_initial_deposit)],
@@ -4709,8 +4826,8 @@ def _generate_deployment_receipt_pdf_bytes(client_code, batch_id):
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f9f9f9')),
             ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dddddd')),
             ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
             ('FONTNAME', (0, 0), (-1, 0), pdf_body_font_bold),
             ('FONTNAME', (0, 3), (-1, 3), pdf_body_font_bold),
         ]))
@@ -4758,7 +4875,7 @@ def get_deployment_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"Deployment PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -5468,6 +5585,15 @@ def list_withdrawals():
                 # one-time Oversubscription/Refund Notice has been sent for this
                 # refund yet (see EmailService.send_oversubscription_refund_notices).
                 "oversubscription_notice_sent": bool(getattr(w, "oversubscription_notice_sent_at", None)),
+                # Unit redemption (from the transfer agent's contract note) —
+                # null on a legacy cash-only withdrawal.
+                "shares_redeemed": float(w.shares_redeemed) if w.shares_redeemed is not None else None,
+                "redemption_nav": float(w.redemption_nav) if w.redemption_nav is not None else None,
+                "trade_date": w.trade_date.isoformat() if w.trade_date else None,
+                "settlement_date": w.settlement_date.isoformat() if w.settlement_date else None,
+                "ta_reference": w.ta_reference,
+                "exit_fee": float(w.exit_fee_deducted or 0),
+                "net_amount": float(w.amount or 0),
             }
             for w in rows
         ]
@@ -5479,6 +5605,133 @@ def list_withdrawals():
         }), 200)
     except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/withdrawals/redemption-holdings', methods=['GET'])
+@jwt_required()
+def redemption_holdings():
+    """
+    What a client can redeem: their active NAV-fund holdings grouped by
+    fund + share class, with the shares available. Feeds the "Record
+    redemption" form. Query: client_code (required).
+    """
+    from app.logic.redemption_service import client_lots
+
+    client_code = (request.args.get('client_code') or '').strip()
+    if not client_code:
+        return make_response(jsonify({"status": 400, "message": "client_code is required"}), 400)
+    fund_ids = [
+        fid for (fid,) in db.session.query(Investment.fund_id).filter(
+            func.lower(Investment.internal_client_code) == func.lower(client_code),
+            Investment.fund_id.isnot(None),
+        ).distinct()
+    ]
+    groups = {}
+    for fid in fund_ids:
+        fund = db.session.get(CoreFund, fid)
+        if fund is None or (fund.product_type or FUNDS) != FUNDS:
+            continue
+        for holding, inv in client_lots(db.session, client_code, fid):
+            key = (fid, holding.share_class_id)
+            g = groups.setdefault(key, {
+                "fund_id": fid, "fund_name": fund.fund_name,
+                "share_class_id": holding.share_class_id,
+                "class_code": inv.share_class.class_code if inv.share_class else None,
+                "currency": inv.share_class.currency if inv.share_class else None,
+                "shares_available": 0.0, "lots": 0,
+            })
+            g["shares_available"] = round(g["shares_available"] + float(holding.shares_owned or 0), 6)
+            g["lots"] += 1
+    investor_name = db.session.query(Investment.investor_name).filter(
+        func.lower(Investment.internal_client_code) == func.lower(client_code)
+    ).order_by(Investment.id.desc()).scalar()
+    return make_response(jsonify({
+        "status": 200,
+        "data": {"client_code": client_code, "investor_name": investor_name, "holdings": list(groups.values())},
+    }), 200)
+
+
+@investment_v1.route('/api/v1/withdrawals/redemptions', methods=['POST'])
+@jwt_required()
+def record_redemption():
+    """
+    Record + execute a unit redemption from a transfer agent's contract note
+    (see app/logic/redemption_service.py). Reduces the client's shares.
+
+    Body: client_code, fund_id, shares, nav, trade_date (required);
+          share_class_id (required if the client holds >1 class in the fund),
+          gross_amount (contract-note amount; defaults to shares x nav),
+          exit_fee, settlement_date, ta_reference, note,
+          withdrawal_id (optional: fulfil an existing Pending/Approved request).
+    """
+    from app.logic.redemption_service import RedemptionError, execute_redemption
+
+    data = request.get_json(silent=True) or {}
+    withdrawal = None
+    if data.get('withdrawal_id') is not None:
+        withdrawal = db.session.get(Withdrawal, int(data['withdrawal_id']))
+        if withdrawal is None:
+            return make_response(jsonify({"status": 404, "message": "Withdrawal not found"}), 404)
+    client_code = data.get('client_code') or (withdrawal.internal_client_code if withdrawal else None)
+    fund_id = data.get('fund_id') or (withdrawal.fund_id if withdrawal else None)
+    if not client_code or not fund_id:
+        return make_response(jsonify({"status": 400, "message": "client_code and fund_id are required"}), 400)
+    try:
+        w = execute_redemption(
+            db.session,
+            client_code=client_code,
+            fund_id=int(fund_id),
+            share_class_id=int(data['share_class_id']) if data.get('share_class_id') not in (None, "") else None,
+            shares=data.get('shares'),
+            nav=data.get('nav'),
+            trade_date=data.get('trade_date'),
+            gross_amount=data.get('gross_amount'),
+            exit_fee=data.get('exit_fee') or 0,
+            settlement_date=data.get('settlement_date'),
+            ta_reference=data.get('ta_reference'),
+            note=data.get('note'),
+            withdrawal=withdrawal,
+        )
+    except RedemptionError as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 400, "message": str(e)}), 400)
+    except Exception as e:
+        db.session.rollback()
+        return make_response(jsonify({"status": 500, "message": f"Error recording redemption: {e}"}), 500)
+
+    try:
+        from app.utils.audit_log import create_audit_log
+        create_audit_log(
+            action='WITHDRAWAL_REDEMPTION_EXECUTED',
+            target_type='withdrawal',
+            target_id=w.id,
+            target_name=w.internal_client_code,
+            description=(
+                f"Redeemed {w.shares_redeemed} shares of {w.fund_name} at NAV {w.redemption_nav} "
+                f"(trade {w.trade_date}) = {w.gross_amount}" + (f", TA ref {w.ta_reference}" if w.ta_reference else "")
+            ),
+            new_value={
+                "shares_redeemed": str(w.shares_redeemed), "redemption_nav": str(w.redemption_nav),
+                "gross_amount": str(w.gross_amount), "exit_fee": str(w.exit_fee_deducted), "net_amount": str(w.amount),
+                "lots": [{"investor_shares_id": l.investor_shares_id, "shares": str(l.shares_redeemed)} for l in w.lots],
+            },
+            success=True,
+        )
+    except Exception:
+        pass
+
+    return make_response(jsonify({
+        "status": 201,
+        "message": f"Redemption recorded: {float(w.shares_redeemed):,.3f} shares = {float(w.gross_amount):,.2f}",
+        "data": {
+            "id": w.id, "client_id": w.internal_client_code, "fund_id": w.fund_id, "fund_name": w.fund_name,
+            "share_class_id": w.share_class_id, "shares_redeemed": float(w.shares_redeemed),
+            "redemption_nav": float(w.redemption_nav), "gross_amount": float(w.gross_amount),
+            "exit_fee": float(w.exit_fee_deducted or 0), "net_amount": float(w.amount),
+            "trade_date": w.trade_date.isoformat(), "status": w.status,
+            "lots": [{"investor_shares_id": l.investor_shares_id, "batch_id": l.batch_id, "shares": float(l.shares_redeemed)} for l in w.lots],
+        },
+    }), 201)
 
 
 @investment_v1.route('/api/v1/withdrawals/upload', methods=['POST'])
@@ -5643,6 +5896,7 @@ def upload_withdrawals():
                         w.approved_at = datetime.now(timezone.utc)
 
                     db.session.add(w)
+                    db.session.flush()  # id for the withdrawal notice email (attaches its statement)
                     created += 1
                     
                 # Trigger email if new and we have investor info
@@ -5663,6 +5917,7 @@ def upload_withdrawals():
                             fund_name=fund_name,
                             currency=inv.currency_type or 'USD',
                             trigger_source="withdrawals.upload.big_four_event",
+                            withdrawal_id=w.id,
                         )
 
             except Exception as e:
@@ -5722,7 +5977,7 @@ def update_withdrawal(withdrawal_id: int):
                 # Allowed trigger is withdrawals upload only.
             except Exception as calc_err:
                 # Log but don't fail the approval
-                print(f"⚠️  Warning: Calculation failed for withdrawal {withdrawal_id}: {str(calc_err)}")
+                logger.info(f"⚠️  Warning: Calculation failed for withdrawal {withdrawal_id}: {str(calc_err)}")
                 message = f"Withdrawal approved (calculation warning: {str(calc_err)})"
                 impact = None
         else:
@@ -5751,7 +6006,7 @@ def update_withdrawal(withdrawal_id: int):
                 from app.Batch.controllers import BatchController
                 BatchController.refresh_cached_total_capital_for_batch_ids(affected_batch_ids, db.session)
         except Exception as cache_err:
-            print(f"Warning: Failed to refresh cached batch totals after withdrawal {status.lower()}: {str(cache_err)}")
+            logger.info(f"Warning: Failed to refresh cached batch totals after withdrawal {status.lower()}: {str(cache_err)}")
 
         return make_response(jsonify({
             "status": 200,
@@ -6039,7 +6294,7 @@ def bulk_update_withdrawals():
                 from app.Batch.controllers import BatchController
                 BatchController.refresh_cached_total_capital_for_batch_ids(affected_batch_ids, db.session)
             except Exception as cache_err:
-                print(f"Warning: Failed to refresh cached batch totals after bulk withdrawal action: {str(cache_err)}")
+                logger.info(f"Warning: Failed to refresh cached batch totals after bulk withdrawal action: {str(cache_err)}")
 
         return make_response(jsonify({
             "status": 200,
@@ -6132,7 +6387,7 @@ def _calculate_investor_impact(withdrawal: Withdrawal):
             except Exception:
                 period = ""
 
-        print(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
+        logger.info(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
         return {
             "client_code": client_code,
             "fund_name": withdrawal.fund_name,
@@ -6142,7 +6397,7 @@ def _calculate_investor_impact(withdrawal: Withdrawal):
             "standing_after": float(new_valuation),
         }
 
-    print(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
+    logger.info(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
     return None
 
 
@@ -6277,21 +6532,45 @@ def list_email_inbox():
         search = (request.args.get("search") or "").strip()
         page = max(request.args.get("page", default=1, type=int), 1)
         per_page = min(max(request.args.get("per_page", default=50, type=int), 1), 500)
+        email_type = (request.args.get("email_type") or "").strip()
+        batch_id = request.args.get("batch_id", default=None, type=int)
+
+        def _scoped(q):
+            if email_type:
+                q = q.filter(PendingEmail.email_type == email_type)
+            if batch_id is not None:
+                q = q.filter(PendingEmail.batch_id == batch_id)
+            return q
 
         status_counts_rows = (
-            db.session.query(PendingEmail.status, func.count(PendingEmail.id))
-            .filter(PendingEmail.status.in_(statuses))
+            _scoped(
+                db.session.query(PendingEmail.status, func.count(PendingEmail.id))
+                .filter(PendingEmail.status.in_(statuses))
+            )
             .group_by(PendingEmail.status)
             .all()
         )
         status_counts = {s: c for s, c in status_counts_rows}
         total_count = sum(status_counts.values())
 
+        # How many of each email type are waiting - feeds the type filter so an admin
+        # can see (and approve) one kind at a time instead of everything.
+        type_counts = {
+            t: c for t, c in (
+                db.session.query(PendingEmail.email_type, func.count(PendingEmail.id))
+                .filter(PendingEmail.status.in_(statuses))
+                .group_by(PendingEmail.email_type)
+                .all()
+            )
+        }
+
         data = []
         pagination = None
+        # Exactly what "Confirm All" would approve under the current filters: Pending only.
+        pending_match = status_counts.get("Pending_Confirmation", 0)
         if search:
             like = f"%{search}%"
-            filtered = (
+            filtered = _scoped(
                 db.session.query(PendingEmail)
                 .outerjoin(Investment, PendingEmail.investor_id == Investment.id)
                 .filter(
@@ -6303,6 +6582,7 @@ def list_email_inbox():
                     ),
                 )
             )
+            pending_match = filtered.filter(PendingEmail.status == "Pending_Confirmation").count()
             match_count = filtered.count()
             total_pages = max((match_count + per_page - 1) // per_page, 1)
             page = min(page, total_pages)
@@ -6317,6 +6597,8 @@ def list_email_inbox():
             "status": 200,
             "count": total_count,
             "status_counts": status_counts,
+            "type_counts": type_counts,
+            "pending_match": pending_match,
             "data": data,
             "pagination": pagination,
         }), 200)
@@ -6638,6 +6920,7 @@ def queue_investor_statements_batch():
                 unique_codes.append(code)
 
         queued, skipped, not_found = [], [], []
+        queued_emails = []  # exactly the rows created by THIS request, so the UI can send only these
         for code in unique_codes:
             exists = db.session.query(Investment.id).filter(
                 func.lower(Investment.internal_client_code) == code.lower()
@@ -6662,6 +6945,15 @@ def queue_investor_statements_batch():
                 payload = res.get_json() if hasattr(res, "get_json") else {}
                 if isinstance(payload, dict) and payload.get("status") == 201:
                     queued.append(code)
+                    row = payload.get("data") or {}
+                    if row.get("id") is not None:
+                        queued_emails.append({
+                            "id": row.get("id"),
+                            "client_code": code,
+                            "recipient_name": row.get("recipient_name"),
+                            "recipient_email": row.get("recipient_email"),
+                            "fund_name": row.get("fund_name"),
+                        })
                 else:
                     skipped.append({"client_code": code, "reason": (payload or {}).get("message", "failed to queue")})
             except Exception as e:
@@ -6670,10 +6962,119 @@ def queue_investor_statements_batch():
         return make_response(jsonify({
             "status": 200,
             "message": f"Queued {len(queued)} statement email(s) for admin confirmation",
-            "data": {"queued": queued, "skipped": skipped, "not_found": not_found},
+            "data": {"queued": queued, "skipped": skipped, "not_found": not_found, "emails": queued_emails},
         }), 200)
     except Exception as e:
         logger.error(f"queue_investor_statements_batch error: {str(e)}")
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+# ── Bulk send by statement type (deposit / transfer / deployment / withdrawal / oversubscription) ──
+
+def _bulk_send_args(src):
+    """(kind, fund_id, batch_id) from a query-string or JSON body; raises ValueError on bad input."""
+    kind = str(src.get("kind") or "").strip().lower()
+    def _opt_int(v):
+        return None if v in (None, "", "all") else int(v)
+    return kind, _opt_int(src.get("fund_id")), _opt_int(src.get("batch_id"))
+
+
+@investment_v1.route('/api/v1/emails/bulk-send/preview', methods=['GET'])
+@jwt_required()
+def bulk_send_preview():
+    """Who would get this statement type for the chosen fund/batch, and what state each is in. Sends nothing."""
+    from app.logic import bulk_email_service as bes
+    try:
+        kind, fund_id, batch_id = _bulk_send_args(request.args)
+        include_sent = str(request.args.get("include_sent", "")).lower() in ("1", "true", "yes")
+        data = bes.preview(kind, fund_id, batch_id, include_sent, request.args.get("client_code") or None)
+        return make_response(jsonify({"status": 200, "data": data}), 200)
+    except bes.BulkEmailError as e:
+        return make_response(jsonify({"status": e.http_status, "message": e.message}), e.http_status)
+    except (TypeError, ValueError):
+        return make_response(jsonify({"status": 400, "message": "fund_id and batch_id must be numbers"}), 400)
+    except Exception as e:
+        logger.error(f"bulk_send_preview error: {str(e)}", exc_info=True)
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/emails/bulk-send/sample', methods=['GET'])
+@jwt_required()
+def bulk_send_sample():
+    """The exact email one investor in the selection would receive (subject, text, HTML). Sends nothing."""
+    from app.logic import bulk_email_service as bes
+    try:
+        kind, fund_id, batch_id = _bulk_send_args(request.args)
+        data = bes.sample(kind, fund_id, batch_id, request.args.get("client_code") or "")
+        return make_response(jsonify({"status": 200, "data": data}), 200)
+    except bes.BulkEmailError as e:
+        return make_response(jsonify({"status": e.http_status, "message": e.message}), e.http_status)
+    except (TypeError, ValueError):
+        return make_response(jsonify({"status": 400, "message": "fund_id and batch_id must be numbers"}), 400)
+    except Exception as e:
+        logger.error(f"bulk_send_sample error: {str(e)}", exc_info=True)
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/emails/bulk-send/sample-pdf', methods=['GET'])
+@jwt_required()
+def bulk_send_sample_pdf():
+    """The statement PDF that would be attached for one investor in the selection. Sends nothing."""
+    from app.logic import bulk_email_service as bes
+    try:
+        kind, fund_id, batch_id = _bulk_send_args(request.args)
+        buf, name = bes.sample_pdf(kind, fund_id, batch_id, request.args.get("client_code") or "")
+        return send_file(buf, mimetype="application/pdf", as_attachment=False, download_name=name)
+    except bes.BulkEmailError as e:
+        return make_response(jsonify({"status": e.http_status, "message": e.message}), e.http_status)
+    except (TypeError, ValueError):
+        return make_response(jsonify({"status": 400, "message": "fund_id and batch_id must be numbers"}), 400)
+    except Exception as e:
+        logger.error(f"bulk_send_sample_pdf error: {str(e)}", exc_info=True)
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/emails/bulk-send', methods=['POST'])
+@jwt_required()
+def bulk_send_queue():
+    """
+    Queue exactly the emails shown in the preview for sending (the drip scheduler then sends them).
+    Body: {kind, fund_id?, batch_id?, include_sent?, expected_count}. expected_count must equal the
+    number the server computes now, otherwise nothing is queued (409).
+    Response data.email_ids lets the UI track just these emails.
+    """
+    from app.logic import bulk_email_service as bes
+    try:
+        data = request.get_json(silent=True) or {}
+        kind, fund_id, batch_id = _bulk_send_args(data)
+        include_sent = bool(data.get("include_sent"))
+        expected = data.get("expected_count")
+        result = bes.queue(kind, fund_id, batch_id, include_sent, None if expected is None else int(expected), data.get("client_code") or None)
+        return make_response(jsonify({"status": 200, "message": f"{len(result['email_ids'])} email(s) queued for sending", "data": result}), 200)
+    except bes.BulkEmailError as e:
+        return make_response(jsonify({"status": e.http_status, "message": e.message}), e.http_status)
+    except (TypeError, ValueError):
+        return make_response(jsonify({"status": 400, "message": "fund_id, batch_id and expected_count must be numbers"}), 400)
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"bulk_send_queue error: {str(e)}", exc_info=True)
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
+
+
+@investment_v1.route('/api/v1/emails/status-counts', methods=['POST'])
+@jwt_required()
+def email_status_counts():
+    """Status breakdown for a specific list of email ids (progress of one send). Body: {"ids": [...]}"""
+    from app.logic import bulk_email_service as bes
+    try:
+        ids = (request.get_json(silent=True) or {}).get("ids")
+        if not isinstance(ids, list):
+            return make_response(jsonify({"status": 400, "message": "ids (list) is required"}), 400)
+        ids = [int(i) for i in ids][:20000]
+        return make_response(jsonify({"status": 200, "data": {"total": len(ids), "counts": bes.status_counts(ids)}}), 200)
+    except (TypeError, ValueError):
+        return make_response(jsonify({"status": 400, "message": "ids must be integers"}), 400)
+    except Exception as e:
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -6739,6 +7140,15 @@ def start_statements_download_batch():
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
+@investment_v1.route('/api/v1/emails/statements/downloads', methods=['GET'])
+@jwt_required()
+def list_statement_downloads():
+    """Recent statement/transfer-statement zip jobs (kept 24h) so a finished zip can be downloaded again."""
+    from app.utils import bulk_statements
+
+    return make_response(jsonify({"status": 200, "data": bulk_statements.list_jobs(10)}), 200)
+
+
 @investment_v1.route('/api/v1/emails/statements/download-batch/<job_id>', methods=['GET'])
 @jwt_required()
 def get_statements_download_status(job_id):
@@ -6765,8 +7175,107 @@ def download_statements_zip(job_id):
     path = bulk_statements.zip_path(job_id)
     if status.get("state") != "completed" or not path or not os.path.exists(path):
         return make_response(jsonify({"status": 409, "message": "The statements are not ready yet"}), 409)
-    name = f"Statements - {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip"
+    name = f"{status.get('label') or 'Statements'} - {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.zip"
     return send_file(path, mimetype='application/zip', as_attachment=True, download_name=name)
+
+
+@investment_v1.route('/api/v1/emails/transfer-statements/download-batch', methods=['POST'])
+@jwt_required()
+def start_transfer_statements_download_batch():
+    """
+    Build the Transfer Statement & Confirmation PDF of every investor in the chosen
+    batches/funds and return ONE zip (a folder per batch, plus summary.csv).
+    Needs only Stage 2 (transferred) - it works before deployment. Nothing is emailed.
+
+    Body: {"batch_ids": [..] and/or "fund_ids": [..],
+           "stage": "undeployed" (default: transferred, not yet deployed) | "all" (any transferred batch)}
+    Response 202: {"data": {"job_id", "total"}}. Poll and download with the same
+    GET /api/v1/emails/statements/download-batch/<job_id>[/file] routes.
+    """
+    import csv
+    import io
+    from app.utils import bulk_statements
+
+    try:
+        data = request.get_json(silent=True) or {}
+        try:
+            batch_ids = [int(b) for b in (data.get('batch_ids') or [])]
+            fund_ids = [int(f) for f in (data.get('fund_ids') or [])]
+        except (TypeError, ValueError):
+            return make_response(jsonify({"status": 400, "message": "batch_ids and fund_ids must be lists of integers"}), 400)
+        if not batch_ids and not fund_ids:
+            return make_response(jsonify({"status": 400, "message": "Choose at least one batch or fund"}), 400)
+        stage = str(data.get('stage') or 'undeployed').lower()
+        if stage not in ('undeployed', 'all'):
+            return make_response(jsonify({"status": 400, "message": "stage must be 'undeployed' or 'all'"}), 400)
+
+        q = (
+            db.session.query(Investment, Batch)
+            .join(Batch, Batch.id == Investment.batch_id)
+            .filter(Batch.is_transferred.is_(True))
+        )
+        if stage == 'undeployed':
+            q = q.filter(func.coalesce(Batch.deployment_confirmed, False).is_(False))
+        if batch_ids:
+            q = q.filter(Batch.id.in_(batch_ids))
+        if fund_ids:
+            q = q.filter(Investment.fund_id.in_(fund_ids))
+        rows = q.order_by(Batch.id.asc(), Investment.investor_name.asc(), Investment.id.asc()).all()
+
+        # One PDF per client per batch (the PDF already sums a client's investments in that batch).
+        targets, summary = {}, {}
+        for inv, batch in rows:
+            key = f"{inv.internal_client_code}::{batch.id}"
+            targets.setdefault(key, (inv.internal_client_code, batch.id, inv.investor_name or inv.internal_client_code, batch.batch_name))
+            agg = summary.setdefault(key, {
+                "client_code": inv.internal_client_code, "investor": inv.investor_name or "",
+                "batch": batch.batch_name, "fund": inv.fund_name or "",
+                "currency": (inv.currency_type or "").upper() if inv.currency_type else "",
+                "deposited": 0.0, "transfer_fee": 0.0, "net_principal": 0.0,
+                "transfer_date": batch.date_transferred.strftime("%Y-%m-%d") if getattr(batch, "date_transferred", None) else "",
+                "deployed": "Yes" if batch.deployment_confirmed else "No",
+            })
+            agg["deposited"] += float(inv.amount_deposited or 0)
+            agg["transfer_fee"] += float(inv.transfer_fee_deducted or 0)
+            agg["net_principal"] += float(inv.net_principal or 0)
+
+        if not targets:
+            return make_response(jsonify({"status": 404, "message": "No transferred investors found for that selection"}), 404)
+        if len(targets) > bulk_statements.MAX_CLIENTS:
+            return make_response(jsonify({
+                "status": 400,
+                "message": f"Too many statements ({len(targets)}); the limit is {bulk_statements.MAX_CLIENTS} per download",
+            }), 400)
+
+        def _build(key):
+            code, bid, _n, _b = targets[key]
+            return _generate_transfer_receipt_pdf_bytes(code, bid)
+
+        def _filename(key):
+            _code, bid, investor, batch_name = targets[key]
+            return f"{batch_name} (batch {bid})/{investor} - Transfer Statement.pdf"
+
+        def _summary_csv():
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["Client code", "Investor", "Batch", "Fund", "Currency", "Amount deposited",
+                        "Transfer fee", "Net after transfer", "Transfer date", "Deployed"])
+            for a in summary.values():
+                w.writerow([a["client_code"], a["investor"], a["batch"], a["fund"], a["currency"],
+                            f"{a['deposited']:.2f}", f"{a['transfer_fee']:.2f}", f"{a['net_principal']:.2f}",
+                            a["transfer_date"], a["deployed"]])
+            return {"summary.csv": buf.getvalue().encode("utf-8-sig")}
+
+        job_id = bulk_statements.start_job(
+            current_app._get_current_object(), list(targets.keys()),
+            build_pdf=_build, filename_for=_filename,
+            label="Transfer Statements", extra_files=_summary_csv,
+        )
+        return make_response(jsonify({"status": 202, "message": f"Building {len(targets)} transfer statement(s)",
+                                      "data": {"job_id": job_id, "total": len(targets)}}), 202)
+    except Exception as e:
+        logger.error(f"start_transfer_statements_download_batch error: {str(e)}")
+        return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
 def _send_pending_email_now(email_id):
@@ -6900,6 +7409,19 @@ def _send_pending_email_now(email_id):
                         f"Transfer statement attachment skipped for pending email {email_id}: "
                         f"missing investor/client_code or batch_id"
                     )
+            elif pending.email_type in ("WITHDRAWAL_RECEIVED", "WITHDRAWAL_APPROVED"):
+                wd = db.session.get(Withdrawal, pending.withdrawal_id) if getattr(pending, "withdrawal_id", None) else None
+                if wd is not None:
+                    try:
+                        _attach_pdf_buffer(
+                            _generate_withdrawal_statement_pdf_bytes(wd.internal_client_code, wd.id),
+                            filename=_withdrawal_statement_pdf_filename(wd.internal_client_code, wd.id),
+                            warn_prefix="Withdrawal statement attachment skipped",
+                        )
+                    except Exception as attach_err:
+                        logger.warning(f"Could not attach withdrawal statement PDF for pending email {email_id}: {attach_err}")
+                else:
+                    logger.warning(f"Withdrawal statement attachment skipped for pending email {email_id}: no withdrawal linked")
             elif pending.email_type in ("INVESTMENT_ACTIVE", "INVESTMENT_ACTIVE_OVERSUBSCRIBED"):
                 # INVESTMENT_ACTIVE_OVERSUBSCRIBED is a legacy variant no longer produced
                 # (oversubscription info moved to its own OVERSUBSCRIPTION_REFUND_NOTICE
@@ -7086,57 +7608,67 @@ def confirm_pending_emails_batch():
 @jwt_required()
 def confirm_all_pending_emails():
     """
-    Confirm (queue) every resendable email — Pending_Confirmation / Suppressed
-    / Failed — optionally scoped to the same `search` filter list_email_inbox
-    uses (client code, recipient email, or phone). This is the "Confirm All"
-    for the inbox specifically, where the count can be in the tens of
-    thousands (e.g. after a large bulk upload) and there's no realistic way
-    to hand the frontend an id list first — confirm_pending_emails_batch
+    Confirm (queue) every PENDING email (status Pending_Confirmation only),
+    optionally scoped by `email_type`, `batch_id` and/or the same `search` filter
+    list_email_inbox uses (client code, recipient email, or phone). This is the
+    "Confirm All" for the inbox specifically, where the count can be in the
+    tens of thousands (e.g. after a large bulk upload) and there's no realistic
+    way to hand the frontend an id list first — confirm_pending_emails_batch
     above (ids-based) is for a bounded, already-known set instead (e.g.
     EmailConfirmationModal, right after one action creates a few dozen).
 
-    Runs as a single UPDATE, no per-row Python loop and no id list ever
-    built for the "confirm literally everything" case — only the search-
-    scoped case resolves ids first (cheap: a search always narrows things
-    down a lot).
+    Body: { "search"?: string, "email_type"?: string, "batch_id"?: int, "expected_count": int }
 
-    Body: { "search"?: string }
+    expected_count is REQUIRED: the number the admin saw and typed to confirm. If
+    the server counts a different number of matching emails now, nothing is queued
+    (409). This is what stops a stray click from approving every pending email.
     """
     try:
         from app.Investments.model import PendingEmail
         data = request.get_json(silent=True) or {}
         search = (data.get("search") or "").strip()
-        resendable = ('Pending_Confirmation', 'Suppressed', 'Failed')
+        email_type = (data.get("email_type") or "").strip()
+        try:
+            batch_id = int(data["batch_id"]) if data.get("batch_id") not in (None, "", "all") else None
+            expected = int(data["expected_count"])
+        except (KeyError, TypeError, ValueError):
+            return make_response(jsonify({"status": 400, "message": "expected_count (the number you are confirming) is required"}), 400)
+        # Pending only. Suppressed (deliberately held back) and Failed emails are NOT
+        # swept up here - they used to be, which re-sent emails the admin had suppressed.
+        # Those are re-approved one at a time, or by id list (confirm-batch).
+        resendable = ('Pending_Confirmation',)
         now = datetime.now(timezone.utc)
 
+        ids_q = (
+            db.session.query(PendingEmail.id)
+            .outerjoin(Investment, PendingEmail.investor_id == Investment.id)
+            .filter(PendingEmail.status.in_(resendable))
+        )
+        if email_type:
+            ids_q = ids_q.filter(PendingEmail.email_type == email_type)
+        if batch_id is not None:
+            ids_q = ids_q.filter(PendingEmail.batch_id == batch_id)
         if search:
             like = f"%{search}%"
-            matching_ids = [
-                pid for (pid,) in (
-                    db.session.query(PendingEmail.id)
-                    .outerjoin(Investment, PendingEmail.investor_id == Investment.id)
-                    .filter(
-                        PendingEmail.status.in_(resendable),
-                        or_(
-                            PendingEmail.recipient_email.ilike(like),
-                            Investment.internal_client_code.ilike(like),
-                            Investment.investor_phone.ilike(like),
-                        ),
-                    )
-                    .all()
-                )
-            ]
-            if not matching_ids:
-                return make_response(jsonify({"status": 200, "message": "No matching emails to confirm", "data": {"queued": 0}}), 200)
-            queued = (
+            ids_q = ids_q.filter(or_(
+                PendingEmail.recipient_email.ilike(like),
+                Investment.internal_client_code.ilike(like),
+                Investment.investor_phone.ilike(like),
+            ))
+        matching_ids = [pid for (pid,) in ids_q.all()]
+
+        if len(matching_ids) != expected:
+            return make_response(jsonify({
+                "status": 409,
+                "message": f"{len(matching_ids)} email(s) match now, but you confirmed {expected}. Nothing was queued - reload and try again.",
+            }), 409)
+        if not matching_ids:
+            return make_response(jsonify({"status": 200, "message": "No matching emails to confirm", "data": {"queued": 0}}), 200)
+        queued = 0
+        for start in range(0, len(matching_ids), 5000):
+            queued += (
                 db.session.query(PendingEmail)
-                .filter(PendingEmail.id.in_(matching_ids))
-                .update({"status": "Queued", "queued_at": now}, synchronize_session=False)
-            )
-        else:
-            queued = (
-                db.session.query(PendingEmail)
-                .filter(PendingEmail.status.in_(resendable))
+                .filter(PendingEmail.id.in_(matching_ids[start:start + 5000]), PendingEmail.status.in_(resendable))
                 .update({"status": "Queued", "queued_at": now}, synchronize_session=False)
             )
 
@@ -7165,32 +7697,34 @@ def suppress_all_pending_emails():
     literally everything" case. Already-Suppressed/Confirmed/Failed rows are
     left untouched (matches cancel_pending_email's single-row guard).
 
-    Body: { "search"?: string }
+    Body: { "search"?: string, "email_type"?: string } - email_type scopes it to one
+    kind of email, matching the type filter on the Inbox tab.
     """
     try:
         from app.Investments.model import PendingEmail
         data = request.get_json(silent=True) or {}
         search = (data.get("search") or "").strip()
+        email_type = (data.get("email_type") or "").strip()
         suppressable = ('Pending_Confirmation', 'Queued')
         now = datetime.now(timezone.utc)
 
         if search:
             like = f"%{search}%"
-            matching_ids = [
-                pid for (pid,) in (
-                    db.session.query(PendingEmail.id)
-                    .outerjoin(Investment, PendingEmail.investor_id == Investment.id)
-                    .filter(
-                        PendingEmail.status.in_(suppressable),
-                        or_(
-                            PendingEmail.recipient_email.ilike(like),
-                            Investment.internal_client_code.ilike(like),
-                            Investment.investor_phone.ilike(like),
-                        ),
-                    )
-                    .all()
+            id_q = (
+                db.session.query(PendingEmail.id)
+                .outerjoin(Investment, PendingEmail.investor_id == Investment.id)
+                .filter(
+                    PendingEmail.status.in_(suppressable),
+                    or_(
+                        PendingEmail.recipient_email.ilike(like),
+                        Investment.internal_client_code.ilike(like),
+                        Investment.investor_phone.ilike(like),
+                    ),
                 )
-            ]
+            )
+            if email_type:
+                id_q = id_q.filter(PendingEmail.email_type == email_type)
+            matching_ids = [pid for (pid,) in id_q.all()]
             if not matching_ids:
                 return make_response(jsonify({"status": 200, "message": "No matching emails to suppress", "data": {"suppressed": 0}}), 200)
             suppressed = (
@@ -7199,11 +7733,10 @@ def suppress_all_pending_emails():
                 .update({"status": "Suppressed", "processed_at": now}, synchronize_session=False)
             )
         else:
-            suppressed = (
-                db.session.query(PendingEmail)
-                .filter(PendingEmail.status.in_(suppressable))
-                .update({"status": "Suppressed", "processed_at": now}, synchronize_session=False)
-            )
+            q = db.session.query(PendingEmail).filter(PendingEmail.status.in_(suppressable))
+            if email_type:
+                q = q.filter(PendingEmail.email_type == email_type)
+            suppressed = q.update({"status": "Suppressed", "processed_at": now}, synchronize_session=False)
 
         db.session.commit()
         logger.info(f"Suppress-all: suppressed {suppressed} email(s) (search={search!r})")
@@ -7446,7 +7979,7 @@ def get_recent_transactions():
     
     except Exception as e:
         import traceback
-        print(f"ERROR in get_recent_transactions: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_recent_transactions: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -7565,6 +8098,8 @@ def get_investor_overview(client_code):
                         Withdrawal.fund_id == inv.fund_id,
                         Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
                         Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                        # Unit redemptions already reduced this holding's shares and snapshots.
+                        Withdrawal.shares_redeemed.is_(None),
                     ).scalar()
                     try:
                         wd_sum_val = float(Decimal(str(wd_sum or 0)).quantize(Decimal("0.01")))
@@ -7659,7 +8194,7 @@ def get_investor_overview(client_code):
     
     except Exception as e:
         import traceback
-        print(f"ERROR in get_investor_overview: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_investor_overview: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -7731,7 +8266,7 @@ def get_reconciliation_review():
 
     except Exception as e:
         import traceback
-        print(f"ERROR in get_reconciliation_review: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_reconciliation_review: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -7780,7 +8315,7 @@ def update_reconciliation_value(investment_id):
     except Exception as e:
         db.session.rollback()
         import traceback
-        print(f"ERROR in update_reconciliation_value: {traceback.format_exc()}")
+        logger.info(f"ERROR in update_reconciliation_value: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -7822,5 +8357,5 @@ def verify_reconciliation(investment_id):
 
     except Exception as e:
         import traceback
-        print(f"ERROR in verify_reconciliation: {traceback.format_exc()}")
+        logger.info(f"ERROR in verify_reconciliation: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)

@@ -165,8 +165,8 @@ export function Sidebar() {
         >
           <div style={{ position: "relative", height: "36px", width: "auto", display: "flex", alignItems: "center" }}>
             <img
-              alt="AXYS Investment Bank"
-              src="/axys-logo.webp"
+              alt="OFSD"
+              src="/brand-logo.svg"
               style={{
                 height: "34px",
                 width: "auto",
@@ -180,8 +180,8 @@ export function Sidebar() {
               }}
             />
             <img
-              alt="AXYS Investment Bank"
-              src="/axys-emblem.webp"
+              alt="OFSD"
+              src="/brand-emblem.svg"
               style={{
                 height: "34px",
                 width: "34px",

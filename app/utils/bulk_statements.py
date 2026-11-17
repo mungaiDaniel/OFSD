@@ -34,15 +34,49 @@ def job_dir(job_id: str):
     return os.path.join(ROOT, job_id)
 
 
+STALE_SECONDS = 180  # a running job rewrites status.json after every client
+
+
 def read_status(job_id: str):
     d = job_dir(job_id)
     if d is None:
         return None
+    path = os.path.join(d, "status.json")
     try:
-        with open(os.path.join(d, "status.json"), encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            status = json.load(f)
+        # The job's thread dies with the server process (restart/deploy). A "running"
+        # job whose status file has stopped changing was cut off, so say so instead of
+        # showing it as running forever.
+        if status.get("state") == "running" and time.time() - os.path.getmtime(path) > STALE_SECONDS:
+            status["state"] = "interrupted"
+        return status
     except (OSError, ValueError):
         return None
+
+
+def list_jobs(limit: int = 10):
+    """Recent jobs, newest first: [{job_id, label, state, total, done, failed_count, created_at, ready}]."""
+    if not os.path.isdir(ROOT):
+        return []
+    jobs = []
+    for name in os.listdir(ROOT):
+        status = read_status(name)
+        if status is None:
+            continue
+        zp = zip_path(name)
+        jobs.append({
+            "job_id": name,
+            "label": status.get("label") or "Statements",
+            "state": status.get("state"),
+            "total": status.get("total"),
+            "done": status.get("done"),
+            "failed_count": len(status.get("failed") or []),
+            "created_at": status.get("created_at"),
+            "ready": status.get("state") == "completed" and bool(zp) and os.path.exists(zp),
+        })
+    jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
+    return jobs[:limit]
 
 
 def zip_path(job_id: str):
@@ -79,7 +113,9 @@ def cleanup_old_jobs():
 
 
 def _unique_name(name: str, code: str, used: set) -> str:
-    name = _ILLEGAL.sub(" ", name).strip() or f"{code} - Statement.pdf"
+    # "Folder/File.pdf" keeps its one folder level; every part is cleaned separately.
+    parts = [_ILLEGAL.sub(" ", p).strip() for p in str(name).replace("\\", "/").split("/")]
+    name = "/".join(p for p in parts if p) or f"{code} - Statement.pdf"
     if name.lower() in used:
         stem, dot, ext = name.rpartition(".")
         name = f"{stem} ({code}).{ext}" if dot else f"{name} ({code})"
@@ -87,12 +123,13 @@ def _unique_name(name: str, code: str, used: set) -> str:
     return name
 
 
-def start_job(app, client_codes, build_pdf, filename_for, label=""):
+def start_job(app, client_codes, build_pdf, filename_for, label="", extra_files=None):
     """
     Start the background job and return its id.
 
     build_pdf(client_code)    -> BytesIO | ("error", status, message) | None
-    filename_for(client_code) -> the PDF's file name inside the zip
+    filename_for(client_code) -> the PDF's file name inside the zip ("Folder/Name.pdf" allowed)
+    extra_files()             -> optional {zip name: bytes} added at the end (e.g. a summary.csv)
     """
     os.makedirs(ROOT, exist_ok=True)
     cleanup_old_jobs()
@@ -102,12 +139,12 @@ def start_job(app, client_codes, build_pdf, filename_for, label=""):
     _write_status(d, state="running", total=len(client_codes), done=0, failed=[], label=label,
                   created_at=time.time())
     threading.Thread(
-        target=_run, args=(app, job_id, list(client_codes), build_pdf, filename_for), daemon=True
+        target=_run, args=(app, job_id, list(client_codes), build_pdf, filename_for, extra_files), daemon=True
     ).start()
     return job_id
 
 
-def _run(app, job_id, client_codes, build_pdf, filename_for):
+def _run(app, job_id, client_codes, build_pdf, filename_for, extra_files=None):
     d = job_dir(job_id)
     part = os.path.join(d, "statements.zip.part")
     failed = []
@@ -129,6 +166,12 @@ def _run(app, job_id, client_codes, build_pdf, filename_for):
                         db.session.rollback()
                         failed.append({"client_code": code, "reason": str(e)[:200]})
                     _write_status(d, done=i, failed=failed)
+                if extra_files:
+                    try:
+                        for extra_name, extra_bytes in (extra_files() or {}).items():
+                            zf.writestr(extra_name, extra_bytes)
+                    except Exception:  # a broken summary must not lose the PDFs
+                        pass
                 if failed:
                     zf.writestr(
                         "_FAILED.txt",

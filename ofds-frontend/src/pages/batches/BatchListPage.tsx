@@ -438,7 +438,7 @@ export default function BatchListPage({
             {product && <ProductBadge product={product} />}
           </div>
           <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            {description ?? `${batches.length} batch${batches.length !== 1 ? "es" : ""} — Weekly investment groups sent to AXYS`}
+            {description ?? `${batches.length} batch${batches.length !== 1 ? "es" : ""} — Weekly investment groups sent to the fund administrator`}
           </p>
         </div>
 

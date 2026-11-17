@@ -24,6 +24,9 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, func
 from base_model import Base
 import json
 from typing import Any, Optional, Callable
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AuditLog(Base, db.Model):
@@ -205,7 +208,7 @@ def create_audit_log(
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        print(f"Failed to create audit log: {str(e)}")
+        logger.info(f"Failed to create audit log: {str(e)}")
     
     return log
 

@@ -1,43 +1,21 @@
-# Dockerfile for Flask Backend
-# Production-ready with Gunicorn WSGI server
+FROM python:3.12-slim
 
-FROM python:3.11-slim
-
-# Set working directory
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1 APP_ENV=production
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    postgresql-client \
-    gcc \
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir gunicorn
-
-# Copy application
 COPY . .
-
-# Create logs directory
-RUN mkdir -p /var/log/ofds && chmod 755 /var/log/ofds
-
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /var/log/ofds
-
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/api/v1/health')" || exit 1
-
-# Expose port
 EXPOSE 5000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request as u; u.urlopen('http://localhost:5000/api/v1/health')" || exit 1
 
-# Run Gunicorn (production WSGI server)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "60", "--access-logfile", "-", "--error-logfile", "-", "main:app"]
+# One worker: APScheduler runs in-process, so extra workers would double-run jobs.
+CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "60", "--access-logfile", "-"]

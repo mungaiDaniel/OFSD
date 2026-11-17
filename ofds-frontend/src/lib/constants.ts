@@ -152,6 +152,13 @@ export const API = {
   EMAIL_QUEUE_STATUS: "/emails/queue-status",
   EMAIL_STATEMENTS_QUEUE_BATCH: "/emails/statements/queue-batch",
   EMAIL_STATEMENTS_DOWNLOAD_BATCH: "/emails/statements/download-batch",
+  EMAIL_STATEMENT_DOWNLOADS: "/emails/statements/downloads",
+  EMAIL_TRANSFER_STATEMENTS_DOWNLOAD: "/emails/transfer-statements/download-batch",
+  EMAIL_BULK_SEND_PREVIEW: "/emails/bulk-send/preview",
+  EMAIL_BULK_SEND: "/emails/bulk-send",
+  EMAIL_BULK_SEND_SAMPLE: "/emails/bulk-send/sample",
+  EMAIL_BULK_SEND_SAMPLE_PDF: "/emails/bulk-send/sample-pdf",
+  EMAIL_STATUS_COUNTS: "/emails/status-counts",
 
   // Funds
   FUNDS: "/funds",

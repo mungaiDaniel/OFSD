@@ -1,5 +1,7 @@
 import axios from "axios";
 import { getAccessToken, clearTokens } from "@/lib/auth";
+import { DEMO_MODE } from "@/demo/config";
+import { demoAdapter } from "@/demo/adapter";
 
 // ============================================================================
 // Axios Instance — single source for all API calls
@@ -15,6 +17,8 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  // Demo mode: answer every request from the in-memory mock instead of the network.
+  ...(DEMO_MODE ? { adapter: demoAdapter } : {}),
 });
 
 // ── Request Interceptor: inject JWT ──

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { batchService } from "@/services/batchService";
 import { reportService } from "@/services/reportService";
 import { investmentService } from "@/services/investmentService";
+import { emailService } from "@/services/emailService";
 import { ROUTES, STAGE_LABELS } from "@/lib/constants";
 import type { Batch, BatchStage } from "@/lib/types";
 import { toast } from "sonner";
@@ -179,6 +180,7 @@ export default function BatchDetailPage() {
   const allBatchRowsPageRef = useRef(1);
   const allBatchRowsFetchingRef = useRef(false);
   const [exportingBatch, setExportingBatch] = useState(false);
+  const [downloadingTransfers, setDownloadingTransfers] = useState(false);
   // Delete-investor (Show all view only, super_admin only — see isSuperAdmin below).
   const [deletingInvestmentId, setDeletingInvestmentId] = useState<number | null>(null);
   // Full per-investor list (cheap fields only) fetched on-demand right before
@@ -937,6 +939,32 @@ export default function BatchDetailPage() {
             >
               <Download size={13} /> {exportingBatch ? "Exporting…" : "Export to Excel"}
             </button>
+            {batch.is_transferred && (
+              <button
+                onClick={async () => {
+                  setDownloadingTransfers(true);
+                  try {
+                    const { total, failed } = await emailService.downloadTransferStatementsZip({ batchIds: [batchId], stage: "all" });
+                    if (failed.length > 0) toast.warning(`Downloaded ${total - failed.length} of ${total} transfer statements — ${failed.length} failed (see _FAILED.txt)`);
+                    else toast.success(`Downloaded ${total} transfer statement${total === 1 ? "" : "s"}`);
+                  } catch (err: any) {
+                    toast.error(err?.response?.data?.message || err?.message || "Failed to download transfer statements");
+                  } finally {
+                    setDownloadingTransfers(false);
+                  }
+                }}
+                disabled={downloadingTransfers}
+                title="Download every investor's transfer statement in this batch as one zip"
+                style={{
+                  display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "8px",
+                  background: "transparent", border: "1px solid rgba(255, 255, 255, 0.1)",
+                  color: "var(--color-text-secondary)", fontSize: "12px", fontWeight: 500,
+                  cursor: downloadingTransfers ? "not-allowed" : "pointer", opacity: downloadingTransfers ? 0.6 : 1, whiteSpace: "nowrap",
+                }}
+              >
+                <Download size={13} /> {downloadingTransfers ? "Building…" : "Transfer statements"}
+              </button>
+            )}
             <button
               onClick={() => navigate(ROUTES.BATCH_PERFORMANCE(batchId))}
               style={{ fontSize: "11px", fontWeight: 500, color: "var(--color-brand-400)", background: "none", border: "none", cursor: "pointer", padding: 0, whiteSpace: "nowrap" }}

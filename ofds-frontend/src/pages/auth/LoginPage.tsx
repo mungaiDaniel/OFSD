@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/context/AuthContext";
 import { ROUTES } from "@/lib/constants";
+import { DEMO_MODE, DEMO_USER } from "@/demo/config";
 
 const loginSchema = z.object({
   email: z.string().email("Valid email is required"),
@@ -90,8 +91,8 @@ export default function LoginPage() {
         {/* Logo */}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
           <img
-            src="/axys-logo.webp"
-            alt="AXYS Investment Bank"
+            src="/brand-logo.svg"
+            alt="OFSD"
             style={{ height: "48px", objectFit: "contain" }}
           />
         </div>
@@ -215,6 +216,30 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
+
+        {DEMO_MODE && (
+          <button
+            type="button"
+            onClick={async () => {
+              clearError();
+              if (await login(DEMO_USER.email, "demo-password")) navigate(from, { replace: true });
+            }}
+            style={{
+              width: "100%",
+              marginTop: "12px",
+              padding: "10px 14px",
+              borderRadius: "8px",
+              border: "1px solid rgba(96, 165, 250, 0.5)",
+              background: "rgba(96, 165, 250, 0.12)",
+              color: "rgb(147, 197, 253)",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Try Demo
+          </button>
+        )}
 
         {/* Register link */}
         <p

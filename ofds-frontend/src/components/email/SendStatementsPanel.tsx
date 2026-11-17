@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Download, FileText, Loader2, Send } from "lucide-react";
+import { Download, FileText, Loader2, RefreshCw, Send } from "lucide-react";
 import { fundService } from "@/services/fundService";
 import { reportService } from "@/services/reportService";
-import { emailService } from "@/services/emailService";
+import { emailService, type BulkKind, type QueuedStatementEmail, type StatementDownloadJob } from "@/services/emailService";
 import type { EligibleInvestor, FundSummaryItem } from "@/lib/types";
+import BulkTypeSendPanel, { KIND_LABEL } from "./BulkTypeSendPanel";
+import SendConfirmModal from "./SendConfirmModal";
+import { btn, inputStyle, selectStyle } from "./emailStyles";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SEND STATEMENTS — Email page tab.
@@ -23,38 +26,10 @@ function getDefaultPeriod(): string {
   return d.toISOString().slice(0, 7);
 }
 
-const inputStyle: React.CSSProperties = {
-  background: "rgba(0,0,0,0.25)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: "8px",
-  color: "var(--color-text-primary)",
-  fontSize: "12px",
-  padding: "8px 10px",
-  outline: "none",
-};
-
-const selectStyle: React.CSSProperties = {
-  ...inputStyle,
-  cursor: "pointer",
-  appearance: "none",
-  paddingRight: "28px",
-  background: `rgba(0,0,0,0.25) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 5L6 8L9 5' stroke='%2394A3B8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center`,
-};
-
-const btn = (disabled: boolean, variant: "primary" | "ghost" = "ghost"): React.CSSProperties => ({
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "6px",
-  padding: "8px 14px",
-  borderRadius: "8px",
-  fontSize: "12px",
-  fontWeight: 600,
-  cursor: disabled ? "not-allowed" : "pointer",
-  opacity: disabled ? 0.6 : 1,
-  border: variant === "primary" ? "none" : "1px solid rgba(255,255,255,0.1)",
-  background: variant === "primary" ? "rgb(26, 69, 255)" : "rgba(255,255,255,0.05)",
-  color: variant === "primary" ? "#fff" : "var(--color-text-secondary)",
-});
+const TYPE_OPTIONS: { value: "overall" | BulkKind; label: string }[] = [
+  { value: "overall", label: "Overall statement (whole portfolio)" },
+  ...(Object.keys(KIND_LABEL) as BulkKind[]).map((k) => ({ value: k, label: KIND_LABEL[k] })),
+];
 
 function EmailStatusBadge({ status }: { status: EligibleInvestor["email_status"] }) {
   const cfg = {
@@ -81,10 +56,32 @@ export default function SendStatementsPanel() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [queuing, setQueuing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [recent, setRecent] = useState<StatementDownloadJob[]>([]);
+  const [savingJobId, setSavingJobId] = useState<string | null>(null);
+  const [transferStage, setTransferStage] = useState<"undeployed" | "all">("undeployed");
+  const [transferDownloading, setTransferDownloading] = useState(false);
+  const [transferProgress, setTransferProgress] = useState<{ done: number; total: number } | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [statementType, setStatementType] = useState<"overall" | BulkKind>("overall");
+  // Emails created by the last "Queue" click. Only these may be sent from the dialog that follows.
+  const [justQueued, setJustQueued] = useState<QueuedStatementEmail[] | null>(null);
+  const [sendingQueued, setSendingQueued] = useState(false);
+  const [rate, setRate] = useState<{ batch_size: number; interval_minutes: number } | null>(null);
 
   useEffect(() => {
-    fundService.getSummary().then((s) => { if (s) setFunds(s.funds); }).catch(() => {});
+    // Funds AND Shares are separate products: getSummary() alone returns only Funds, which
+    // is why share funds (e.g. Dangote) were missing from every fund dropdown on this tab.
+    Promise.all([
+      fundService.getSummary("FUNDS").catch(() => null),
+      fundService.getSummary("SHARES").catch(() => null),
+    ]).then(([fundsSummary, sharesSummary]) => {
+      const merged = [
+        ...(fundsSummary?.funds ?? []).map((f) => ({ ...f, product_type: f.product_type ?? ("FUNDS" as const) })),
+        ...(sharesSummary?.funds ?? []).map((f) => ({ ...f, product_type: f.product_type ?? ("SHARES" as const) })),
+      ];
+      setFunds(merged.filter((f, i) => merged.findIndex((x) => x.id === f.id && x.product_type === f.product_type) === i));
+    });
+    emailService.getQueueStatus().then((r) => r.data && setRate({ batch_size: r.data.batch_size, interval_minutes: r.data.interval_minutes })).catch(() => {});
   }, []);
 
   const availableClasses = useMemo(() => {
@@ -151,6 +148,65 @@ export default function SendStatementsPanel() {
     }
   };
 
+  // Transfer statements need no deployment: every investor in the chosen fund (or all funds)
+  // whose batch has been transferred. One zip, a folder per batch, plus summary.csv.
+  const handleDownloadTransferZip = async () => {
+    const fundIds = fundId !== "all" ? [Number(fundId)] : funds.map((f) => f.id).filter((x): x is number => typeof x === "number");
+    if (fundIds.length === 0) {
+      toast.error("No funds loaded");
+      return;
+    }
+    setTransferDownloading(true);
+    setTransferProgress({ done: 0, total: 0 });
+    try {
+      const { total, failed } = await emailService.downloadTransferStatementsZip(
+        { fundIds, stage: transferStage },
+        (done, t) => setTransferProgress({ done, total: t })
+      );
+      if (failed.length > 0) {
+        toast.warning(`Downloaded ${total - failed.length} of ${total} transfer statements — ${failed.length} failed (listed in _FAILED.txt inside the zip)`);
+      } else {
+        toast.success(`Downloaded ${total} transfer statement${total === 1 ? "" : "s"}`);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.message || "Failed to download transfer statements");
+    } finally {
+      setTransferDownloading(false);
+      setTransferProgress(null);
+    }
+  };
+
+  const loadRecent = async () => {
+    try {
+      setRecent(await emailService.listStatementDownloads());
+    } catch {
+      /* the list is a convenience; ignore failures */
+    }
+  };
+  useEffect(() => {
+    loadRecent();
+  }, []);
+  // Keep the list fresh while a build is running, and refresh when one finishes.
+  useEffect(() => {
+    if (!downloading && !transferDownloading && !recent.some((j) => j.state === "running")) return;
+    const t = setInterval(loadRecent, 4000);
+    return () => clearInterval(t);
+  }, [downloading, transferDownloading, recent]);
+  useEffect(() => {
+    if (!downloading && !transferDownloading) loadRecent();
+  }, [downloading, transferDownloading]);
+
+  const saveRecent = async (job: StatementDownloadJob) => {
+    setSavingJobId(job.job_id);
+    try {
+      await emailService.saveFinishedDownload(job.job_id, `${job.label}.zip`);
+    } catch (err: any) {
+      toast.error(err?.response?.status === 404 ? "That download has expired (kept for 24 hours)" : err?.message || "Failed to download");
+    } finally {
+      setSavingJobId(null);
+    }
+  };
+
   const handleQueue = async () => {
     const selected = eligible.filter((i) => selectedIds.has(i.id) && i.email_status !== "no_email");
     if (selected.length === 0) {
@@ -166,7 +222,7 @@ export default function SendStatementsPanel() {
       const fundIds = fundId !== "all" ? [Number(fundId)] : undefined;
       const res = await emailService.queueStatementsBatch(clientCodes, fundIds);
       if (res.status === 200) {
-        const { queued, skipped, not_found } = res.data ?? { queued: [], skipped: [], not_found: [] };
+        const { queued, skipped, not_found, emails } = res.data ?? { queued: [], skipped: [], not_found: [], emails: [] };
         toast.success(`Queued ${queued.length} statement email(s) for approval`);
         if (skipped.length > 0) {
           toast.info(`${skipped.length} skipped (already queued or pending)`);
@@ -175,6 +231,8 @@ export default function SendStatementsPanel() {
           toast.error(`${not_found.length} client code(s) not found`);
         }
         setSelectedIds(new Set());
+        // Offer to send exactly the emails this click created - nothing else in the Inbox.
+        if (emails && emails.length > 0) setJustQueued(emails);
       } else {
         toast.error(res.message || "Failed to queue statements");
       }
@@ -185,13 +243,75 @@ export default function SendStatementsPanel() {
     }
   };
 
+  // "Send these N now": approves ONLY the ids the last queue call returned.
+  const sendJustQueued = async () => {
+    if (!justQueued) return;
+    setSendingQueued(true);
+    try {
+      const res = await emailService.confirmBatch(justQueued.map((e) => e.id));
+      const n = res.data?.queued?.length ?? 0;
+      toast.success(`${n} statement email${n === 1 ? "" : "s"} queued for sending`);
+      setJustQueued(null);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || "Failed to send");
+    } finally {
+      setSendingQueued(false);
+    }
+  };
+
+  const typePicker = (
+    <div className="ofds-glass" style={{ padding: "14px 20px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+      <label htmlFor="statement-type" style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>STATEMENT TYPE</label>
+      <select id="statement-type" value={statementType} onChange={(e) => setStatementType(e.target.value as "overall" | BulkKind)} style={selectStyle}>
+        {TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      {statementType !== "overall" && (
+        <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>
+          Pick a fund or batch, preview who gets it, then send. Only that list is sent.
+        </span>
+      )}
+    </div>
+  );
+
+  if (statementType !== "overall") {
+    return (
+      <div>
+        {typePicker}
+        <BulkTypeSendPanel kind={statementType} funds={funds} />
+        <style>{`
+          .ss-spin { animation: ss-spin-kf 0.8s linear infinite; }
+          @keyframes ss-spin-kf { to { transform: rotate(360deg); } }
+        `}</style>
+      </div>
+    );
+  }
+
   return (
     <div>
+      {typePicker}
       <p style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginBottom: "16px" }}>
         Filter investors by the valuation period + fund + share class you just committed, then queue each
-        selected investor's overall statement email — their whole portfolio, not just this fund/class — for
-        approval. Nothing sends immediately; queued items show up in the Inbox tab.
+        selected investor's overall statement email — their whole portfolio, not just this fund/class. After
+        queuing you choose whether to send exactly those emails now; anything else in the Inbox is never touched.
       </p>
+
+      <SendConfirmModal
+        open={justQueued !== null}
+        title={`Send these ${justQueued?.length ?? 0} statement${justQueued?.length === 1 ? "" : "s"} now?`}
+        description="Only the emails you just queued are listed. Choose 'Keep in Inbox' to review them later."
+        items={(justQueued ?? []).map((e) => ({ primary: e.recipient_name || e.client_code, secondary: e.recipient_email ?? undefined, note: e.client_code }))}
+        count={justQueued?.length ?? 0}
+        rate={rate}
+        busy={sendingQueued}
+        cancelLabel="Keep in Inbox"
+        onConfirm={sendJustQueued}
+        onCancel={() => {
+          if (justQueued) toast.info(`${justQueued.length} email(s) left in the Inbox — not sent`);
+          setJustQueued(null);
+        }}
+      />
 
       {/* Filters */}
       <div className="ofds-glass" style={{ padding: "16px 20px", marginBottom: "16px" }}>
@@ -212,9 +332,16 @@ export default function SendStatementsPanel() {
               style={selectStyle}
             >
               <option value="all">All funds</option>
-              {funds.map((f) => (
-                <option key={f.id} value={String(f.id)}>{f.fund_name}</option>
-              ))}
+              <optgroup label="Funds">
+                {funds.filter((f) => f.product_type !== "SHARES").map((f) => (
+                  <option key={f.id} value={String(f.id)}>{f.fund_name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Shares">
+                {funds.filter((f) => f.product_type === "SHARES").map((f) => (
+                  <option key={f.id} value={String(f.id)}>{f.fund_name}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
           <div>
@@ -231,6 +358,53 @@ export default function SendStatementsPanel() {
           <button onClick={handleLoad} disabled={loadingEligible} style={btn(loadingEligible, "primary")}>
             {loadingEligible ? <Loader2 size={13} className="ss-spin" /> : <FileText size={13} />}
             Load investors
+          </button>
+        </div>
+      </div>
+
+      {/* Recent downloads: a finished zip stays available for 24 hours */}
+      {recent.length > 0 && (
+        <div className="ofds-glass" style={{ padding: "14px 20px", marginBottom: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <div style={{ fontSize: "12px", color: "#fff", fontWeight: 600 }}>Recent downloads <span style={{ color: "var(--color-text-tertiary)", fontWeight: 400 }}>(kept for 24 hours)</span></div>
+            <button onClick={loadRecent} title="Refresh" style={{ background: "transparent", border: "none", color: "var(--color-text-secondary)", cursor: "pointer", padding: 4 }}>
+              <RefreshCw size={13} />
+            </button>
+          </div>
+          {recent.map((j) => (
+            <div key={j.job_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+              <span>
+                {j.label} · {j.created_at ? new Date(j.created_at * 1000).toLocaleString() : ""} ·{" "}
+                {j.state === "completed" && `${j.total} PDF${j.total === 1 ? "" : "s"}${j.failed_count ? ` (${j.failed_count} failed)` : ""}`}
+                {j.state === "running" && `building ${j.done}/${j.total}…`}
+                {j.state === "interrupted" && "cut off by a server restart — start it again"}
+                {j.state === "failed" && "failed"}
+              </span>
+              {j.ready && (
+                <button onClick={() => saveRecent(j)} disabled={savingJobId === j.job_id} style={btn(savingJobId === j.job_id)}>
+                  {savingJobId === j.job_id ? <Loader2 size={13} className="ss-spin" /> : <Download size={13} />} Download
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Transfer statements (available before deployment) */}
+      <div className="ofds-glass" style={{ padding: "14px 20px", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+        <div style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
+          <strong style={{ color: "#fff" }}>Transfer statements</strong> — {fundId === "all" ? "all funds" : "the selected fund"}, one zip with a folder per batch and a summary.csv. No deployment needed.
+        </div>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <select value={transferStage} onChange={(e) => setTransferStage(e.target.value as "undeployed" | "all")} style={selectStyle}>
+            <option value="undeployed">Transferred, not yet deployed</option>
+            <option value="all">All transferred batches</option>
+          </select>
+          <button onClick={handleDownloadTransferZip} disabled={transferDownloading} style={btn(transferDownloading)}>
+            {transferDownloading ? <Loader2 size={13} className="ss-spin" /> : <Download size={13} />}
+            {transferDownloading && transferProgress && transferProgress.total > 0
+              ? `Building ${transferProgress.done}/${transferProgress.total}…`
+              : "Download transfer statements (zip)"}
           </button>
         </div>
       </div>
@@ -254,7 +428,7 @@ export default function SendStatementsPanel() {
               </button>
               <button onClick={handleQueue} disabled={queuing || selectedIds.size === 0} style={btn(queuing || selectedIds.size === 0, "primary")}>
                 {queuing ? <Loader2 size={13} className="ss-spin" /> : <Send size={13} />}
-                Queue {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}for approval
+                Queue {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}to send
               </button>
             </div>
           </div>

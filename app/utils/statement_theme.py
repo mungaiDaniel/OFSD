@@ -17,8 +17,26 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import Image, Paragraph, Spacer, Table, TableStyle
 
+import functools
+import io
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Statement PDFs use Times New Roman. ReportLab's built-in Times-Roman/Times-Bold are
+# metric-compatible with it and need no font file on the server.
+STATEMENT_FONT = "Times-Roman"
+STATEMENT_FONT_BOLD = "Times-Bold"
+
+# Receipt-style PDFs (deposit / transfer / deployment / withdrawal confirmations):
+# everything sits inside one 6.5 in column so every left edge lines up.
+RECEIPT_CONTENT_WIDTH = 6.5 * inch
+_FRAME_PAD = 6  # SimpleDocTemplate frames pad 6 pt on each side
+
+
+def statement_fonts() -> Tuple[str, str]:
+    """(regular, bold) font names used for every statement PDF."""
+    return STATEMENT_FONT, STATEMENT_FONT_BOLD
 
 
 @dataclass(frozen=True)
@@ -117,12 +135,58 @@ def get_statement_theme(fund_names=(), fund_codes=()) -> StatementTheme:
     return AXYS_THEME
 
 
+@functools.lru_cache(maxsize=16)
+def _logo_png(path_str: str, width_pt: float) -> Optional[Tuple[bytes, float]]:
+    """
+    The logo trimmed of its blank margin and downscaled to ~300 dpi for the width it is
+    printed at: (PNG bytes, height/width). The AXYS logo file is 7,892 px wide, printed
+    ~2 in wide, and carries blank space on every side - embedding it as-is made each PDF
+    spend over a second re-encoding the image, and the blank left margin kept the logo
+    from lining up with the text below it. Built once per process, then reused.
+    None -> caller falls back to the file as it is.
+    """
+    try:
+        from PIL import Image as PILImage, ImageChops
+        with PILImage.open(path_str) as im:
+            im = im.convert("RGBA")
+            work = im.copy()
+            work.thumbnail((1600, 1600))
+            flat = PILImage.alpha_composite(PILImage.new("RGBA", work.size, (255, 255, 255, 255)), work).convert("RGB")
+            diff = ImageChops.difference(flat, PILImage.new("RGB", work.size, (255, 255, 255)))
+            bbox = diff.point(lambda p: 255 if p > 12 else 0).getbbox()
+            if bbox:
+                sx = im.width / work.width
+                sy = im.height / work.height
+                pad = 2
+                im = im.crop((
+                    max(0, int(bbox[0] * sx) - pad), max(0, int(bbox[1] * sy) - pad),
+                    min(im.width, int(bbox[2] * sx) + pad), min(im.height, int(bbox[3] * sy) + pad),
+                ))
+            target_w = max(1, int(width_pt / 72 * 300))
+            if im.width > target_w:
+                im = im.resize((target_w, max(1, round(im.height * target_w / im.width))), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, format="PNG", optimize=True)
+            return buf.getvalue(), im.height / im.width
+    except Exception:
+        return None
+
+
+def logo_image(path, width: float, height: float) -> Image:
+    """A platypus Image of a logo: trimmed + downscaled copy when available (height follows the trimmed shape)."""
+    cached = _logo_png(str(path), float(width))
+    if cached is not None:
+        data, aspect = cached
+        return Image(io.BytesIO(data), width=width, height=round(width * aspect, 2))
+    return Image(str(path), width=width, height=height)
+
+
 def resolve_axys_logo_path() -> Optional[Path]:
     candidates = [
-        PROJECT_ROOT / "assets" / "logo" / "AXYS LOGO ON lightmode BG@300x.png",
-        PROJECT_ROOT / "frontend" / "public" / "AIBlight.png",
-        PROJECT_ROOT / "ofds-frontend" / "public" / "AIBlight.png",
-        PROJECT_ROOT / "backend" / "assets" / "AIBlight.png",
+        PROJECT_ROOT / "assets" / "logo" / "brand-logo-light.png",
+        PROJECT_ROOT / "frontend" / "public" / "brand-logo.svg",
+        PROJECT_ROOT / "ofds-frontend" / "public" / "brand-logo.svg",
+        PROJECT_ROOT / "backend" / "assets" / "brand-logo.svg",
     ]
     for logo_path in candidates:
         if logo_path.exists():
@@ -140,6 +204,7 @@ def build_statement_brand_block(
     theme: StatementTheme,
     jh_logo_path: Optional[Path] = None,
     axys_logo_path: Optional[Path] = None,
+    logo_width: float = 135,
 ) -> Optional[Table]:
     """
     Build the logo header block.
@@ -151,10 +216,11 @@ def build_statement_brand_block(
     if not axys_path or not axys_path.exists():
         return None
 
-    axys_logo = Image(str(axys_path), width=135, height=43)
+    # The logo file is 7892 x 2517 px; keep that aspect ratio at any width.
+    axys_logo = logo_image(axys_path, width=logo_width, height=round(logo_width * 2517 / 7892, 1))
 
     if theme.is_jh and jh_logo_path and jh_logo_path.exists():
-        jh_logo = Image(str(jh_logo_path), width=120, height=36)
+        jh_logo = logo_image(jh_logo_path, width=120, height=36)
         divider = Table([[""]], colWidths=[0.02 * inch], rowHeights=[0.42 * inch])
         divider.setStyle(TableStyle([
             ("LINEAFTER", (0, 0), (0, 0), 0.75, _hex("#cccccc")),
@@ -173,7 +239,7 @@ def build_statement_brand_block(
         ]))
         return brand_block
 
-    brand_block = Table([[axys_logo]], colWidths=[1.9 * inch])
+    brand_block = Table([[axys_logo]], colWidths=[max(1.9 * inch, logo_width + 4)])
     brand_block.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -192,6 +258,29 @@ def build_paragraph_styles(
     body_font_bold: str,
 ) -> Dict[str, ParagraphStyle]:
     """Build common paragraph styles for statement PDFs."""
+    return _scale_for_times(_paragraph_styles(theme, base_styles, body_font, body_font_bold), body_font)
+
+
+def _scale_for_times(styles: Dict[str, ParagraphStyle], body_font: str) -> Dict[str, ParagraphStyle]:
+    # Times sets noticeably smaller than Montserrat at the same point size, so the
+    # sizes are nudged up a little to keep the text comfortably readable.
+    if body_font != STATEMENT_FONT:
+        return styles
+    bump = {"title": 1, "heading": 1, "section_heading": 1.5, "normal": 1, "info_value": 1, "footer": 0.5}
+    for key, extra in bump.items():
+        st = styles.get(key)
+        if st is not None:
+            st.fontSize = st.fontSize + extra
+            st.leading = max(st.leading, st.fontSize * 1.2)
+    return styles
+
+
+def _paragraph_styles(
+    theme: StatementTheme,
+    base_styles,
+    body_font: str,
+    body_font_bold: str,
+) -> Dict[str, ParagraphStyle]:
     return {
         "title": ParagraphStyle(
             "StmtTitle",
@@ -342,6 +431,37 @@ def apply_doc_page_callbacks(doc, theme: StatementTheme) -> None:
         doc.onLaterPages = on_later
 
 
+def _fit_story_to_column(story: List[Any], width: float) -> None:
+    """
+    Make every table in a receipt line up on one left edge.
+    - tables wider than the column are scaled down to it; narrower ones keep their width
+    - every table is left-aligned (platypus centres them by default, which is what
+      pushed some tables left of the text)
+    - tables without a box/grid/background (header, details, footer rule) get zero
+      side padding so their text starts exactly on the edge the boxes start on
+    """
+    for flowable in story:
+        if not isinstance(flowable, Table):
+            continue
+        widths = getattr(flowable, "_colWidths", None)
+        if widths and all(isinstance(w, (int, float)) for w in widths):
+            total = float(sum(widths))
+            if total > width + 0.5:
+                scaled = [w * width / total for w in widths]
+                flowable._colWidths = scaled
+                flowable._argW = list(scaled)  # Table re-reads _argW when it lays out
+        flowable.hAlign = "LEFT"
+        boxed = any(c[0] in ("GRID", "BOX") for c in getattr(flowable, "_linecmds", [])) or any(
+            c[0] == "BACKGROUND" for c in getattr(flowable, "_bkgrndcmds", [])
+        )
+        if not boxed:
+            flowable.setStyle(TableStyle([
+                ("LEFTPADDING", (0, 0), (0, -1), 0),
+                ("RIGHTPADDING", (0, 0), (0, -1), 0),
+                ("RIGHTPADDING", (-1, 0), (-1, -1), 0),
+            ]))
+
+
 def build_doc_template(
     buffer,
     theme: StatementTheme,
@@ -350,10 +470,33 @@ def build_doc_template(
     right_margin: float = 0.6,
     top_margin: float = 0.55,
     bottom_margin: float = 0.55,
+    receipt: bool = False,
 ):
-    """Create a SimpleDocTemplate with themed page margins and callbacks."""
+    """Create a SimpleDocTemplate with themed page margins and callbacks.
+
+    receipt=True: a single 6.5 in column, margins set so the frame's own 6 pt padding
+    lands the content exactly 1 in from the page edge, and every table aligned to it.
+    """
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate
+
+    if receipt:
+        class _ReceiptDoc(SimpleDocTemplate):
+            def build(self, flowables, *args, **kwargs):
+                _fit_story_to_column(flowables, RECEIPT_CONTENT_WIDTH)
+                return super().build(flowables, *args, **kwargs)
+
+        side = (letter[0] - RECEIPT_CONTENT_WIDTH) / 2 - _FRAME_PAD
+        doc = _ReceiptDoc(
+            buffer,
+            pagesize=letter,
+            leftMargin=side,
+            rightMargin=side,
+            topMargin=top_margin * inch,
+            bottomMargin=bottom_margin * inch,
+        )
+        apply_doc_page_callbacks(doc, theme)
+        return doc
 
     left = (left_margin + 0.12) * inch if theme.is_jh else left_margin * inch
     doc = SimpleDocTemplate(
@@ -431,7 +574,7 @@ def append_receipt_header(
     fund_name: Optional[str] = None,
 ) -> None:
     """Build the standard co-branded header used on deposit/withdrawal/transfer PDFs."""
-    brand_block = build_statement_brand_block(theme, jh_logo_path)
+    brand_block = build_statement_brand_block(theme, jh_logo_path, logo_width=190)
     head_office_html = (
         "<para align=right>"
         "<font size=9><b>HEAD OFFICE</b></font><br/>"
@@ -448,7 +591,7 @@ def append_receipt_header(
         ),
         Paragraph(head_office_html, pdf_styles["small_right"]),
     ]
-    header_table = Table([header_cells], colWidths=[3.2 * inch, 4.3 * inch])
+    header_table = Table([header_cells], colWidths=[3.1 * inch, 3.4 * inch])
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
@@ -467,16 +610,16 @@ def append_receipt_header(
 def highlight_banner_style(theme: StatementTheme, body_font_bold: str) -> TableStyle:
     """Style for prominent amount banners (withdrawal/deposit/transfer summaries)."""
     return TableStyle([
-        ("FONT", (0, 0), (-1, -1), body_font_bold, 16),
+        ("FONT", (0, 0), (-1, -1), body_font_bold, 12),
         ("TEXTCOLOR", (0, 0), (0, 0), colors.white),
         ("BACKGROUND", (0, 0), (0, 0), _hex(theme.primary)),
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("FONTNAME", (1, 0), (1, 0), body_font_bold),
         ("GRID", (0, 0), (-1, -1), 1, _hex(theme.primary_dark)),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 18),
-        ("TOPPADDING", (0, 0), (-1, -1), 18),
-        ("LEFTPADDING", (0, 0), (-1, -1), 15),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 15),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
     ])
 
 
@@ -515,7 +658,7 @@ def build_jh_logo_block(jh_logo_path: Optional[Path] = None) -> Optional[Table]:
     """Build standalone Janus Henderson Investors logo block below the top header divider."""
     if not jh_logo_path or not jh_logo_path.exists():
         return None
-    jh_img = Image(str(jh_logo_path), width=155, height=38)
+    jh_img = logo_image(jh_logo_path, width=155, height=38)
     tbl = Table([[jh_img]], colWidths=[7.5 * inch])
     tbl.setStyle(TableStyle([
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),

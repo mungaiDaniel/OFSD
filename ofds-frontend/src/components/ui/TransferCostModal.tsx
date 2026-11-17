@@ -68,12 +68,13 @@ export function TransferCostModal({
 
   const entryFeeRate = (parseFloat(entryFeePercent) || 0) / 100;
 
-  // ── Manual mode math ── both deductions come off the initial deposit:
-  // transfer amount = deposited − received; entry fee = deposited × rate.
+  // ── Manual mode math ── entry fee is on the amount left after the transfer cost:
+  // transfer amount = deposited − received; entry fee = (deposited − transfer) × rate.
   const rows = investments.map((inv) => {
     const received = Math.max(0, parseFloat(amounts[inv.id] ?? "") || 0);
     const bankDeduction = Math.max(0, inv.amount_deposited - received);
-    const entryFee = inv.amount_deposited * entryFeeRate;
+    // Entry fee is charged on the amount left after the transaction cost.
+    const entryFee = Math.max(0, inv.amount_deposited - bankDeduction) * entryFeeRate;
     const net = Math.max(0, inv.amount_deposited - bankDeduction - entryFee);
     return { inv, received, bankDeduction, entryFee, net };
   });
@@ -87,7 +88,7 @@ export function TransferCostModal({
   // the entry fee, both taken off the initial deposit. The actual
   // per-investor split still happens server-side.
   const transactionCostUsd = parseFloat(transactionCost) || 0;
-  const entryFeeAggregate = Math.max(0, totalDeposited * entryFeeRate);
+  const entryFeeAggregate = Math.max(0, (totalDeposited - transactionCostUsd) * entryFeeRate);
   const totalNetAggregate = Math.max(0, totalDeposited - transactionCostUsd - entryFeeAggregate);
 
   const setAmount = (id: number, value: string) => setAmounts((prev) => ({ ...prev, [id]: value }));
@@ -208,7 +209,7 @@ export function TransferCostModal({
             <>
               <p style={{ margin: 0, fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
                 Enter the amount each client's wire actually landed as (starts at 0). Transfer Amount is
-                what the transfer cost them (deposited − received); Entry Fee is charged on the initial deposit.
+                what the transfer cost them (deposited − received); Entry Fee is charged on what is left after the transfer amount.
                 Both are deducted from the deposit.
               </p>
 
@@ -307,7 +308,7 @@ export function TransferCostModal({
             <>
               <p style={{ margin: 0, fontSize: "13px", color: "rgba(255,255,255,0.6)", lineHeight: 1.5 }}>
                 Transaction Cost (USD) and Entry Fee (%) are both deducted from the initial deposit — the cost is
-                split pro-rata across every client's deposit share, and the entry fee is charged on each deposit.
+                split pro-rata across every client's deposit share, and the entry fee is then charged on what is left of each deposit.
               </p>
 
               <div>

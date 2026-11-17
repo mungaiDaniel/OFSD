@@ -21,6 +21,7 @@ from app.Investments.model import (
     Investment,
     PendingEmail,
     FINAL_WITHDRAWAL_STATUSES,
+    CASH_WITHDRAWAL_FILTER,
     WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
     WITHDRAWAL_STATUS_PENDING,
 )
@@ -34,6 +35,9 @@ from sqlalchemy.exc import IntegrityError
 # product; this is the narrower, per-product allow-list these routes enforce.
 # Task 12: defined once in app/Funds/edit_service.py (shared with the edit endpoints).
 from app.Funds.edit_service import CURRENCIES_BY_PRODUCT  # noqa: E402
+import logging
+
+logger = logging.getLogger(__name__)
 
 funds_v1 = Blueprint("funds_v1", __name__, url_prefix='/')
 
@@ -575,7 +579,7 @@ def _get_share_class_details_impl(fund_id, class_id, product):
 
     except Exception as e:
         import traceback
-        print(f"ERROR get_share_class_details: {traceback.format_exc()}")
+        logger.info(f"ERROR get_share_class_details: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -800,6 +804,28 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
             except Exception:
                 withdrawal_sum = 0.0
 
+            # Of those, the legacy cash-only withdrawals — the only ones to
+            # subtract from AUM below. A unit redemption already reduced the
+            # class's shares (Batch.total_shares), so subtracting its cash too
+            # would double-count. withdrawal_sum (all of them) still feeds Net
+            # Holdings and the gain basis: cash paid out is cash paid out.
+            cash_withdrawal_sum = 0.0
+            try:
+                cash_sum_raw = (
+                    session.query(func.coalesce(func.sum(Withdrawal.gross_amount), 0))
+                    .filter(
+                        Withdrawal.fund_id == fund.id,
+                        Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
+                        Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                        Withdrawal.internal_client_code.in_(active_codes_subq),
+                        CASH_WITHDRAWAL_FILTER,
+                    )
+                    .scalar()
+                )
+                cash_withdrawal_sum = float_2dp(cash_sum_raw) if cash_sum_raw is not None else 0.0
+            except Exception:
+                cash_withdrawal_sum = withdrawal_sum
+
             # Gross deposited: raw, never-adjusted "total ever deposited" for
             # this class — unlike cost_basis above, this doesn't exclude fees
             # or restrict to deployed batches. Investment.share_class_id is
@@ -880,9 +906,9 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
                 valuation_date = latest_nav.nav_date.strftime("%Y-%m-%d")
                 unrealized_gain = float_2dp(Decimal(str(total_nav or 0)) - Decimal(str(cost_basis or 0)))
 
-                # Apply withdrawals deduction to displayed AUM/gain
-                if withdrawal_sum and total_nav is not None:
-                    total_nav = float_2dp(max(Decimal("0.00"), Decimal(str(total_nav)) - Decimal(str(withdrawal_sum))))
+                # Apply (cash-only) withdrawals deduction to displayed AUM/gain
+                if cash_withdrawal_sum and total_nav is not None:
+                    total_nav = float_2dp(max(Decimal("0.00"), Decimal(str(total_nav)) - Decimal(str(cash_withdrawal_sum))))
                     if unrealized_gain is not None:
                         unrealized_gain = float_2dp(Decimal(str(total_nav or 0)) - Decimal(str(cost_basis or 0)))
                 
@@ -1081,6 +1107,7 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
 
 
 @funds_v1.route('/api/v1/funds/summary', methods=['GET'])
+@jwt_required()
 def get_funds_summary():
     """
     #1: Get fund performance summary across all FUNDS classes.
@@ -1095,11 +1122,12 @@ def get_funds_summary():
         }), 200)
     except Exception as e:
         import traceback
-        print(f"ERROR in get_funds_summary: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_funds_summary: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
 @funds_v1.route('/api/v1/shares/summary', methods=['GET'])
+@jwt_required()
 def get_shares_summary():
     """
     Get fund performance summary across all SHARES classes — Task 8 alias of
@@ -1113,5 +1141,5 @@ def get_shares_summary():
         }), 200)
     except Exception as e:
         import traceback
-        print(f"ERROR in get_shares_summary: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_shares_summary: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)

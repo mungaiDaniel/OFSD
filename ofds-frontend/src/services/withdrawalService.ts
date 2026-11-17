@@ -1,6 +1,9 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, Withdrawal, CreateWithdrawalRequest, WithdrawalSource, ProductType } from "@/lib/types";
+import type {
+  ApiResponse, Withdrawal, CreateWithdrawalRequest, WithdrawalSource, ProductType,
+  RedemptionHolding, RecordRedemptionRequest,
+} from "@/lib/types";
 
 type WithdrawalListParams = {
   status?: string;
@@ -50,6 +53,20 @@ export const withdrawalService = {
 
   async create(data: CreateWithdrawalRequest): Promise<ApiResponse> {
     const res = await api.post<ApiResponse>(API.WITHDRAWALS, data);
+    return res.data;
+  },
+
+  /** A client's redeemable NAV-fund holdings (fund + share class, shares available). */
+  async getRedemptionHoldings(clientCode: string): Promise<{ investor_name: string | null; holdings: RedemptionHolding[] }> {
+    const res = await api.get<ApiResponse<{ investor_name: string | null; holdings: RedemptionHolding[] }>>(
+      `${API.WITHDRAWALS}/redemption-holdings?client_code=${encodeURIComponent(clientCode)}`
+    );
+    return res.data.data ?? { investor_name: null, holdings: [] };
+  },
+
+  /** Record + execute a unit redemption from a contract note — reduces the client's shares. */
+  async recordRedemption(data: RecordRedemptionRequest): Promise<ApiResponse> {
+    const res = await api.post<ApiResponse>(`${API.WITHDRAWALS}/redemptions`, data);
     return res.data;
   },
 
