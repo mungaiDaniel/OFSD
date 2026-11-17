@@ -36,3 +36,10 @@ describe("demo adapter", () => {
     expect(res.data.status).toBe(200);
   });
 });
+
+describe("demo adapter: object-shaped endpoints the Overview page reads", () => {
+  it("daily activity has counts", async () => {
+    const res = await api.get("/reports/daily-activity?date_from=2026-01-01&date_to=2026-01-31");
+    expect(res.data.data.counts.deposits).toBeGreaterThanOrEqual(0);
+  });
+});

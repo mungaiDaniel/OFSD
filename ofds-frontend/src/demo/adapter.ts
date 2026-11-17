@@ -529,7 +529,42 @@ route("GET", "/settings/email", () =>
     has_password: false, email_queue_batch_size: 100, email_queue_interval_minutes: 5,
   }),
 );
-route("GET", "/settings/email/queue", () => ok({ batch_size: 100, interval_minutes: 5, next_run_at: null, queued_count: 0 }));
+const emailPage = (rows: DemoState["emails"]) =>
+  ok(rows, "OK", { count: rows.length, pagination: { page: 1, per_page: 50, total: rows.length, total_pages: 1 } });
+route("GET", "/emails/inbox", () => emailPage(S.emails.filter((e) => e.status === "Pending_Confirmation")));
+route("GET", "/emails/processed", () => emailPage(S.emails.filter((e) => e.status === "Confirmed" || e.status === "Failed")));
+
+route("GET", "/reports/daily-activity", ({ query }) => {
+  const dep = S.investments.slice(-5);
+  return ok({
+    date_from: query.get("date_from") ?? "", date_to: query.get("date_to") ?? "",
+    counts: { deposits: dep.length, withdrawals: S.withdrawals.length, valuations: 2 },
+    total_deposit_amount: sumBy(dep, (i) => i.amount),
+    total_withdrawal_amount: S.withdrawals.reduce((s, w) => s + w.amount, 0),
+  });
+});
+route("GET", "/reports/client-activity", ({ query }) => {
+  const code = query.get("client_code") ?? "";
+  const p = S.investors[code];
+  if (!p) return fail(404, "Investor not found");
+  const inv = holdingsOf(code);
+  return ok({
+    internal_client_code: code, investor_name: p.name, investor_email: p.email, investor_phone: p.phone, positions: [],
+    events: inv.map((i) => ({
+      type: "deposit", date: i.date_deposited, fund_name: fund(i.fund_id).fund_name,
+      class_code: cls(i.class_id).class_code, currency: cls(i.class_id).currency, amount: i.amount, status: "Completed",
+    })),
+  });
+});
+route("GET", "/reports/runs", () => ok([]));
+route("GET", "/valuation/nav/runs", () => ok([]));
+route("GET", "/valuation/funds", ({ query }) => {
+  const p = query.get("product");
+  return ok(S.funds.filter((f) => !p || f.product_type === p).map(fundDetail));
+});
+route("GET", "/bulk-upload/jobs", () => ok([]));
+
+route("GET", "/settings/email-queue", () => ok({ batch_size: 100, interval_minutes: 5, next_run_at: null, queued_count: 0 }));
 
 // ── adapter ──────────────────────────────────────────────────────────────────
 export const demoAdapter: AxiosAdapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
