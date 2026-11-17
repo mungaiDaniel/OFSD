@@ -679,6 +679,7 @@ def get_total_investors_count(session=None, product_type=None) -> int:
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/history', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_history(client_code):
     """
     Returns an investor's chronological history of valuations.
@@ -873,6 +874,7 @@ def get_investor_history(client_code):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/portfolio', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_portfolio_aggregated(client_code):
     """
     Returns an investor's aggregated portfolio across all batches and funds.
@@ -1149,6 +1151,7 @@ def _get_investor_portfolio_aggregated_data(client_code, fund_ids=None):
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/portfolio/display', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_investor_portfolio_display(client_code):
     """
     Returns pre-computed aggregated portfolio data for display.
@@ -3219,6 +3222,7 @@ def _generate_investor_statement_pdf_bytes(client_code, as_of_dt=None, period_on
 
 
 @investment_v1.route('/api/v1/investors/<string:client_code>/statement/excel', methods=['GET'])
+@jwt_required()
 def download_investor_statement_excel(client_code):
     """
     Download a branded investor statement spreadsheet in Excel format (.xlsx).

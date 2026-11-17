@@ -1985,6 +1985,7 @@ def list_report_runs():
 # ============================================================================
 
 @reports_v1.route("/api/v1/reports/fund-shares-excel", methods=["GET"])
+@jwt_required()
 def fund_shares_excel():
     """
     Download a comprehensive fund shares report as a multi-sheet Excel file.
@@ -2589,17 +2590,13 @@ def generate_investments_csv(session=None):
 
 @reports_v1.route('/api/v1/reports/export-all-investments/csv', methods=['GET'])
 @reports_v1.route('/api/v1/investments/export/csv', methods=['GET'])
+@jwt_required()
 def export_all_investments_csv():
     """
     Export all investments from the database as a CSV spreadsheet.
     Supports JWT in header or query parameter ?token=... for direct browser downloads.
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         csv_buffer = generate_investments_csv(db.session)
         byte_buffer = BytesIO(csv_buffer.getvalue().encode('utf-8'))
         filename = f"investments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2991,6 +2988,7 @@ def _collect_all_valuation_rows(session=None, fund_id_filter=None, vr_id_filter=
 
 @reports_v1.route('/api/v1/reports/export-valuations/csv', methods=['GET'])
 @reports_v1.route('/api/v1/valuations/export/csv', methods=['GET'])
+@jwt_required()
 def export_valuations_csv():
     """
     Export all committed valuation runs as a flat CSV file.
@@ -3013,11 +3011,6 @@ def export_valuations_csv():
 
     try:
         # Auth: optional — works as a direct browser download URL
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         session = db.session
         fund_id_filter = request.args.get("fund_id", type=int)
         vr_id_filter = request.args.get("valuation_run_id", type=int)
@@ -3177,6 +3170,7 @@ def generate_valuations_excel(session=None, valuation_run_id=None, fund_id=None)
 
 @reports_v1.route('/api/v1/reports/valuation-excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/valuations/export/excel', methods=['GET'])
+@jwt_required()
 def export_valuations_excel():
     """
     Download comprehensive valuation statement workbook in Excel (.xlsx).
@@ -3186,11 +3180,6 @@ def export_valuations_excel():
       - token (str, optional): JWT token for direct browser downloads
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         valuation_run_id = request.args.get("valuation_run_id", type=int)
         fund_id = request.args.get("fund_id", type=int)
 
@@ -3211,16 +3200,12 @@ def export_valuations_excel():
 
 @reports_v1.route('/api/v1/reports/<int:valuation_run_id>/excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/valuation-runs/<int:valuation_run_id>/excel', methods=['GET'])
+@jwt_required()
 def get_valuation_run_excel(valuation_run_id: int):
     """
     Download valuation statement in Excel format for a specific ValuationRun.
     """
     try:
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
-
         excel_buffer = generate_valuations_excel(db.session, valuation_run_id=valuation_run_id)
         filename = f"Valuation_Run_{valuation_run_id}_Statement_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
@@ -3241,6 +3226,7 @@ def get_valuation_run_excel(valuation_run_id: int):
 
 @reports_v1.route('/api/v1/reports/export-all/excel', methods=['GET'])
 @reports_v1.route('/api/v1/reports/full-export/excel', methods=['GET'])
+@jwt_required()
 def export_combined_excel():
     """
     Single-URL Excel export containing:
@@ -3253,11 +3239,6 @@ def export_combined_excel():
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
-
-        try:
-            verify_jwt_in_request(optional=True)
-        except Exception:
-            pass
 
         session = db.session
 

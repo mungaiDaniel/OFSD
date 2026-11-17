@@ -1107,6 +1107,7 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
 
 
 @funds_v1.route('/api/v1/funds/summary', methods=['GET'])
+@jwt_required()
 def get_funds_summary():
     """
     #1: Get fund performance summary across all FUNDS classes.
@@ -1126,6 +1127,7 @@ def get_funds_summary():
 
 
 @funds_v1.route('/api/v1/shares/summary', methods=['GET'])
+@jwt_required()
 def get_shares_summary():
     """
     Get fund performance summary across all SHARES classes — Task 8 alias of

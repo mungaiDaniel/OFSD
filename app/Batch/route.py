@@ -387,6 +387,7 @@ def get_batch_history(batch_id):
 
 @batch_v1.route('/api/v1/batches/notifications/recent', methods=['GET', 'OPTIONS'])
 @cross_origin(supports_credentials=True, methods=['GET', 'OPTIONS'])
+@jwt_required()
 def get_recent_notifications():
     """Get the 20 most recent notification events (emails sent and batch summaries)."""
     # Handle CORS preflight (OPTIONS request)
