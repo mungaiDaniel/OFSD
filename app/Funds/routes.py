@@ -35,6 +35,9 @@ from sqlalchemy.exc import IntegrityError
 # product; this is the narrower, per-product allow-list these routes enforce.
 # Task 12: defined once in app/Funds/edit_service.py (shared with the edit endpoints).
 from app.Funds.edit_service import CURRENCIES_BY_PRODUCT  # noqa: E402
+import logging
+
+logger = logging.getLogger(__name__)
 
 funds_v1 = Blueprint("funds_v1", __name__, url_prefix='/')
 
@@ -576,7 +579,7 @@ def _get_share_class_details_impl(fund_id, class_id, product):
 
     except Exception as e:
         import traceback
-        print(f"ERROR get_share_class_details: {traceback.format_exc()}")
+        logger.info(f"ERROR get_share_class_details: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -1118,7 +1121,7 @@ def get_funds_summary():
         }), 200)
     except Exception as e:
         import traceback
-        print(f"ERROR in get_funds_summary: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_funds_summary: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -1136,5 +1139,5 @@ def get_shares_summary():
         }), 200)
     except Exception as e:
         import traceback
-        print(f"ERROR in get_shares_summary: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_shares_summary: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)

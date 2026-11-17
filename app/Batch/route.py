@@ -13,6 +13,9 @@ from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 import csv
+import logging
+
+logger = logging.getLogger(__name__)
 
 batch_v1 = Blueprint("batch_v1", __name__, url_prefix='/')
 
@@ -437,7 +440,7 @@ def get_recent_notifications():
 
         return make_response(jsonify({"status": 200, "message": "Recent notifications retrieved", "data": items}), 200)
     except Exception as e:
-        print(f"❌ Error fetching notifications: {str(e)}")
+        logger.info(f"❌ Error fetching notifications: {str(e)}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}", "data": []}), 500)
 
         return make_response(jsonify({"status": 200, "message": "Recent notifications retrieved", "data": items}), 200)

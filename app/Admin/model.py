@@ -22,7 +22,7 @@ class User(Base, db.Model):
     password = Column(String(1000))
     role = Column(String, Enum('super_admin', 'admin', 'user', name='user_roles'), default='user', server_default='user')
     status = Column(String, Enum('pending', 'active', name='user_status'), default='pending', server_default='pending')
-    created = Column(DateTime, default=datetime.datetime.now())
+    created = Column(DateTime, default=datetime.datetime.now)
 
     def generate_auth_token(self, permission_level):
 

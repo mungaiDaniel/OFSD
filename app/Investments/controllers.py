@@ -11,6 +11,9 @@ from app.Batch.fund import Fund
 from app.utils.email_service import EmailService
 from app.logic.batch_management_service import BatchManagementService
 from app.Funds.share_class import ShareClass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class InvestmentController:
@@ -894,11 +897,11 @@ class InvestmentController:
                     }
                     for _, row in df.iterrows()
                 ], trigger_source="investment.upload.stage_1_initial_deposit")
-                print(f"Email sent to {email_stats['sent']} addresses, failed {email_stats['failed']}")
+                logger.info(f"Email sent to {email_stats['sent']} addresses, failed {email_stats['failed']}")
 
             except Exception as e:
                 # Do not abort; log only.
-                print(f"Email Stage 1 dispatch failed: {e}")
+                logger.info(f"Email Stage 1 dispatch failed: {e}")
 
             response_data = {
                 "status": 201,

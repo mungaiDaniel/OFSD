@@ -22,6 +22,8 @@ import json
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 
 valuation_v1 = Blueprint("valuation_v1", __name__, url_prefix="/")
 
@@ -871,7 +873,7 @@ def confirm_epoch():
                                 },
                                 success=True
                             )
-                    print(f"✅ Saved isolated statement rows for {code} across {len(matched_investments)} batch position(s)")
+                    logger.info(f"✅ Saved isolated statement rows for {code} across {len(matched_investments)} batch position(s)")
                 
                 db.session.commit()
                 # ── STEP 3A2: Persist batch-scoped valuations for all affected batches ──
@@ -912,11 +914,11 @@ def confirm_epoch():
                                     valuation_date=vr_end,
                                 )
                             except Exception as one_batch_err:
-                                print(
+                                logger.info(
                                     f"Warning: Failed to generate batch valuation for batch {bid} @ {vr_end}: {str(one_batch_err)}"
                                 )
                 except Exception as batch_snap_err:
-                    print(f"Warning: Failed to generate batch valuations post-commit: {str(batch_snap_err)}")
+                    logger.info(f"Warning: Failed to generate batch valuations post-commit: {str(batch_snap_err)}")
 
                 # ── STEP 3B: Sync Investment.valuation → committed end_balance ──────────
                 # After a confirmed epoch the Investment.valuation column must reflect the
@@ -945,9 +947,9 @@ def confirm_epoch():
                                 {"valuation": committed_end_balance},
                                 synchronize_session=False,
                             )
-                            print(f"✅ Investment.valuation synced for {code}: ${float(committed_end_balance):,.2f}")
+                            logger.info(f"✅ Investment.valuation synced for {code}: ${float(committed_end_balance):,.2f}")
                 except Exception as sync_err:
-                    print(f"Warning: Failed to sync Investment.valuation after confirm: {str(sync_err)}")
+                    logger.info(f"Warning: Failed to sync Investment.valuation after confirm: {str(sync_err)}")
 
                 # ── STEP 3C: Mark Approved withdrawals as Executed ───────────────
                 # Executed withdrawals are excluded from future _build_investor_inputs
@@ -967,19 +969,19 @@ def confirm_epoch():
                         ),
                     ).update({"status": WITHDRAWAL_STATUS_EXECUTED}, synchronize_session=False)
                     if executed_count:
-                        print(f"✅ Marked {executed_count} withdrawal(s) as Executed for fund {core.fund_name} — they will not be reprocessed")
+                        logger.info(f"✅ Marked {executed_count} withdrawal(s) as Executed for fund {core.fund_name} — they will not be reprocessed")
                     db.session.commit()
                 except Exception as e:
-                    print(f"Warning: Failed to mark withdrawals Executed after valuation commit: {str(e)}")
+                    logger.info(f"Warning: Failed to mark withdrawals Executed after valuation commit: {str(e)}")
             except Exception as e:
                 # Log but don't fail the commit
-                print(f"Warning: Failed to save statements: {str(e)}")
+                logger.info(f"Warning: Failed to save statements: {str(e)}")
 
             try:
                 from app.Batch.controllers import BatchController
                 BatchController.refresh_cached_total_capital_for_batch_ids(batch_ids, db.session)
             except Exception as cache_err:
-                print(f"Warning: Failed to refresh cached batch totals after valuation commit: {str(cache_err)}")
+                logger.info(f"Warning: Failed to refresh cached batch totals after valuation commit: {str(cache_err)}")
 
             return make_response(
                 jsonify(

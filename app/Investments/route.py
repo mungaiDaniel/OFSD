@@ -64,6 +64,8 @@ from app.utils.statement_theme import (
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 
 def normalize_datetime_to_utc(dt):
     if dt is None:
@@ -2104,7 +2106,7 @@ def _append_fund_statement_section(story, client_code, fund_id, fund_name, as_of
             rows.sort(key=lambda x: x.get("date") or "", reverse=True)
             timeline_statements = rows
     except Exception as timeline_err:
-        print(f"⚠️  Warning: Could not load timeline statements for {client_code}/{fund_name}: {timeline_err}")
+        logger.info(f"⚠️  Warning: Could not load timeline statements for {client_code}/{fund_name}: {timeline_err}")
 
     previous_period_value = None
     previous_period_date_text = None
@@ -3409,7 +3411,7 @@ def download_investor_statement_excel(client_code):
         return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", as_attachment=True, download_name=filename)
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500
 
 
@@ -4211,8 +4213,8 @@ def get_withdrawal_pdf(client_code, withdrawal_id):
         )
     except Exception as e:
         import traceback
-        print(f"❌ Withdrawal PDF generation error for {client_code}, withdrawal {withdrawal_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.info(f"❌ Withdrawal PDF generation error for {client_code}, withdrawal {withdrawal_id}: {str(e)}")
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4318,7 +4320,7 @@ def _generate_deposit_receipt_pdf_bytes(client_code, batch_id):
                     ending_standing_from_statement = float(matched_deposit.get("end_balance") or 0)
                     net_deposit_from_statement = float(matched_deposit.get("deposits") or 0)
         except Exception as stmt_err:
-            print(f"⚠️  Could not derive deposit event standings from statements for {client_code}/{batch_id}: {stmt_err}")
+            logger.info(f"⚠️  Could not derive deposit event standings from statements for {client_code}/{batch_id}: {stmt_err}")
         
         theme = get_statement_theme([fund_name])
         jh_logo_path = _resolve_janus_henderson_statement_logo_path([fund_name])
@@ -4537,7 +4539,7 @@ def get_deposit_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"❌ Deposit PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4703,7 +4705,7 @@ def get_transfer_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"Transfer PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -4869,7 +4871,7 @@ def get_deployment_receipt_pdf(client_code, batch_id):
     except Exception as e:
         import traceback
         logger.error(f"Deployment PDF route error for {client_code}, batch {batch_id}: {str(e)}")
-        print(traceback.format_exc())
+        logger.exception("Unhandled error")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -5971,7 +5973,7 @@ def update_withdrawal(withdrawal_id: int):
                 # Allowed trigger is withdrawals upload only.
             except Exception as calc_err:
                 # Log but don't fail the approval
-                print(f"⚠️  Warning: Calculation failed for withdrawal {withdrawal_id}: {str(calc_err)}")
+                logger.info(f"⚠️  Warning: Calculation failed for withdrawal {withdrawal_id}: {str(calc_err)}")
                 message = f"Withdrawal approved (calculation warning: {str(calc_err)})"
                 impact = None
         else:
@@ -6000,7 +6002,7 @@ def update_withdrawal(withdrawal_id: int):
                 from app.Batch.controllers import BatchController
                 BatchController.refresh_cached_total_capital_for_batch_ids(affected_batch_ids, db.session)
         except Exception as cache_err:
-            print(f"Warning: Failed to refresh cached batch totals after withdrawal {status.lower()}: {str(cache_err)}")
+            logger.info(f"Warning: Failed to refresh cached batch totals after withdrawal {status.lower()}: {str(cache_err)}")
 
         return make_response(jsonify({
             "status": 200,
@@ -6288,7 +6290,7 @@ def bulk_update_withdrawals():
                 from app.Batch.controllers import BatchController
                 BatchController.refresh_cached_total_capital_for_batch_ids(affected_batch_ids, db.session)
             except Exception as cache_err:
-                print(f"Warning: Failed to refresh cached batch totals after bulk withdrawal action: {str(cache_err)}")
+                logger.info(f"Warning: Failed to refresh cached batch totals after bulk withdrawal action: {str(cache_err)}")
 
         return make_response(jsonify({
             "status": 200,
@@ -6381,7 +6383,7 @@ def _calculate_investor_impact(withdrawal: Withdrawal):
             except Exception:
                 period = ""
 
-        print(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
+        logger.info(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
         return {
             "client_code": client_code,
             "fund_name": withdrawal.fund_name,
@@ -6391,7 +6393,7 @@ def _calculate_investor_impact(withdrawal: Withdrawal):
             "standing_after": float(new_valuation),
         }
 
-    print(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
+    logger.info(f"✅ Withdrawal #{withdrawal.id} approved for {client_code} in {withdrawal.fund_name}: ${amount}")
     return None
 
 
@@ -7973,7 +7975,7 @@ def get_recent_transactions():
     
     except Exception as e:
         import traceback
-        print(f"ERROR in get_recent_transactions: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_recent_transactions: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -8188,7 +8190,7 @@ def get_investor_overview(client_code):
     
     except Exception as e:
         import traceback
-        print(f"ERROR in get_investor_overview: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_investor_overview: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -8260,7 +8262,7 @@ def get_reconciliation_review():
 
     except Exception as e:
         import traceback
-        print(f"ERROR in get_reconciliation_review: {traceback.format_exc()}")
+        logger.info(f"ERROR in get_reconciliation_review: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -8309,7 +8311,7 @@ def update_reconciliation_value(investment_id):
     except Exception as e:
         db.session.rollback()
         import traceback
-        print(f"ERROR in update_reconciliation_value: {traceback.format_exc()}")
+        logger.info(f"ERROR in update_reconciliation_value: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
 
 
@@ -8351,5 +8353,5 @@ def verify_reconciliation(investment_id):
 
     except Exception as e:
         import traceback
-        print(f"ERROR in verify_reconciliation: {traceback.format_exc()}")
+        logger.info(f"ERROR in verify_reconciliation: {traceback.format_exc()}")
         return make_response(jsonify({"status": 500, "message": f"Error: {str(e)}"}), 500)
