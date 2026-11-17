@@ -10,7 +10,7 @@ vi.mock("@/services/withdrawalService", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const HOLDING = {
-  fund_id: 7, fund_name: "Janus Henderson Horizon Biotechnology", share_class_id: 3,
+  fund_id: 7, fund_name: "Sample Fund Henderson Horizon Biotechnology", share_class_id: 3,
   class_code: "JH_BIO", currency: "USD", shares_available: 1178.976, lots: 1,
 };
 

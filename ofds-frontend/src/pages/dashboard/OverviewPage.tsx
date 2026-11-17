@@ -13,7 +13,7 @@ import { useNgnUsdView, NgnUsdViewControl, type NgnUsdView } from "@/components/
 // ═══════════════════════════════════════════════════════════════════════════════
 // OVERVIEW PAGE — Production-matching layout
 // ═══════════════════════════════════════════════════════════════════════════════
-// Matches: https://osfmr.aib-axysafrica.com/overview
+// Overview dashboard
 //
 // Layout:
 //   1. Header: "Portfolio Overview" + NAV as-of date

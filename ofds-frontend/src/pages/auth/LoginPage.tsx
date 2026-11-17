@@ -91,8 +91,8 @@ export default function LoginPage() {
         {/* Logo */}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
           <img
-            src="/axys-logo.webp"
-            alt="AXYS Investment Bank"
+            src="/brand-logo.svg"
+            alt="OFSD"
             style={{ height: "48px", objectFit: "contain" }}
           />
         </div>

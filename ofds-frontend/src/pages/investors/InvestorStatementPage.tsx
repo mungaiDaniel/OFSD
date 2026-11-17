@@ -199,7 +199,7 @@ export default function InvestorStatementPage() {
         {/* Header */}
         <div style={{ marginBottom: "40px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #00005b", paddingBottom: "20px" }}>
           <div>
-            <img src="/AIBlight.png" alt="AIBAXYS Logo" style={{ maxHeight: "60px" }} />
+            <img src="/brand-logo.svg" alt="OFSD" style={{ maxHeight: "60px" }} />
           </div>
           <div style={{ textAlign: "right", fontSize: "11px", color: "#333", lineHeight: "1.6" }}>
             <div style={{ fontWeight: "bold", fontSize: "12px", marginBottom: "5px" }}>HEAD OFFICE</div>
@@ -209,7 +209,7 @@ export default function InvestorStatementPage() {
               <span style={{ marginRight: "15px" }}>T: 0711047000</span>
               <span style={{ marginRight: "15px" }}>M: 0790404571</span>
             </div>
-            <div>W: www.aib-axysafrica.com</div>
+            <div>W: www.example.com</div>
           </div>
         </div>
 

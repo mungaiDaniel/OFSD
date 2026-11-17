@@ -156,7 +156,7 @@ def _resolve_janus_henderson_statement_logo_path(
     if logo_path is None and _is_janus_henderson_fund(fund_names, fund_codes):
         logger.warning(
             "Janus Henderson statement logo is missing: %s",
-            Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo-jh-dark-removebg-preview.png",
+            Path(__file__).resolve().parents[2] / "assets" / "logo" / "brand-logo-dark.png",
         )
     return logo_path
 

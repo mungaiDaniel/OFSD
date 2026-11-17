@@ -464,7 +464,7 @@ export default function LandingPage() {
         }}
       >
         <img
-          src="/axys-emblem.webp"
+          src="/brand-emblem.svg"
           alt=""
           style={{
             width: "min(900px, 80vw)",
@@ -558,8 +558,8 @@ export default function LandingPage() {
         >
           {/* Logo */}
           <img
-            src="/axys-logo.webp"
-            alt="AXYS Investment Bank"
+            src="/brand-logo.svg"
+            alt="OFSD"
             style={{
               width: "min(420px, 55vw)",
               height: "auto",

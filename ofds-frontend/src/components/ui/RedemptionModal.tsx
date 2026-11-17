@@ -23,7 +23,7 @@ const fmt = (n: number, dp = 2) => n.toLocaleString("en-US", { minimumFractionDi
 
 /**
  * Record a unit redemption exactly as the transfer agent's contract note books
- * it (e.g. Janus: "101.423 shares at NAV 37.96 = USD 3,850.00, trade date
+ * it (e.g. "101.423 shares at NAV 37.96 = USD 3,850.00, trade date
  * 20/10/2026"). Executing it reduces the client's shares (oldest holding
  * first), so our records stay in line with the transfer agent's.
  */

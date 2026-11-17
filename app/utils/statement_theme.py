@@ -183,10 +183,10 @@ def logo_image(path, width: float, height: float) -> Image:
 
 def resolve_axys_logo_path() -> Optional[Path]:
     candidates = [
-        PROJECT_ROOT / "assets" / "logo" / "AXYS LOGO ON lightmode BG@300x.png",
-        PROJECT_ROOT / "frontend" / "public" / "AIBlight.png",
-        PROJECT_ROOT / "ofds-frontend" / "public" / "AIBlight.png",
-        PROJECT_ROOT / "backend" / "assets" / "AIBlight.png",
+        PROJECT_ROOT / "assets" / "logo" / "brand-logo-light.png",
+        PROJECT_ROOT / "frontend" / "public" / "brand-logo.svg",
+        PROJECT_ROOT / "ofds-frontend" / "public" / "brand-logo.svg",
+        PROJECT_ROOT / "backend" / "assets" / "brand-logo.svg",
     ]
     for logo_path in candidates:
         if logo_path.exists():
