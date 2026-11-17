@@ -212,6 +212,9 @@ class PendingEmail(Base, db.Model):
     # queued for, or NULL for a full consolidated statement. Read back by
     # _send_pending_email_now to attach the matching PDF at send time.
     statement_fund_ids = Column(String(255), nullable=True)
+    # WITHDRAWAL_RECEIVED / WITHDRAWAL_APPROVED: which withdrawal this notice is
+    # about, so _send_pending_email_now can attach its withdrawal statement PDF.
+    withdrawal_id = Column(Integer, ForeignKey('withdrawals.id', ondelete='SET NULL'), nullable=True)
 
     # Relationships
     batch = db.relationship('Batch', backref='pending_emails')
@@ -303,6 +306,20 @@ class Withdrawal(Base, db.Model):
     # deploy-trigger call for the same investor.
     oversubscription_notice_sent_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Unit-based redemption (NAV funds), entered from the transfer agent's
+    # contract note — see app/logic/redemption_service.py. NULL on a legacy
+    # cash-only withdrawal. When shares_redeemed is set, the client's
+    # InvestorShares were reduced at execution, so value = remaining shares x
+    # NAV and the cash amount must NOT also be subtracted from value
+    # (is_unit_redemption / CASH_WITHDRAWAL_FILTER).
+    shares_redeemed = Column(Numeric(24, 6), nullable=True)
+    redemption_nav = Column(Numeric(20, 6), nullable=True)
+    share_class_id = Column(Integer, ForeignKey('share_classes.id', ondelete='SET NULL'), nullable=True)
+    trade_date = Column(Date, nullable=True)
+    settlement_date = Column(Date, nullable=True)
+    ta_reference = Column(String(50), nullable=True)  # transfer agent's transaction number
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         Index('ix_withdrawals_code_fund_date', 'internal_client_code', 'fund_id', 'date_withdrawn'),
     )
@@ -311,8 +328,40 @@ class Withdrawal(Base, db.Model):
     fund = db.relationship('CoreFund', backref='withdrawals')
     batch = db.relationship('Batch', backref='withdrawals')
 
+    @property
+    def is_unit_redemption(self):
+        return self.shares_redeemed is not None
+
     def __repr__(self):
         return f"<Withdrawal {self.internal_client_code} {self.fund_name} {self.amount} on {self.date_withdrawn}>"
+
+
+class WithdrawalLot(Base, db.Model):
+    """
+    How a unit redemption's shares were taken from the client's holdings
+    (oldest deployment first). One row per InvestorShares lot touched, so the
+    reduction is auditable and the statement can show the redemption against
+    the right holding.
+    """
+    __tablename__ = 'withdrawal_lots'
+
+    id = Column(Integer, primary_key=True)
+    withdrawal_id = Column(Integer, ForeignKey('withdrawals.id', ondelete='CASCADE'), nullable=False, index=True)
+    investor_shares_id = Column(Integer, ForeignKey('investor_shares.id', ondelete='CASCADE'), nullable=False, index=True)
+    investment_id = Column(Integer, ForeignKey('investments.id', ondelete='CASCADE'), nullable=False)
+    batch_id = Column(Integer, ForeignKey('batches.id'), nullable=True)
+    shares_redeemed = Column(Numeric(24, 6), nullable=False)
+    shares_before = Column(Numeric(24, 6), nullable=False)
+    deployment_nav = Column(Numeric(20, 6), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    withdrawal = db.relationship('Withdrawal', backref=db.backref('lots', cascade='all, delete-orphan'))
+
+
+# Withdrawals whose cash amount is subtracted from value (legacy cash-only rows).
+# A unit redemption already reduced the client's shares, so subtracting its
+# cash too would double-count.
+CASH_WITHDRAWAL_FILTER = Withdrawal.shares_redeemed.is_(None)
 
 
 class EpochLedger(Base, db.Model):

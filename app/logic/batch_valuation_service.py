@@ -18,7 +18,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import aliased
 
 from app.database.database import db
-from app.Investments.model import Investment, Withdrawal, FINAL_WITHDRAWAL_STATUSES, WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND
+from app.Investments.model import Investment, Withdrawal, FINAL_WITHDRAWAL_STATUSES, WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND, CASH_WITHDRAWAL_FILTER
 from app.Batch.model import Batch
 from app.Valuation.model import BatchValuation, InvestmentBatchValuation
 
@@ -110,6 +110,7 @@ def _withdrawals_for_batch_window(
         .filter(
             Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
             Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+            CASH_WITHDRAWAL_FILTER,  # unit redemptions already reduced shares
             Withdrawal.date_withdrawn >= period_start,
             Withdrawal.date_withdrawn <= period_end,
         )

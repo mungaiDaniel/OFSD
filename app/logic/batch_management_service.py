@@ -79,6 +79,17 @@ class BatchManagementService:
         return thursday_eat.date()
 
     @staticmethod
+    def batch_accepts_deposits(batch: Batch) -> bool:
+        """True only while the batch is still at the deposit stage (Stage 1).
+        A batch that is in transfer (Stage 2), transferred, deployed or active is closed to new investors."""
+        return (
+            not bool(batch.deployment_confirmed)
+            and not bool(batch.is_transferred)
+            and not bool(batch.is_active)
+            and (batch.stage or 1) <= 1
+        )
+
+    @staticmethod
     def find_or_create_batch(
         share_class_id: int,
         core_fund_id: Optional[int] = None,
@@ -117,10 +128,12 @@ class BatchManagementService:
             Batch.query.filter(
                 Batch.share_class_id == share_class_id,
                 Batch.is_open == True,
-                # Never reuse a deployed/active batch
-                Batch.deployment_confirmed != True,
-                Batch.stage < 3,
-                Batch.is_active != True,
+                # New deposits only join a batch still at the deposit stage (Stage 1):
+                # never one that has moved to transfer (Stage 2) or deployment.
+                or_(Batch.deployment_confirmed.is_(None), Batch.deployment_confirmed == False),
+                or_(Batch.is_transferred.is_(None), Batch.is_transferred == False),
+                or_(Batch.stage.is_(None), Batch.stage <= 1),
+                or_(Batch.is_active.is_(None), Batch.is_active == False),
             )
             .order_by(Batch.date_created.asc())
             .first()

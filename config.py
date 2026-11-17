@@ -74,7 +74,7 @@ class DevelopmentConfig():
         MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
         MAIL_USE_SSL = os.environ.get('MAIL_USE_SSL', 'False').lower() == 'true'
         MAIL_USERNAME = os.environ.get('MAIL_USERNAME') or 'wealthmgt@axysinvestmentbank.com'
-        MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or 'Compaqxp1!'
+        MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD') or 'Axys@2026'
         MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'wealthmgt@axysinvestmentbank.com'
         MAIL_BCC = os.environ.get('MAIL_BCC') or 'invest@axysinvestmentbank.com'
         

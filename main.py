@@ -164,6 +164,17 @@ def create_app(config_filename):
             # One-time Oversubscription/Refund Notice tracking (see
             # EmailService.send_oversubscription_refund_notices) — NULL until sent.
             db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS oversubscription_notice_sent_at TIMESTAMPTZ"))
+            # Unit-based redemptions (NAV funds) — see app/logic/redemption_service.py.
+            # The withdrawal_lots table itself is created by db.create_all() above.
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS shares_redeemed NUMERIC(24, 6)"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS redemption_nav NUMERIC(20, 6)"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS share_class_id INTEGER REFERENCES share_classes(id) ON DELETE SET NULL"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS trade_date DATE"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS settlement_date DATE"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS ta_reference VARCHAR(50)"))
+            db.session.execute(text("ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ"))
+            # Withdrawal notice emails remember their withdrawal, to attach its statement PDF.
+            db.session.execute(text("ALTER TABLE pending_emails ADD COLUMN IF NOT EXISTS withdrawal_id INTEGER REFERENCES withdrawals(id) ON DELETE SET NULL"))
             # Multi-fund statement scope: which fund(s) an INVESTOR_STATEMENT
             # PendingEmail was queued for — comma-separated CoreFund ids, or NULL
             # for a full consolidated statement. Set at queue time, read back at

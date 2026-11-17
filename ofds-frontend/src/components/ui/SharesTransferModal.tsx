@@ -24,7 +24,11 @@ const PREVIEW_ROW_LIMIT = 50;
  */
 export function SharesTransferModal({ open, onClose, batchId, onConfirm, isLoading = false }: SharesTransferModalProps) {
   const [entryFeePercent, setEntryFeePercent] = useState<string>("0");
+  const [entryFeeAmount, setEntryFeeAmount] = useState<string>("0");
   const [transactionCost, setTransactionCost] = useState<string>("0");
+  // Sum of the batch's raw deposits (independent of the fee inputs); needed to
+  // convert between the entry fee percentage and the entry fee amount.
+  const [depositTotal, setDepositTotal] = useState<number>(0);
   const [preview, setPreview] = useState<SharesTransferPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -36,7 +40,10 @@ export function SharesTransferModal({ open, onClose, batchId, onConfirm, isLoadi
       setPreviewError(null);
       batchService
         .previewSharesTransfer(batchId, entryFeePercent || "0", transactionCost || "0")
-        .then(setPreview)
+        .then((p) => {
+          setPreview(p);
+          setDepositTotal(p.totals.deposit_usd);
+        })
         .catch((err) => {
           setPreview(null);
           setPreviewError(err?.response?.data?.message || "Could not compute a preview for these inputs");
@@ -47,6 +54,24 @@ export function SharesTransferModal({ open, onClose, batchId, onConfirm, isLoadi
   }, [open, batchId, entryFeePercent, transactionCost]);
 
   if (!open) return null;
+
+  // The percentage is what the server uses; the amount is a second way to enter it.
+  // Typing either one fills in the other from the batch's total deposit.
+  const onPercentChange = (v: string) => {
+    setEntryFeePercent(v);
+    const pct = parseFloat(v);
+    setEntryFeeAmount(depositTotal > 0 && Number.isFinite(pct) ? (Math.round(depositTotal * pct) / 100).toFixed(2) : "");
+  };
+  const onAmountChange = (v: string) => {
+    setEntryFeeAmount(v);
+    const amt = parseFloat(v);
+    if (depositTotal > 0 && Number.isFinite(amt)) {
+      // Keep full precision so the per-investor fees add back up to the amount typed.
+      setEntryFeePercent(String(parseFloat(((amt / depositTotal) * 100).toFixed(10))));
+    } else if (v === "") {
+      setEntryFeePercent("0");
+    }
+  };
 
   const canConfirm = !!preview && !previewLoading && !previewError;
 
@@ -99,10 +124,14 @@ export function SharesTransferModal({ open, onClose, batchId, onConfirm, isLoadi
             Entry fee is taken from the raw deposit first; the transaction cost is then split proportionally across what's left — the opposite order from a Funds batch.
           </p>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
             <div>
               <label style={labelStyle}>ENTRY FEE PERCENTAGE (%)</label>
-              <input type="number" step="0.01" min="0" max="100" style={inputStyle} value={entryFeePercent} onChange={(e) => setEntryFeePercent(e.target.value)} disabled={isLoading} placeholder="2.00" />
+              <input type="number" step="any" min="0" max="100" style={inputStyle} value={entryFeePercent} onChange={(e) => onPercentChange(e.target.value)} disabled={isLoading} placeholder="2.00" aria-label="Entry fee percentage" />
+            </div>
+            <div>
+              <label style={labelStyle}>ENTRY FEE AMOUNT (USD)</label>
+              <input type="number" step="0.01" min="0" style={inputStyle} value={entryFeeAmount} onChange={(e) => onAmountChange(e.target.value)} disabled={isLoading || depositTotal <= 0} placeholder="0.00" aria-label="Entry fee amount" />
             </div>
             <div>
               <label style={labelStyle}>TOTAL TRANSACTION COST (USD)</label>

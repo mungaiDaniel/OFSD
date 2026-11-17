@@ -882,7 +882,7 @@ export interface Withdrawal {
   fund_name: string;
   product_type?: ProductType;
   amount: number;
-  status: "Pending" | "Approved" | "Rejected" | "Processed" | "Completed";
+  status: "Pending" | "Approved" | "Rejected" | "Processed" | "Completed" | "Executed";
   date_withdrawn: string;
   approved_at: string | null;
   note: string | null;
@@ -894,6 +894,41 @@ export interface Withdrawal {
   rate_used?: number | null;
   // Only meaningful when source === "oversubscription_refund".
   oversubscription_notice_sent?: boolean;
+  // Unit redemption (from the transfer agent's contract note) — null on a
+  // legacy cash-only withdrawal.
+  shares_redeemed?: number | null;
+  redemption_nav?: number | null;
+  trade_date?: string | null;
+  settlement_date?: string | null;
+  ta_reference?: string | null;
+  exit_fee?: number;
+  net_amount?: number;
+}
+
+/** One fund + share class a client can redeem from (GET /withdrawals/redemption-holdings). */
+export interface RedemptionHolding {
+  fund_id: number;
+  fund_name: string;
+  share_class_id: number;
+  class_code: string | null;
+  currency: string | null;
+  shares_available: number;
+  lots: number;
+}
+
+export interface RecordRedemptionRequest {
+  client_code: string;
+  fund_id: number;
+  share_class_id: number;
+  shares: number;
+  nav: number;
+  trade_date: string;
+  gross_amount?: number;
+  exit_fee?: number;
+  settlement_date?: string;
+  ta_reference?: string;
+  note?: string;
+  withdrawal_id?: number;
 }
 
 export interface CreateWithdrawalRequest {
@@ -969,6 +1004,10 @@ export interface ApiResponse<T = unknown> {
   count?: number;
   pagination?: { page: number; per_page: number; total: number; total_pages: number } | null;
   status_counts?: Record<string, number>;
+  /** Inbox only: pending-email counts per email_type (feeds the type filter). */
+  type_counts?: Record<string, number>;
+  /** Inbox only: Pending emails matching the current filters - exactly what Confirm All would approve. */
+  pending_match?: number;
 }
 
 export interface ApiError {

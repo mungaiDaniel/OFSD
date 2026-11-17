@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 
 mail = Mail()
 
+def _client_deploy_date(inv, batch, fallback):
+    """The client's own deployment date as YYYY-MM-DD, else the batch fallback."""
+    try:
+        from app.utils.deployment_date import resolve_client_deployment_date
+        d = resolve_client_deployment_date([inv], batch)
+        return d.strftime('%Y-%m-%d') if d else fallback
+    except Exception:
+        return fallback
+
+
 class EmailService:
     """Unified Service for status-driven investor notifications (Stages 1-3)."""
 
@@ -33,7 +43,7 @@ class EmailService:
         return (cls.SENDER_DISPLAY_NAME, email)
 
     @classmethod
-    def _create_pending_email(cls, batch_id, investor_id, email_type, subject, body, recipient_email, recipient_name=None, amount=None, fund_name=None, batch_name=None, currency_type=None, trigger_source=None):
+    def _create_pending_email(cls, batch_id, investor_id, email_type, subject, body, recipient_email, recipient_name=None, amount=None, fund_name=None, batch_name=None, currency_type=None, trigger_source=None, withdrawal_id=None):
         """Create a pending email record for manual approval."""
         try:
             pending_email = PendingEmail(
@@ -50,6 +60,7 @@ class EmailService:
                 currency_type=currency_type or 'USD',
                 status='Pending_Confirmation',
                 trigger_source=trigger_source,
+                withdrawal_id=withdrawal_id,
             )
             db.session.add(pending_email)
             db.session.commit()
@@ -714,6 +725,8 @@ AXYS INVESTMENT BANK
                 'shares_owned': float(getattr(inv, 'shares_owned', 0) or 0) if getattr(inv, 'shares_owned', None) is not None else None,
                 'nav_per_share': float(getattr(inv, 'previous_nav_price', None) or deployment_nav) if (getattr(inv, 'previous_nav_price', None) is not None or deployment_nav) else None,
                 'currency_type': getattr(inv, 'currency_type', 'USD'),
+                # Clients in one batch can be deployed on different days.
+                'deploy_date': _client_deploy_date(inv, batch, deploy_date),
             }
             for inv in getattr(batch, 'investments', [])
         ]
@@ -759,7 +772,7 @@ DEPLOYMENT SUMMARY
 
 Original Deposit Amount: {currency} {original_amount:,.2f}{fee_lines}{nav_lines}
 
-Deployment Date: {deploy_date}
+Deployment Date: {item.get('deploy_date') or deploy_date}
 Status: Active (Stage 3/3)
 
 Thank you for investing with AXYS INVESTMENT BANK.
@@ -938,7 +951,7 @@ AXYS INVESTMENT BANK
         threading.Thread(target=process_notices, daemon=True).start()
 
     @classmethod
-    def send_withdrawal_received_email(cls, client_code, investor_name, investor_email, amount, fund_name, currency='USD', trigger_source=None):
+    def send_withdrawal_received_email(cls, client_code, investor_name, investor_email, amount, fund_name, currency='USD', trigger_source=None, withdrawal_id=None):
         """Notification: Withdrawal request received (Stage 1 Withdrawal)."""
         app = current_app._get_current_object()
         
@@ -986,6 +999,7 @@ AXYS INVESTMENT BANK
                             amount=amount,
                             fund_name=fund_name,
                             currency_type=currency,
+                            withdrawal_id=withdrawal_id,
                         )
                         logger.info(f"Created pending withdrawal email for {investor_email}")
                     else:
@@ -1001,7 +1015,7 @@ AXYS INVESTMENT BANK
         threading.Thread(target=process_email, daemon=True).start()
 
     @classmethod
-    def send_withdrawal_approved_email(cls, client_code, investor_name, investor_email, amount, fund_name, currency='USD', trigger_source=None):
+    def send_withdrawal_approved_email(cls, client_code, investor_name, investor_email, amount, fund_name, currency='USD', trigger_source=None, withdrawal_id=None):
         """Notification: Withdrawal request approved (Stage 2 Withdrawal)."""
         app = current_app._get_current_object()
         
@@ -1049,6 +1063,7 @@ AXYS INVESTMENT BANK
                             amount=amount,
                             fund_name=fund_name,
                             currency_type=currency,
+                            withdrawal_id=withdrawal_id,
                         )
                         logger.info(f"Created pending withdrawal approved email for {investor_email}")
                     else:

@@ -4,8 +4,23 @@ import { MailCheck, Inbox, CheckCheck, FileText, Send, Ban, Search, ChevronLeft,
 import { emailService } from "@/services/emailService";
 import type { PendingEmail, PendingEmailStatus } from "@/lib/types";
 import SendStatementsPanel from "@/components/email/SendStatementsPanel";
+import SendConfirmModal from "@/components/email/SendConfirmModal";
+import { selectStyle } from "@/components/email/emailStyles";
 
 type Tab = "inbox" | "processed" | "statements";
+
+const EMAIL_TYPE_LABEL: Record<string, string> = {
+  INVESTOR_STATEMENT: "Overall statement",
+  DEPOSIT_CONFIRMATION: "Deposit",
+  OFFSHORE_TRANSFER: "Transfer",
+  INVESTMENT_ACTIVE: "Deployment",
+  INVESTMENT_ACTIVE_OVERSUBSCRIBED: "Deployment (oversubscribed)",
+  OVERSUBSCRIPTION_REFUND_NOTICE: "Oversubscription / refund",
+  WITHDRAWAL_RECEIVED: "Withdrawal received",
+  WITHDRAWAL_APPROVED: "Withdrawal approved",
+  BATCH_UPLOAD: "Batch upload",
+};
+const typeLabel = (t: string) => EMAIL_TYPE_LABEL[t] ?? t;
 
 const STATUS_META: Record<string, { bg: string; border: string; color: string; label: string }> = {
   Pending_Confirmation: { bg: "rgba(245, 158, 11, 0.1)", border: "rgba(245, 158, 11, 0.25)", color: "rgb(251, 191, 36)", label: "Pending" },
@@ -107,6 +122,10 @@ export default function PendingEmailsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [matchedTotal, setMatchedTotal] = useState<number | null>(null);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({});
+  const [pendingMatch, setPendingMatch] = useState(0);
+  const [confirmAllOpen, setConfirmAllOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [suppressingAll, setSuppressingAll] = useState(false);
@@ -128,10 +147,15 @@ export default function PendingEmailsPage() {
       // at all — it only returns per-status counts. This is what keeps the
       // Email page fast once thousands of rows accumulate over time.
       const fn = tab === "inbox" ? emailService.getInbox : emailService.getProcessed;
-      const res = await fn(trimmedSearch ? { search: trimmedSearch, page, per_page: PER_PAGE } : undefined);
+      const params: { search?: string; page?: number; per_page?: number; email_type?: string } = {};
+      if (trimmedSearch) Object.assign(params, { search: trimmedSearch, page, per_page: PER_PAGE });
+      if (tab === "inbox" && typeFilter) params.email_type = typeFilter;
+      const res = await fn(Object.keys(params).length ? params : undefined);
       if (res.status === 200) {
         setEmails(trimmedSearch ? ((res.data as PendingEmail[]) || []) : []);
         setStatusCounts(res.status_counts ?? {});
+        setTypeCounts(res.type_counts ?? {});
+        setPendingMatch(res.pending_match ?? 0);
         setTotalPages(res.pagination?.total_pages ?? 1);
         setMatchedTotal(res.pagination?.total ?? null);
       } else {
@@ -143,7 +167,7 @@ export default function PendingEmailsPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, trimmedSearch, page]);
+  }, [tab, trimmedSearch, page, typeFilter]);
 
   useEffect(() => {
     let alive = true;
@@ -166,7 +190,10 @@ export default function PendingEmailsPage() {
   useEffect(() => {
     setSearch("");
     setPage(1);
+    setTypeFilter("");
   }, [tab]);
+
+  useEffect(() => { setPage(1); }, [typeFilter]);
 
   const totalForTab = Object.values(statusCounts).reduce((sum, n) => sum + n, 0);
   const statusOrder = tab === "inbox" ? INBOX_STATUS_ORDER : PROCESSED_STATUS_ORDER;
@@ -200,11 +227,9 @@ export default function PendingEmailsPage() {
     }
   };
 
-  // Pending-only count (not Suppressed/Failed) for the button label/dialog —
-  // matches what most admins mean by "confirm all pending", though the
-  // backend also sweeps up Suppressed/Failed (same set a single Confirm
-  // click already allows) since those are just as resendable.
-  const pendingCount = trimmedSearch ? (matchedTotal ?? 0) : (statusCounts.Pending_Confirmation ?? 0);
+  // Exactly the emails "Confirm All" will approve under the current filters (type + search):
+  // Pending only. The server returns this count and re-checks it when the admin confirms.
+  const pendingCount = pendingMatch;
 
   // Suppressable = Pending_Confirmation + Queued (same set cancel_pending_email
   // allows for a single row) — matches matchedTotal (all statuses in the
@@ -214,42 +239,33 @@ export default function PendingEmailsPage() {
     ? (matchedTotal ?? 0)
     : (statusCounts.Pending_Confirmation ?? 0) + (statusCounts.Queued ?? 0);
 
-  const estimateSendTime = (count: number): string => {
-    if (!queueStatus || count <= 0) return "";
-    const { batch_size, interval_minutes } = queueStatus;
-    if (!batch_size || !interval_minutes) return "";
-    const totalMinutes = Math.ceil(count / batch_size) * interval_minutes;
-    if (totalMinutes < 60) return `~${totalMinutes} min`;
-    const hours = totalMinutes / 60;
-    if (hours < 48) return `~${hours.toFixed(1)} hours`;
-    return `~${(hours / 24).toFixed(1)} days`;
+  // Step 1: just open the confirmation dialog (it shows the scope and makes the admin type the count).
+  const confirmAllPending = () => {
+    if (pendingCount === 0) return;
+    setConfirmAllOpen(true);
   };
 
-  const confirmAllPending = async () => {
-    if (pendingCount === 0) return;
-    const scopeNote = trimmedSearch ? ` matching "${trimmedSearch}"` : "";
-    const timeEstimate = estimateSendTime(pendingCount);
-    const confirmed = window.confirm(
-      `Queue all ${pendingCount.toLocaleString()} pending email(s)${scopeNote} for sending?\n\n` +
-      `This queues them immediately, but they're SENT at the throttled rate below to avoid tripping ` +
-      `the mail provider's spam/rate limits${timeEstimate ? ` — at the current rate (${queueStatus?.batch_size}/${queueStatus?.interval_minutes} min), that's ${timeEstimate} to finish sending all of them.` : "."}`
-    );
-    if (!confirmed) return;
-
+  // Step 2: the admin typed the count. The server re-counts and refuses if it differs.
+  const runConfirmAll = async () => {
     setConfirmingAll(true);
     try {
-      const res = await emailService.confirmAll(trimmedSearch || undefined);
+      const res = await emailService.confirmAll(pendingCount, {
+        search: trimmedSearch || undefined,
+        emailType: typeFilter || undefined,
+      });
+      setConfirmAllOpen(false);
       if (res.status === 200) {
         toast.success(`${res.data?.queued ?? 0} email(s) queued for sending`);
-        await loadEmails();
-        await loadQueueStatus();
       } else {
         toast.error(res.message || "Confirm all failed");
       }
     } catch (err: any) {
+      setConfirmAllOpen(false);
       toast.error(err?.response?.data?.message || "Confirm all failed");
     } finally {
       setConfirmingAll(false);
+      await loadEmails();
+      await loadQueueStatus();
     }
   };
 
@@ -264,7 +280,7 @@ export default function PendingEmailsPage() {
 
     setSuppressingAll(true);
     try {
-      const res = await emailService.suppressAll(trimmedSearch || undefined);
+      const res = await emailService.suppressAll(trimmedSearch || undefined, typeFilter || undefined);
       if (res.status === 200) {
         toast.success(`${res.data?.suppressed ?? 0} email(s) suppressed`);
         await loadEmails();
@@ -380,6 +396,23 @@ export default function PendingEmailsPage() {
           </button>
         </div>
 
+        <SendConfirmModal
+          open={confirmAllOpen}
+          title={`Confirm ${pendingCount.toLocaleString()} pending email${pendingCount === 1 ? "" : "s"}?`}
+          description={[
+            typeFilter ? `Type: ${typeLabel(typeFilter)}` : "All types",
+            trimmedSearch ? `matching "${trimmedSearch}"` : null,
+          ].filter(Boolean).join(" · ") + ". Only Pending emails are included — Suppressed and Failed ones are left alone."}
+          items={[]}
+          count={pendingCount}
+          rate={queueStatus}
+          requireTypedCount
+          confirmLabel={`Send ${pendingCount.toLocaleString()}`}
+          busy={confirmingAll}
+          onConfirm={runConfirmAll}
+          onCancel={() => setConfirmAllOpen(false)}
+        />
+
         {tab === "statements" ? (
           <SendStatementsPanel />
         ) : (
@@ -393,6 +426,20 @@ export default function PendingEmailsPage() {
                 {STATUS_META[s]?.label ?? s}: {(statusCounts[s] ?? 0).toLocaleString()}
               </span>
             ))}
+            {tab === "inbox" && (Object.keys(typeCounts).length > 0 || typeFilter) && (
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                aria-label="Filter by email type"
+                style={{ ...selectStyle, padding: "4px 28px 4px 10px", borderRadius: "100px", fontSize: "11px" }}
+              >
+                <option value="">All types</option>
+                {Object.entries(typeCounts).map(([t, n]) => (
+                  <option key={t} value={t}>{typeLabel(t)} ({n.toLocaleString()})</option>
+                ))}
+                {typeFilter && !(typeFilter in typeCounts) && <option value={typeFilter}>{typeLabel(typeFilter)} (0)</option>}
+              </select>
+            )}
           </div>
           {tab === "inbox" && (
             <button

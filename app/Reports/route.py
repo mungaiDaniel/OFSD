@@ -114,12 +114,8 @@ def _register_montserrat_fonts():
 
 def _get_standard_statement_fonts():
     """
-    Prefer Montserrat (matches app UI). Fallback to built-in Times-Roman/Times-Bold.
+    Statements use Times New Roman (built-in Times-Roman/Times-Bold).
     """
-    _register_montserrat_fonts()
-    registered = set(pdfmetrics.getRegisteredFontNames())
-    if "Montserrat" in registered and "Montserrat-Bold" in registered:
-        return "Montserrat", "Montserrat-Bold"
     return "Times-Roman", "Times-Bold"
 
 

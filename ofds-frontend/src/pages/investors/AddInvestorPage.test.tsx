@@ -25,7 +25,10 @@ function renderPage(initialPath = "/investors/add") {
 }
 
 beforeEach(() => {
-  vi.mocked(fundService.getAll).mockResolvedValue(FUNDS);
+  // The page asks for each product separately, like the real endpoints do.
+  vi.mocked(fundService.getAll).mockImplementation(async (product = "FUNDS") =>
+    FUNDS.filter((f) => (f.product_type ?? "FUNDS") === product)
+  );
   vi.mocked(investmentService.getInvestorDirectory).mockResolvedValue({ status: 200, message: "ok", data: [] });
 });
 

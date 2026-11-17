@@ -126,7 +126,7 @@ export const reportService = {
       const urlBlob = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = urlBlob;
-      link.setAttribute('download', `withdrawal-${withdrawalId}.pdf`);
+      link.setAttribute('download', `withdrawal-statement-${normalizedClientCode}-${withdrawalId}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.parentNode?.removeChild(link);

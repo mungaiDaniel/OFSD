@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Mail, CheckCircle, XCircle, Loader2, AlertTriangle, Send } from "lucide-react";
 import { emailService, type PendingEmail } from "@/services/emailService";
 import { toast } from "sonner";
+import SendConfirmModal from "@/components/email/SendConfirmModal";
 
 // ─── Email type → human-readable label + badge colour ───────────────────────
 const EMAIL_TYPE_META: Record<string, { label: string; color: string; bg: string }> = {
@@ -52,6 +53,8 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
   const [previewId, setPreviewId] = useState<number | null>(null);
   const [sentIds, setSentIds] = useState<Set<number>>(new Set());
   const [suppressedIds, setSuppressedIds] = useState<Set<number>>(new Set());
+  const [confirmAllOpen, setConfirmAllOpen] = useState(false);
+  const [rate, setRate] = useState<{ batch_size: number; interval_minutes: number } | null>(null);
 
   const formatUsd = (value: number) =>
     value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -111,6 +114,8 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
       setPreviewId(null);
       setSentIds(new Set());
       setSuppressedIds(new Set());
+      setConfirmAllOpen(false);
+      emailService.getQueueStatus().then((r) => r.data && setRate({ batch_size: r.data.batch_size, interval_minutes: r.data.interval_minutes })).catch(() => {});
     }
   }, [open, fetchPending]);
 
@@ -173,6 +178,7 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
     if (ids.length === 0) return;
 
     setActionInProgress(new Set(ids));
+    setConfirmAllOpen(false);
     try {
       const res = await emailService.confirmBatch(ids);
       const queued = res.data?.queued ?? [];
@@ -223,6 +229,7 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
   void previewedEmail; // actual preview renders inline per-row, not via this ref
   const totalPending = emails.filter(e => !sentIds.has(e.id) && !suppressedIds.has(e.id)).length;
   const anyInProgress = actionInProgress.size > 0;
+  const confirmTargets = emails.filter((e) => !sentIds.has(e.id) && !suppressedIds.has(e.id));
 
   // ── Modal markup — rendered into a portal at document.body ───────────────
   return createPortal(
@@ -245,6 +252,21 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
         if (e.target === e.currentTarget) onClose();
       }}
     >
+      <SendConfirmModal
+        open={confirmAllOpen}
+        title={`Confirm ${confirmTargets.length} email${confirmTargets.length === 1 ? "" : "s"}?`}
+        description={batchId != null ? "Emails for this batch only." : "Every email waiting for approval — check the list."}
+        items={confirmTargets.map((e) => ({
+          primary: e.recipient_name || e.recipient_email,
+          secondary: e.recipient_email,
+          note: e.email_type.replace(/_/g, " ").toLowerCase(),
+        }))}
+        count={confirmTargets.length}
+        rate={rate}
+        confirmLabel={`Send ${confirmTargets.length}`}
+        onConfirm={handleConfirmAll}
+        onCancel={() => setConfirmAllOpen(false)}
+      />
       <div
         style={{
           background: "#0B1228",
@@ -667,8 +689,8 @@ export function EmailConfirmationModal({ open, onClose, batchId }: EmailConfirma
 
               <button
                 id="email-confirm-all"
-                onClick={handleConfirmAll}
-                disabled={anyInProgress}
+                onClick={() => setConfirmAllOpen(true)}
+                disabled={anyInProgress || totalPending === 0}
                 style={{
                   display: "flex",
                   alignItems: "center",

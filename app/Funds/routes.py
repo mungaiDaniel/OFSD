@@ -21,6 +21,7 @@ from app.Investments.model import (
     Investment,
     PendingEmail,
     FINAL_WITHDRAWAL_STATUSES,
+    CASH_WITHDRAWAL_FILTER,
     WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
     WITHDRAWAL_STATUS_PENDING,
 )
@@ -800,6 +801,28 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
             except Exception:
                 withdrawal_sum = 0.0
 
+            # Of those, the legacy cash-only withdrawals — the only ones to
+            # subtract from AUM below. A unit redemption already reduced the
+            # class's shares (Batch.total_shares), so subtracting its cash too
+            # would double-count. withdrawal_sum (all of them) still feeds Net
+            # Holdings and the gain basis: cash paid out is cash paid out.
+            cash_withdrawal_sum = 0.0
+            try:
+                cash_sum_raw = (
+                    session.query(func.coalesce(func.sum(Withdrawal.gross_amount), 0))
+                    .filter(
+                        Withdrawal.fund_id == fund.id,
+                        Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
+                        Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                        Withdrawal.internal_client_code.in_(active_codes_subq),
+                        CASH_WITHDRAWAL_FILTER,
+                    )
+                    .scalar()
+                )
+                cash_withdrawal_sum = float_2dp(cash_sum_raw) if cash_sum_raw is not None else 0.0
+            except Exception:
+                cash_withdrawal_sum = withdrawal_sum
+
             # Gross deposited: raw, never-adjusted "total ever deposited" for
             # this class — unlike cost_basis above, this doesn't exclude fees
             # or restrict to deployed batches. Investment.share_class_id is
@@ -880,9 +903,9 @@ def _compute_funds_summary_data_uncached(session=None, product=FUNDS):
                 valuation_date = latest_nav.nav_date.strftime("%Y-%m-%d")
                 unrealized_gain = float_2dp(Decimal(str(total_nav or 0)) - Decimal(str(cost_basis or 0)))
 
-                # Apply withdrawals deduction to displayed AUM/gain
-                if withdrawal_sum and total_nav is not None:
-                    total_nav = float_2dp(max(Decimal("0.00"), Decimal(str(total_nav)) - Decimal(str(withdrawal_sum))))
+                # Apply (cash-only) withdrawals deduction to displayed AUM/gain
+                if cash_withdrawal_sum and total_nav is not None:
+                    total_nav = float_2dp(max(Decimal("0.00"), Decimal(str(total_nav)) - Decimal(str(cash_withdrawal_sum))))
                     if unrealized_gain is not None:
                         unrealized_gain = float_2dp(Decimal(str(total_nav or 0)) - Decimal(str(cost_basis or 0)))
                 

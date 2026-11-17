@@ -63,3 +63,29 @@ class TestBulkStatementsDownload:
         assert client.get("/api/v1/emails/statements/download-batch/" + "0" * 32, headers=h).status_code == 404
         assert client.get("/api/v1/emails/statements/download-batch/../../etc/passwd/file", headers=h).status_code == 404
         assert client.get("/api/v1/emails/statements/download-batch/not-a-job-id/file", headers=h).status_code == 404
+
+
+@pytest.mark.unit
+class TestRecentDownloads:
+    def test_lists_finished_job_and_flags_cut_off_job(self, client, app, super_admin_auth_token, tmp_path, monkeypatch):
+        import json
+        import os
+        from app.utils import bulk_statements
+
+        monkeypatch.setattr(bulk_statements, "ROOT", str(tmp_path))
+        done_id, cut_id = "a" * 32, "b" * 32
+        for jid, state in ((done_id, "completed"), (cut_id, "running")):
+            os.makedirs(tmp_path / jid)
+            (tmp_path / jid / "status.json").write_text(json.dumps(
+                {"state": state, "total": 5, "done": 5 if state == "completed" else 3, "failed": [],
+                 "label": "Transfer Statements", "created_at": 1000 if state == "completed" else 2000}))
+        (tmp_path / done_id / "statements.zip").write_bytes(b"PK")
+        old = 1_000_000_000  # long ago: the running job's status file is stale
+        os.utime(tmp_path / cut_id / "status.json", (old, old))
+
+        r = client.get("/api/v1/emails/statements/downloads", headers=_headers(super_admin_auth_token))
+        assert r.status_code == 200
+        jobs = {j["job_id"]: j for j in r.get_json()["data"]}
+        assert jobs[done_id]["ready"] is True and jobs[done_id]["state"] == "completed"
+        assert jobs[cut_id]["state"] == "interrupted" and jobs[cut_id]["ready"] is False
+        assert [j["job_id"] for j in r.get_json()["data"]][0] == cut_id  # newest first

@@ -1,6 +1,6 @@
 from app.Batch.model import Batch
 from app.Investments.model import (
-    Investment, EpochLedger, Withdrawal, PendingEmail, EmailLog, FINAL_WITHDRAWAL_STATUSES,
+    Investment, EpochLedger, Withdrawal, PendingEmail, EmailLog, FINAL_WITHDRAWAL_STATUSES, CASH_WITHDRAWAL_FILTER,
     WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
 )
 from app.Valuation.model import Statement, ValuationRun, BatchValuation, InvestmentBatchValuation, DailyNAV
@@ -1005,6 +1005,8 @@ class BatchController:
                 Withdrawal.internal_client_code.in_(client_codes),
                 Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
                 Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                # Unit redemptions already reduced shares (and the snapshots) — not cash to subtract.
+                CASH_WITHDRAWAL_FILTER,
             )
             .all()
         )
@@ -1135,6 +1137,8 @@ class BatchController:
             .filter(
                 Withdrawal.status.in_(FINAL_WITHDRAWAL_STATUSES),
                 Withdrawal.source != WITHDRAWAL_SOURCE_OVERSUBSCRIPTION_REFUND,
+                # Unit redemptions already reduced shares (and the snapshots) — not cash to subtract.
+                CASH_WITHDRAWAL_FILTER,
             )
         )
         if since_dt is not None:
