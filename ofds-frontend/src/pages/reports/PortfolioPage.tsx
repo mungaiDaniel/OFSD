@@ -33,7 +33,7 @@ export default function PortfolioPage() {
   const totalInvestors = sorted.length > 0 ? sorted[sorted.length - 1]?.summary?.investor_count || 0 : 0;
 
   const handleExport = () => {
-    const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:5000/api/v1";
+    const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:4455/api/v1";
     window.open(`${baseUrl}/reports/portfolio/multi-batch?batch_ids=all`, "_blank");
   };
 

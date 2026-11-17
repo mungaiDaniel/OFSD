@@ -123,13 +123,9 @@ export const batchService = {
 
   async getHistory(id: number): Promise<ApiResponse> {
     try {
-      console.log(`[batchService] Fetching history for batch ${id}`);
       const res = await api.get<ApiResponse>(`/batches/${id}/history`);
-      console.log(`[batchService] History response status:`, res.status);
-      console.log(`[batchService] History response data:`, res.data);
       return res.data;
     } catch (error) {
-      console.error(`[batchService] Error fetching history for batch ${id}:`, error);
       throw error;
     }
   },

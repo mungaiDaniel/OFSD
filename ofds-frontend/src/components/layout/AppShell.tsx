@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Outlet } from "react-router-dom";
+import { DemoBanner } from "@/demo/DemoBanner";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useUI } from "@/context/UIContext";
@@ -51,6 +52,7 @@ export function AppShell() {
           maxWidth: isMobile ? "100%" : undefined,
         }}
       >
+        <DemoBanner />
         <Topbar />
 
         <main
